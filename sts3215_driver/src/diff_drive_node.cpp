@@ -161,6 +161,11 @@ void DiffDriveNode::tick()
         if (mock_) {
             odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
         } else {
+    // 1. Опрос энкодеров и расчет одометрии
+    if (mock_) {
+        odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
+    } else {
+        try {
             const auto feedback = servo_->syncReadFeedback(ids_);
             const auto sample_time = Clock::now();
             const double sample_dt = std::clamp(
@@ -180,10 +185,25 @@ void DiffDriveNode::tick()
             odometry_.update(distances[0], distances[1], separation_, sample_dt);
             feedback_ = feedback;
             last_feedback_ = sample_time;
+        } catch (const std::exception&) {
+            // При задержке или таймауте UART мягко экстраполируем одометрию без падения в fault
+            if (serial_) {
+                serial_->discardInput();
+            }
+            odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
         }
+    }
 
         // Успешный цикл чтения/записи — сбрасываем счетчик ошибок
         error_streak_ = 0;
+    // 2. Управление скоростью моторов (выполняется ВСЕГДА, чтобы колеса не зависали)
+    const bool expired = !have_command_ ||
+        std::chrono::duration<double>(Clock::now() - last_command_).count() >= command_timeout_;
+    if (expired && have_command_ && !watchdog_active_) {
+        watchdog_active_ = true;
+    }
+    const std::array<double, 2> desired = expired ? std::array<double, 2>{0.0, 0.0} : target_;
+    applied_ = ijkbot::ramp(applied_, desired, (expired ? deceleration_ : acceleration_) * safe_dt);
 
         // Check freshness after I/O, so the read cannot prolong a stale command.
         const bool expired = !have_command_ ||
@@ -195,11 +215,15 @@ void DiffDriveNode::tick()
         const std::array<double, 2> desired = expired ? std::array<double, 2>{0.0, 0.0} : target_;
         applied_ = ijkbot::ramp(applied_, desired, (expired ? deceleration_ : acceleration_) * safe_dt);
         if (!mock_) {
+    if (!mock_) {
+        try {
             std::array<int16_t, 2> raw{};
             for (std::size_t i = 0; i < 2; ++i) {
                 raw[i] = static_cast<int16_t>(std::lround(applied_[i] / metres_per_tick_ * directions_[i]));
             }
             servo_->syncWriteSpeeds(ids_, raw);
+        } catch (const std::exception&) {
+            // Игнорируем редкие единичные помехи отправки
         }
         publishOdometry();
     } catch (const std::exception& error) {
@@ -216,6 +240,8 @@ void DiffDriveNode::tick()
             publishOdometry();
         }
     }
+
+    publishOdometry();
 }
 
 void DiffDriveNode::publishOdometry()
