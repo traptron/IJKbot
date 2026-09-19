@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+
+<package format="3">
+
+  <name>sts3215_driver</name>
+
+  <version>0.0.1</version>
+
+  <description>
+    ROS 2 driver for FEETECH STS3215 servos
+  </description>
+
+  <maintainer email="your@email.com">
+    Chumohod
+  </maintainer>
+
+  <license>MIT</license>
+
+
+  <buildtool_depend>
+    ament_cmake
+  </buildtool_depend>
+
+
+  <depend>
+    rclcpp
+  </depend>
+
+  <depend>
+    geometry_msgs
+  </depend>
+
+
+  <export>
+
+    <build_type>
+      ament_cmake
+    </build_type>
+
+  </export>
+
+</package>

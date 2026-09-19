@@ -1,0 +1,1 @@
+/home/chumohod/IJKbot/build/sts3215_driver/ament_cmake_core/sts3215_driverConfig.cmake
