@@ -53,15 +53,12 @@ def generate_launch_description():
         condition=IfCondition(enable_camera)
     )
 
-    # 2. Драйвер приводов STS3215 (C++ нода из пакета sts3215_driver)
     # 3. Драйвер приводов STS3215 (C++ нода из пакета sts3215_driver)
     pkg_driver = get_package_share_directory('sts3215_driver')
     driver_params_file = os.path.join(pkg_driver, 'config', 'params.yaml')
 
     motor_driver_node = Node(
         package='sts3215_driver',
-        executable='node',
-        name='sts3215_driver_node',
         executable='diff_drive_node',
         name='diff_drive_node',
         output='screen',
