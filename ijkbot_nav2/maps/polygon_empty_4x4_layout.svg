@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 560" width="560" height="560">
+  <rect width="560" height="560" fill="#ffffff"/>
+  <g transform="translate(30 30)">
+    <rect x="0" y="0" width="500" height="500" fill="#ffffff" stroke="#222222" stroke-width="3"/>
+    <rect x="0" y="400" width="100" height="100" fill="#35b86b"/>
+    <rect x="100" y="100" width="100" height="100" fill="#000000"/>
+    <rect x="100" y="200" width="100" height="100" fill="#000000"/>
+    <rect x="100" y="300" width="100" height="100" fill="#000000"/>
+    <rect x="300" y="100" width="100" height="100" fill="#000000"/>
+    <rect x="300" y="300" width="100" height="100" fill="#000000"/>
+    <g fill="none" stroke="#777777" stroke-width="1">
+      <path d="M100 0V500 M200 0V500 M300 0V500 M400 0V500"/>
+      <path d="M0 100H500 M0 200H500 M0 300H500 M0 400H500"/>
+    </g>
+    <g font-family="sans-serif" font-size="14" text-anchor="middle">
+      <text x="50" y="458" fill="#ffffff">START</text>
+      <text x="150" y="158" fill="#ffffff">CLOSED</text>
+      <text x="150" y="258" fill="#ffffff">CLOSED</text>
+      <text x="150" y="358" fill="#ffffff">CLOSED</text>
+      <text x="350" y="158" fill="#ffffff">CLOSED</text>
+      <text x="350" y="358" fill="#ffffff">CLOSED</text>
+    </g>
+    <g font-family="sans-serif" font-size="12" fill="#222222" text-anchor="middle">
+      <text x="50" y="520">0</text><text x="150" y="520">1</text>
+      <text x="250" y="520">2</text><text x="350" y="520">3</text>
+      <text x="450" y="520">4</text>
+      <text x="-12" y="455">0</text><text x="-12" y="355">1</text>
+      <text x="-12" y="255">2</text><text x="-12" y="155">3</text>
+      <text x="-12" y="55">4</text>
+    </g>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#222222">
+    <text x="30" y="18">x right, y up</text>
+  </g>
+</svg>

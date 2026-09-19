@@ -36,9 +36,17 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}]
     )
 
+    start_marker_node = Node(
+        package='ijkbot_nav2',
+        executable='start_marker',
+        name='start_marker',
+        output='screen',
+    )
+
     return LaunchDescription([
         declare_rviz_config,
         declare_use_sim_time,
+        start_marker_node,
         rviz_node
     ])
 

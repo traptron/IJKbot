@@ -7,6 +7,12 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 
+install(PROGRAMS
+  scripts/start_marker.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME start_marker
+)
+
 # Установка каталогов config, launch и maps в share/ijkbot_nav2
 install(DIRECTORY
   config
