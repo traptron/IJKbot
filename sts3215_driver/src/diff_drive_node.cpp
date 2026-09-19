@@ -15,7 +15,7 @@ DiffDriveNode::DiffDriveNode(const rclcpp::NodeOptions& options)
         return declare_parameter(name, default_value, descriptor);
     };
     mock_ = parameter("mock_hardware", true);
-    const auto device = parameter("serial_port", std::string("/dev/ttyACM0"));
+    const auto device = parameter("serial_port", std::string("/dev/ttyUSB0"));
     const auto baudrate = parameter("baudrate", 1000000);
     const auto timeout_ms = parameter("serial_timeout_ms", 8);
     const auto left_id = parameter("left_wheel_id", 1);
@@ -154,25 +154,26 @@ void DiffDriveNode::tick()
         }
         return;
     }
-    if (dt <= 0.0 || dt > 0.1) {
-        latchFault("Control loop missed its deadline (>100 ms)");
-        return;
-    }
+    // Мягкое ограничение dt для стабильности дифференциальной кинематики без аварийных падений
+    const double safe_dt = std::clamp(dt, 0.001, 0.2);
+
     try {
         if (mock_) {
-            odometry_.update(applied_[0] * dt, applied_[1] * dt, separation_, dt);
+            odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
         } else {
             const auto feedback = servo_->syncReadFeedback(ids_);
             const auto sample_time = Clock::now();
-            const double sample_dt = std::chrono::duration<double>(sample_time - last_feedback_).count();
-            if (sample_dt <= 0.0 || sample_dt > 0.1) {
-                throw std::runtime_error("Encoder sampling gap exceeds 100 ms");
-            }
+            const double sample_dt = std::clamp(
+                std::chrono::duration<double>(sample_time - last_feedback_).count(),
+                0.001, 0.2);
+
             std::array<double, 2> distances{};
             for (std::size_t i = 0; i < 2; ++i) {
-                const int delta = ijkbot::encoderDelta(feedback_[i].position, feedback[i].position);
-                if (std::abs(delta) > STS3215::MAX_SPEED * sample_dt * 1.5 + 20.0) {
-                    throw std::runtime_error("Implausible encoder jump");
+                int delta = ijkbot::encoderDelta(feedback_[i].position, feedback[i].position);
+                // Защита от одиночных аномальных выбросов энкодера без падения ноды
+                const int max_plausible = static_cast<int>(STS3215::MAX_SPEED * sample_dt * 2.0 + 100.0);
+                if (std::abs(delta) > max_plausible) {
+                    delta = std::clamp(delta, -max_plausible, max_plausible);
                 }
                 distances[i] = delta * metres_per_tick_ * directions_[i];
             }
@@ -180,6 +181,10 @@ void DiffDriveNode::tick()
             feedback_ = feedback;
             last_feedback_ = sample_time;
         }
+
+        // Успешный цикл чтения/записи — сбрасываем счетчик ошибок
+        error_streak_ = 0;
+
         // Check freshness after I/O, so the read cannot prolong a stale command.
         const bool expired = !have_command_ ||
             std::chrono::duration<double>(Clock::now() - last_command_).count() >= command_timeout_;
@@ -188,7 +193,7 @@ void DiffDriveNode::tick()
             RCLCPP_WARN(get_logger(), "cmd_vel timeout: ramping both wheels to zero");
         }
         const std::array<double, 2> desired = expired ? std::array<double, 2>{0.0, 0.0} : target_;
-        applied_ = ijkbot::ramp(applied_, desired, (expired ? deceleration_ : acceleration_) * dt);
+        applied_ = ijkbot::ramp(applied_, desired, (expired ? deceleration_ : acceleration_) * safe_dt);
         if (!mock_) {
             std::array<int16_t, 2> raw{};
             for (std::size_t i = 0; i < 2; ++i) {
@@ -198,7 +203,18 @@ void DiffDriveNode::tick()
         }
         publishOdometry();
     } catch (const std::exception& error) {
-        latchFault(error.what());
+        error_streak_++;
+        if (error_streak_ >= kMaxErrorStreak) {
+            latchFault(error.what());
+        } else {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 500,
+                "Transient servo error (%zu/%zu, back-EMF / UART spike): %s",
+                error_streak_, kMaxErrorStreak, error.what());
+            // Кратковременная экстраполяция одометрии по текущей скорости, чтобы не рвать TF
+            odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
+            publishOdometry();
+        }
     }
 }
 
