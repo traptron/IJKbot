@@ -34,6 +34,8 @@ private:
     bool fault_{false};
     bool have_command_{false};
     bool watchdog_active_{false};
+    std::size_t error_streak_{0};
+    static constexpr std::size_t kMaxErrorStreak = 5;
     std::string fault_reason_;
     std::string odom_frame_;
     std::string base_frame_;

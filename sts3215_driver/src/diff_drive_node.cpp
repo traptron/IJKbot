@@ -180,6 +180,10 @@ void DiffDriveNode::tick()
             feedback_ = feedback;
             last_feedback_ = sample_time;
         }
+
+        // Успешный цикл чтения/записи — сбрасываем счетчик ошибок
+        error_streak_ = 0;
+
         // Check freshness after I/O, so the read cannot prolong a stale command.
         const bool expired = !have_command_ ||
             std::chrono::duration<double>(Clock::now() - last_command_).count() >= command_timeout_;
@@ -198,7 +202,18 @@ void DiffDriveNode::tick()
         }
         publishOdometry();
     } catch (const std::exception& error) {
-        latchFault(error.what());
+        error_streak_++;
+        if (error_streak_ >= kMaxErrorStreak) {
+            latchFault(error.what());
+        } else {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 500,
+                "Transient servo error (%zu/%zu, back-EMF / UART spike): %s",
+                error_streak_, kMaxErrorStreak, error.what());
+            // Кратковременная экстраполяция одометрии по текущей скорости, чтобы не рвать TF
+            odometry_.update(applied_[0] * dt, applied_[1] * dt, separation_, dt);
+            publishOdometry();
+        }
     }
 }
 
