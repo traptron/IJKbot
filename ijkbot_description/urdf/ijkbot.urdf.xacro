@@ -4,7 +4,7 @@
   <!-- Свойства геометрии -->
   <xacro:property name="wheel_radius" value="0.0375"/>  <!-- D = 75 мм -->
   <xacro:property name="wheel_width" value="0.025"/>
-  <xacro:property name="wheel_separation" value="0.140"/> <!-- L = 140 мм -->
+  <xacro:property name="wheel_separation" value="0.225"/> <!-- L = 225 мм, колея по центрам -->
   <xacro:property name="wheel_offset_y" value="${wheel_separation / 2.0}"/>
   
   <xacro:property name="chassis_length" value="0.220"/>
