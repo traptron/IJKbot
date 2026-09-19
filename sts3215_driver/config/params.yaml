@@ -3,7 +3,6 @@ diff_drive_node:
     mock_hardware: false
     serial_port: /dev/ttyUSB0
     baudrate: 1000000
-    serial_timeout_ms: 8
     serial_timeout_ms: 20
     left_wheel_id: 1
     right_wheel_id: 2

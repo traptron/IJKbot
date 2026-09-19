@@ -44,7 +44,7 @@ DiffDriveNode::DiffDriveNode(const rclcpp::NodeOptions& options)
         wheel_diameter_ < 0.001 || wheel_diameter_ > 1.0 ||
         separation_ < 0.001 || separation_ > 2.0 || angular_limit_ > 2.0 ||
         linear_limit_ > 0.25 || command_timeout_ > 0.2 || baudrate != 1000000 ||
-        timeout_ms < 1 || timeout_ms > 8 || odom_frame_.empty() || base_frame_.empty() ||
+        timeout_ms < 1 || timeout_ms > 25 || odom_frame_.empty() || base_frame_.empty() ||
         odom_frame_ == base_frame_ || odom_frame_.front() == '/' || base_frame_.front() == '/') {
         throw std::invalid_argument("Invalid drive parameters: check IDs, directions, frames and safety limits");
     }
