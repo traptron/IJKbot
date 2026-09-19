@@ -159,6 +159,15 @@ Visualization Manager:
       Use Timestamp: false
       Value: true
 
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Marker Topic: /start_marker
+      Name: Start Marker (green)
+      Namespaces:
+        polygon: true
+      Queue Size: 100
+      Value: true
+
     - Alpha: 1
       Class: rviz_default_plugins/Path
       Color: 0; 255; 0
