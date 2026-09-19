@@ -93,6 +93,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'autostart': autostart,
+            'autostart': True,
             'node_names': ['map_server', 'amcl']
         }],
         condition=IfCondition(use_localization)
@@ -102,6 +103,7 @@ def generate_launch_description():
     controller_node = Node(
         package='nav2_controller',
         executable='controller_server',
+        name='controller_server',
         output='screen',
         parameters=[configured_params],
         remappings=[('cmd_vel', 'cmd_vel_nav')]
@@ -151,6 +153,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'autostart': autostart,
+            'autostart': True,
             'node_names': [
                 'controller_server',
                 'velocity_smoother',
