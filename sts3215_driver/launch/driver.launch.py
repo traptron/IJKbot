@@ -13,7 +13,7 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         DeclareLaunchArgument("params_file", default_value=f"{package}/config/params.yaml"),
         DeclareLaunchArgument("mock_hardware", default_value="true"),
-        DeclareLaunchArgument("serial_port", default_value="/dev/ttyUSB0"),
+        DeclareLaunchArgument("serial_port", default_value="/dev/ttyACM0"),
         Node(
             package="sts3215_driver",
             executable="diff_drive_node",
