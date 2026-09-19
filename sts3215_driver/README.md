@@ -59,7 +59,7 @@ mock работает в реальном времени, а не по `/clock` 
 ros2 launch sts3215_driver driver.launch.py mock_hardware:=false serial_port:=/dev/ttyACM0
 ```
 
-Порт по умолчанию — `/dev/ttyACM0`. Если номер устройства изменился,
+Порт по умолчанию — `/dev/ttyUSB0`. Если номер устройства изменился,
 задайте его через `serial_port:=...` при запуске.
 Скорость — 1 Мбод, 8N1. Требуются ответы на WRITE (регистр Response Status Level = 1)
 и поддержка Sync Read прошивкой обоих приводов. Настройка wheel mode проверяется чтением:
