@@ -1,1 +1,0 @@
-/home/chumohod/IJKbot/build/sts3215_driver/ament_cmake_environment_hooks/local_setup.zsh
