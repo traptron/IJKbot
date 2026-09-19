@@ -5,3 +5,16 @@
 Приводы: Сервомоторы ST3215
 Камера: Realsense D435
 Аккумулятор: 14.8В 5000mAh
+
+Текущий этап — драйвер дифференциального привода: [инструкция и проверки](sts3215_driver/README.md).
+Геометрия ведущей пары: диаметр шин 75 мм, ширина 25 мм, колея по центрам 225 мм.
+ID левого/правого привода — 1/2. Расстояние между передней и задней осью — 140 мм.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install --packages-select sts3215_driver
+source install/setup.bash
+ros2 launch sts3215_driver driver.launch.py
+```
+
+По умолчанию запускается mock: UART не открывается, моторы не включаются.

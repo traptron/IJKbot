@@ -3,6 +3,7 @@
 
 #include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdexcept>
 #include <string>
 #include <termios.h>
@@ -11,11 +12,16 @@
 
 SerialPort::SerialPort(
     const std::string& device,
-    int baudrate)
+    int baudrate,
+    int timeout_ms)
+    : timeout_ms_(timeout_ms)
 {
+    if (timeout_ms <= 0) {
+        throw std::invalid_argument("UART timeout must be positive");
+    }
     fd_ = open(
         device.c_str(),
-        O_RDWR | O_NOCTTY
+        O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC
     );
 
     if (fd_ < 0)
@@ -115,7 +121,11 @@ SerialPort::SerialPort(
 
 
     // Очистить старые данные UART
-    tcflush(fd_, TCIOFLUSH);
+    if (tcflush(fd_, TCIOFLUSH) != 0) {
+        close(fd_);
+        fd_ = -1;
+        throw std::runtime_error("tcflush() failed");
+    }
 }
 
 
@@ -148,9 +158,11 @@ void SerialPort::write(
 
 
     std::size_t total_written = 0;
+    const auto until = deadline();
 
     while (total_written < size)
     {
+        waitReady(POLLOUT, until);
         ssize_t result = ::write(
             fd_,
             data + total_written,
@@ -160,7 +172,7 @@ void SerialPort::write(
 
         if (result < 0)
         {
-            if (errno == EINTR)
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
             {
                 continue;
             }
@@ -185,10 +197,56 @@ void SerialPort::write(
 
 
     // Дождаться физической передачи данных UART
-    if (tcdrain(fd_) != 0)
-    {
-        throw std::runtime_error(
-            "tcdrain() failed"
-        );
+    // tcdrain может зависнуть: доставку подтверждает ответ сервопривода,
+    // ограниченный общим deadline чтения. Sync Write подтверждения не имеет.
+}
+
+SerialPort::Deadline SerialPort::deadline() const
+{
+    return std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms_);
+}
+
+void SerialPort::waitReady(short events, Deadline until)
+{
+    while (true) {
+        const auto remaining = until - std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::steady_clock::duration::zero()) {
+            throw std::runtime_error("UART transaction timeout");
+        }
+        const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(remaining);
+        pollfd descriptor{fd_, events, 0};
+        const int result = poll(&descriptor, 1, static_cast<int>(milliseconds.count()) + 1);
+        if (result < 0 && errno == EINTR) {
+            continue;
+        }
+        if (result < 0 || (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            throw std::runtime_error("UART disconnected or poll failed");
+        }
+        if (result > 0 && (descriptor.revents & events)) {
+            return;
+        }
+    }
+}
+
+void SerialPort::readExact(uint8_t* data, std::size_t size, Deadline until)
+{
+    std::size_t received = 0;
+    while (received < size) {
+        waitReady(POLLIN, until);
+        const auto count = ::read(fd_, data + received, size - received);
+        if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+            continue;
+        }
+        if (count <= 0) {
+            throw std::runtime_error("UART read failed");
+        }
+        received += static_cast<std::size_t>(count);
+    }
+}
+
+void SerialPort::discardInput()
+{
+    if (tcflush(fd_, TCIFLUSH) != 0) {
+        throw std::runtime_error("UART input flush failed");
     }
 }

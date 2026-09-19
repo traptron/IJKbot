@@ -1,0 +1,25 @@
+diff_drive_node:
+  ros__parameters:
+    mock_hardware: true
+    serial_port: /dev/ttyUSB0
+    baudrate: 1000000
+    serial_timeout_ms: 8
+    left_wheel_id: 1
+    right_wheel_id: 2
+    # Assumed mirrored mounting; verify each direction with wheels lifted.
+    # Initial +1/-1 drove both wheels backward in the operator's bench observation.
+    # Inverted below; a repeat physical check is still pending.
+    left_wheel_direction: -1
+    right_wheel_direction: 1
+    wheel_diameter: 0.075
+    # Centre-to-centre: (0.200 inner + 0.250 outer) / 2.
+    # Front-to-rear axle spacing is 0.140 m; it is not the drive track.
+    wheel_separation: 0.225
+    max_linear_velocity: 0.25
+    max_angular_velocity: 2.0
+    wheel_acceleration: 0.5  # m/s^2 at the wheel tread
+    watchdog_deceleration: 1.0  # m/s^2 after cmd_vel expires
+    cmd_vel_timeout: 0.2  # seconds until braking begins
+    odom_frame: odom
+    base_frame: base_footprint
+    publish_tf: true

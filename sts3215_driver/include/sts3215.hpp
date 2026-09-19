@@ -5,6 +5,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
+#include <vector>
 
 class STS3215
 {
@@ -27,6 +29,17 @@ public:
 
     void stop(uint8_t id);
 
+    struct Feedback {
+        int position;
+        int speed;
+        double voltage;
+        int temperature;
+    };
+    void syncWriteSpeeds(const std::array<uint8_t, 2>& ids,
+                         const std::array<int16_t, 2>& speeds);
+    std::array<Feedback, 2> syncReadFeedback(const std::array<uint8_t, 2>& ids);
+    std::vector<uint8_t> readRegisters(uint8_t id, uint8_t address, uint8_t size);
+
 private:
     SerialPort& serial_;
 
@@ -39,6 +52,14 @@ private:
     static constexpr uint8_t ADDR_GOAL_SPEED    = 0x2E;
 
     static constexpr uint8_t MODE_WHEEL = 0x01;
+
+    struct Status {
+        uint8_t id;
+        std::vector<uint8_t> data;
+    };
+    Status readStatus(SerialPort::Deadline until);
+    void sendPacket(uint8_t id, uint8_t instruction, const std::vector<uint8_t>& parameters);
+    static void validateIds(const std::array<uint8_t, 2>& ids);
 
     void writeRegister(
         uint8_t id,
