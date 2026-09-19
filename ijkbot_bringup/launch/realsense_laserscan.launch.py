@@ -44,6 +44,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'camera_name': 'camera',
+            'camera_namespace': '',
             'rgb_camera.color_profile': color_profile,
             'depth_module.depth_profile': depth_profile,
             'enable_color': 'true',
@@ -61,8 +62,8 @@ def generate_launch_description():
         name='depthimage_to_laserscan',
         parameters=[scan_config_file],
         remappings=[
-            ('image', '/camera/camera/depth/image_rect_raw'),
-            ('camera_info', '/camera/camera/depth/camera_info'),
+            ('depth', '/camera/depth/image_rect_raw'),
+            ('depth_camera_info', '/camera/depth/camera_info'),
             ('scan', '/scan'),
         ],
         output='screen'
