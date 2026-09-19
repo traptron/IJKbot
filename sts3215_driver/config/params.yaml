@@ -1,6 +1,6 @@
 diff_drive_node:
   ros__parameters:
-    mock_hardware: true
+    mock_hardware: false
     serial_port: /dev/ttyUSB0
     baudrate: 1000000
     serial_timeout_ms: 8
