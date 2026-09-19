@@ -15,7 +15,7 @@ DiffDriveNode::DiffDriveNode(const rclcpp::NodeOptions& options)
         return declare_parameter(name, default_value, descriptor);
     };
     mock_ = parameter("mock_hardware", true);
-    const auto device = parameter("serial_port", std::string("/dev/ttyACM0"));
+    const auto device = parameter("serial_port", std::string("/dev/ttyUSB0"));
     const auto baudrate = parameter("baudrate", 1000000);
     const auto timeout_ms = parameter("serial_timeout_ms", 8);
     const auto left_id = parameter("left_wheel_id", 1);
