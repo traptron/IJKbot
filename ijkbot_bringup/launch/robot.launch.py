@@ -30,6 +30,15 @@ def generate_launch_description():
     enable_motors = LaunchConfiguration('enable_motors')
 
     # 1. Сенсорный пайплайн (RealSense D435 + LaserScan)
+    # 1. Описание робота и публикация TF-дерева (Robot State Publisher)
+    pkg_description = get_package_share_directory('ijkbot_description')
+    rsp_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_description, 'launch', 'rsp.launch.py')
+        )
+    )
+
+    # 2. Сенсорный пайплайн (RealSense D435 + LaserScan)
     realsense_laserscan_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_bringup, 'launch', 'realsense_laserscan.launch.py')
@@ -38,6 +47,7 @@ def generate_launch_description():
     )
 
     # 2. Драйвер приводов STS3215 (C++ нода из пакета sts3215_driver)
+    # 3. Драйвер приводов STS3215 (C++ нода из пакета sts3215_driver)
     motor_driver_node = Node(
         package='sts3215_driver',
         executable='node',
@@ -49,6 +59,7 @@ def generate_launch_description():
     return LaunchDescription([
         declare_enable_camera,
         declare_enable_motors,
+        rsp_launch,
         realsense_laserscan_launch,
         motor_driver_node,
     ])
