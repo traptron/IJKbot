@@ -224,7 +224,6 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'autostart': autostart,
-            'autostart': True,
             'node_names': [
                 'controller_server',
                 'velocity_smoother',
@@ -258,4 +257,3 @@ def generate_launch_description():
         bt_navigator_node,
         nav_lifecycle_manager
     ])
-

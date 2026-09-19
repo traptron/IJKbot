@@ -181,12 +181,12 @@ void DiffDriveNode::tick()
             odometry_.update(distances[0], distances[1], separation_, sample_dt);
             feedback_ = feedback;
             last_feedback_ = sample_time;
-        } catch (const std::exception&) {
+        } catch (const std::exception& error) {
             // При задержке или таймауте UART мягко экстраполируем одометрию без падения в fault
-            if (serial_) {
-                serial_->discardInput();
-            }
-            odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
+            // Прежняя экстраполяция повторно учитывала путь при восстановлении энкодеров.
+            // Без достоверной обратной связи останавливаем привод и сохраняем последнюю позу.
+            latchFault(std::string("Feedback failed: ") + error.what());
+            return;
         }
     }
 
@@ -207,8 +207,11 @@ void DiffDriveNode::tick()
                 raw[i] = static_cast<int16_t>(std::lround(applied_[i] / metres_per_tick_ * directions_[i]));
             }
             servo_->syncWriteSpeeds(ids_, raw);
-        } catch (const std::exception&) {
+        } catch (const std::exception& error) {
             // Игнорируем редкие единичные помехи отправки
+            // Ошибку отправки нельзя скрывать: команда остановки могла не дойти.
+            latchFault(std::string("Speed command failed: ") + error.what());
+            return;
         }
     }
 

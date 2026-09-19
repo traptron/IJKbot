@@ -55,6 +55,24 @@ class DummyLLMClient:
 
 
 class TestMissionStateMachine(unittest.TestCase):
+    def test_real_search_requires_detection(self):
+        sm = MissionStateMachine(llm_client=DummyLLMClient(), mock_mode=False)
+        sm.state = MissionState.SEARCHING_VICTIM
+        sm.step(10.0)
+        self.assertEqual(sm.state, MissionState.SEARCHING_VICTIM)
+        self.assertFalse(sm.victim_found)
+
+    def test_qr_callback_accepts_only_reading_state_and_preserves_text(self):
+        from types import SimpleNamespace
+        from ijkbot_brain.mission_sm import MissionROSNode
+        wrapper = SimpleNamespace(sm=self.sm)
+        message = SimpleNamespace(data='  Состояние: стабильно\n')
+        MissionROSNode._qr_callback(wrapper, message)
+        self.assertIsNone(self.sm.qr_code_data)
+        self.sm.state = MissionState.READING_QR
+        MissionROSNode._qr_callback(wrapper, message)
+        self.assertEqual(self.sm.qr_code_data, message.data)
+
 
     def setUp(self):
         self.mock_llm = DummyLLMClient("smoke_tower")
@@ -199,6 +217,20 @@ class TestMissionStateMachine(unittest.TestCase):
         saved_file = self.sm.save_protocol_to_disk()
         self.assertIsNotNone(saved_file)
         self.assertTrue(Path(saved_file).exists())
+
+    def test_real_mode_waits_for_qr_node_result(self):
+        """Реальная миссия не может подменять отсутствие QR фиктивным текстом."""
+        real_sm = MissionStateMachine(llm_client=self.mock_llm, mock_mode=False)
+        real_sm.state = MissionState.READING_QR
+
+        real_sm.step(0.1)
+        self.assertEqual(real_sm.state, MissionState.READING_QR)
+        self.assertFalse(real_sm.qr_scanned)
+
+        real_sm.qr_code_data = 'Состояние: стабильное'
+        real_sm.step(0.1)
+        self.assertEqual(real_sm.state, MissionState.RETURNING_HOME)
+        self.assertTrue(real_sm.qr_scanned)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,14 @@
 # Этап 5: Конечный автомат миссии и Web Dashboard (Ноутбук) — Отчет о реализации
 
-Документ фиксирует результаты выполнения **Этапа 5** из [PLAN.md](file:///home/xaten/IJKbot/PLAN.md) для автономного мобильного робота **IJKbot** (Хакатон «Эвакуация», «Кубок РТК Высшая Лига», Ижевск).
+Документ фиксирует результаты выполнения **Этапа 5** из [PLAN.md](PLAN.md) для автономного мобильного робота **IJKbot** (Хакатон «Эвакуация», «Кубок РТК Высшая Лига», Ижевск).
 
 ---
+
+Актуализация 20.09.2026: этот отчёт описывает прототип и mock-испытания.
+QR вынесен в `ijkbot_vision`, фиктивный поиск человека и фиктивное чтение QR
+отключены в реальном режиме. Подтверждение реального NavigateToPose, отмена
+навигации, преобразование odom→map и согласование ориентиров с картой остаются
+незавершёнными. Сохранение протокола: `IJKBOT_LOG_DIR` либо `./log`.
 
 ## 1. Обзор выполненных задач
 
@@ -14,9 +20,9 @@
 3. **Навигационный стек** (Nav2 / одометрия) — движение к ориентирам полигона и последующая эвакуация в стартовую ячейку `[0, 0]`.
 4. **Компьютерное зрение** — обнаружение пострадавшего человека (манекена).
 5. **Регламентное удержание** — позиционирование робота в ячейке пострадавшего не менее 5 секунд.
-6. **QR-сканер** — считывание данных о состоянии пострадавшего через OpenCV с автоматическим резервным механизмом.
+6. **QR-сканер** — принимает подтверждённый текст от отдельной ноды `ijkbot_vision/qr_reader_node` через `/victim_status`.
 7. **Протокол и хронология событий** — непрерывный миллисекундный аудит всех действий робота с возможностью скачивания JSON-файла и автоматическим сохранением на диск при завершении миссии.
-8. **Энергоэффективность и стабильность сети**: видеопоток не транслируется по Wi-Fi, что исключает задержки и экономит вычислительные ресурсы.
+8. **Энергоэффективность и стабильность сети**: на ноутбук передаётся только сжатый JPEG-поток; сырые изображения и PointCloud2 по Wi-Fi не передаются.
 
 ---
 
@@ -24,12 +30,11 @@
 
 | Файл | Назначение |
 |------|------------|
-| [`ijkbot_brain/mission_sm.py`](file:///home/xaten/IJKbot/ijkbot_brain/mission_sm.py) | Главный модуль конечного автомата `MissionStateMachine`, ROS 2 узел `MissionROSNode` и NiceGUI интерфейс. |
-| [`ijkbot_brain/mission_sm.python`](file:///home/xaten/IJKbot/ijkbot_brain/mission_sm.python) | Псевдоним для запуска скрипта через CLI (`python3 mission_sm.python`). |
-| [`ijkbot_brain/dashboard_app.py`](file:///home/xaten/IJKbot/ijkbot_brain/dashboard_app.py) | Точка запуска Web Dashboard (консольный скрипт ROS 2 `dashboard_app`). |
-| [`ijkbot_brain/test_mission_sm.py`](file:///home/xaten/IJKbot/ijkbot_brain/test_mission_sm.py) | Модульные и интеграционные тесты автомата, таймеров и формирования протокола. |
-| [`ijkbot_brain/package.xml`](file:///home/xaten/IJKbot/ijkbot_brain/package.xml) | Манифест зависимостей (`rclpy`, `std_msgs`, `geometry_msgs`, `nav_msgs`, `sensor_msgs`). |
-| [`ijkbot_brain/setup.py`](file:///home/xaten/IJKbot/ijkbot_brain/setup.py) | Конфигурация точек входа консоли (`llm_client`, `mission_sm`, `dashboard_app`). |
+| [`ijkbot_brain/mission_sm.py`](ijkbot_brain/mission_sm.py) | Главный модуль конечного автомата `MissionStateMachine`, ROS 2 узел `MissionROSNode` и NiceGUI интерфейс. |
+| [`ijkbot_brain/dashboard_app.py`](ijkbot_brain/dashboard_app.py) | Точка запуска Web Dashboard (консольный скрипт ROS 2 `dashboard_app`). |
+| [`ijkbot_brain/test_mission_sm.py`](ijkbot_brain/test_mission_sm.py) | Модульные и интеграционные тесты автомата, таймеров и формирования протокола. |
+| [`ijkbot_brain/package.xml`](ijkbot_brain/package.xml) | Манифест зависимостей (`rclpy`, `std_msgs`, `geometry_msgs`, `nav_msgs`). |
+| [`ijkbot_brain/setup.py`](ijkbot_brain/setup.py) | Конфигурация точек входа консоли (`llm_client`, `mission_sm`, `dashboard_app`). |
 
 ---
 
@@ -107,6 +112,10 @@ stateDiagram-v2
 | `/emergency_stop` | `std_msgs/msg/Bool` | Сигнал аппаратного/программного E-STOP |
 | `/mission/state` | `std_msgs/msg/String` | Публикация текущего состояния автомата |
 
+QR-декодирование намеренно вынесено из этого пакета: `ijkbot_vision/qr_reader_node`
+подписывается на сжатое изображение и публикует подтверждённый текст в
+`/victim_status`. В реальном режиме автомат не подменяет отсутствие QR фиктивными данными.
+
 ---
 
 ## 6. Результаты тестирования
@@ -143,8 +152,6 @@ colcon build --symlink-install --packages-select ijkbot_brain
 
 ### Запуск интерфейса (NiceGUI):
 ```bash
-python3 ijkbot_brain/mission_sm.python --port 8080
-# или через ROS 2 Jazzy:
 ros2 run ijkbot_brain dashboard_app --port 8080
 ```
 Открыть в браузере: `http://localhost:8080` (или `http://192.168.1.20:8080`).

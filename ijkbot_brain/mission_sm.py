@@ -33,21 +33,7 @@ try:
     from geometry_msgs.msg import Twist, PoseStamped
     from nav_msgs.msg import Odometry
     from std_msgs.msg import String as RosString, Bool as RosBool
-    try:
-        from sensor_msgs.msg import CompressedImage
-        COMPRESSED_IMAGE_AVAILABLE = True
-    except ImportError:
-        COMPRESSED_IMAGE_AVAILABLE = False
     ROS2_AVAILABLE = True
-except ImportError:
-    pass
-
-# OpenCV импорты для QR-декодирования
-CV2_AVAILABLE = False
-try:
-    import cv2
-    import numpy as np
-    CV2_AVAILABLE = True
 except ImportError:
     pass
 
@@ -198,8 +184,6 @@ class MissionStateMachine:
         # Состояние зрения и QR-кода
         self.victim_detected: bool = False
         self.qr_code_data: Optional[str] = None
-        self.latest_frame_jpeg: Optional[bytes] = None
-        self.frame_counter: int = 0
 
         # ROS 2 узел (если инициализирован)
         self.ros_node: Optional[Any] = None
@@ -396,6 +380,7 @@ class MissionStateMachine:
                     if wait_elapsed >= self.wait_duration_required:
                         self._log("STATE", f"Регламентная 5-секундная фиксация выполнена ({wait_elapsed:.1f}с). Переход к считыванию QR-кода...")
                         self.state = MissionState.READING_QR
+                        self.qr_code_data = None
 
             elif self.state == MissionState.READING_QR:
                 self._handle_qr_reading(dt)
@@ -442,7 +427,7 @@ class MissionStateMachine:
                 self._publish_goal_pose(self.current_waypoint)
         else:
             # Реальный режим: ожидание флага детекции
-            if self.victim_detected or self._search_time >= 5.0:
+            if self.victim_detected:
                 self._search_time = 0.0
                 self.victim_detected = True
                 self.victim_found = True
@@ -461,39 +446,30 @@ class MissionStateMachine:
                 self._log("NAV", "Начало подъезда в ячейку пострадавшего...")
 
     def _handle_qr_reading(self, dt: float) -> None:
-        """Считывание QR-кода с видеопотока или симулятора."""
-        # Попытка считывания через OpenCV QRCodeDetector, если есть видеокадр
-        if not self.mock_mode and self.latest_frame_jpeg and CV2_AVAILABLE and not self.qr_code_data:
-            try:
-                frame = cv2.imdecode(np.frombuffer(self.latest_frame_jpeg, np.uint8), cv2.IMREAD_COLOR)
-                if frame is not None:
-                    detector = cv2.QRCodeDetector()
-                    data, _, _ = detector.detectAndDecode(frame)
-                    if data:
-                        self.qr_code_data = data.strip()
-            except Exception:
-                pass
+        """Ожидание результата отдельной ноды ijkbot_vision/qr_reader_node."""
+        self._publish_zero_velocity()
+        if self.mock_mode and not self.qr_code_data:
+            mock_qr = (
+                "ПОСТРАДАВШИЙ #1\n"
+                "ФИО: Иванов И.И.\n"
+                "Состояние: Средней тяжести\n"
+                "Пульс: 74 уд/мин, SpO2: 96%\n"
+                "Травма: Перелом голени, сознание сохранено"
+            )
+            self.qr_code_data = mock_qr
 
-        if self.mock_mode or not self.qr_code_data:
-            if not self.qr_code_data:
-                mock_qr = (
-                    "ПОСТРАДАВШИЙ #1\n"
-                    "ФИО: Иванов И.И.\n"
-                    "Состояние: Средней тяжести\n"
-                    "Пульс: 74 уд/мин, SpO2: 96%\n"
-                    "Травма: Перелом голени, сознание сохранено"
-                )
-                self.qr_code_data = mock_qr
+        if not self.qr_code_data:
+            return
 
         if not self.qr_scanned:
             self.qr_scanned = True
             self._log("QR", f"Данные с QR-кода состояния успешно считаны:\n{self.qr_code_data}")
 
-        # Направляем робота домой в стартовую ячейку [0, 0]
-        self.current_waypoint = START_WAYPOINT
-        self.state = MissionState.RETURNING_HOME
-        self._log("NAV", "Начало эвакуации пострадавшего в пункт сбора (ячейка [0, 0])...")
-        self._publish_goal_pose(START_WAYPOINT)
+            # Направляем робота домой в стартовую ячейку [0, 0]
+            self.current_waypoint = START_WAYPOINT
+            self.state = MissionState.RETURNING_HOME
+            self._log("NAV", "Начало эвакуации пострадавшего в пункт сбора (ячейка [0, 0])...")
+            self._publish_goal_pose(START_WAYPOINT)
 
     def _handle_mission_completion(self) -> None:
         """Фиксация успешной эвакуации и завершения миссии."""
@@ -603,7 +579,7 @@ class MissionStateMachine:
     def save_protocol_to_disk(self) -> Optional[str]:
         """Сохранение протокола в директорию log/."""
         try:
-            log_dir = Path("/home/xaten/IJKbot/log")
+            log_dir = Path(os.environ.get("IJKBOT_LOG_DIR", Path.cwd() / "log"))
             log_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             file_path = log_dir / f"protocol_{ts}.json"
@@ -644,14 +620,6 @@ class MissionROSNode:
                 self.node.create_subscription(RosString, "/mission/judge_task", self._judge_task_callback, 10)
                 self.node.create_subscription(RosBool, "/emergency_stop", self._estop_callback, 10)
 
-                if COMPRESSED_IMAGE_AVAILABLE:
-                    self.node.create_subscription(
-                        CompressedImage,
-                        "/camera/color/image_raw/compressed",
-                        self._image_callback,
-                        10
-                    )
-
                 self.sm.ros_node = self
                 self.node.get_logger().info("MissionROSNode успешно запущен")
             except Exception as e:
@@ -667,11 +635,6 @@ class MissionROSNode:
                 cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
                 self.sm.robot_yaw = math.atan2(siny_cosp, cosy_cosp)
                 self.sm.path_history.append((self.sm.robot_x, self.sm.robot_y))
-
-    def _image_callback(self, msg: Any) -> None:
-        with self.sm.lock:
-            self.sm.latest_frame_jpeg = bytes(msg.data)
-            self.sm.frame_counter += 1
 
     def _victim_detected_callback(self, msg: Any) -> None:
         with self.sm.lock:
@@ -690,7 +653,8 @@ class MissionROSNode:
 
     def _qr_callback(self, msg: Any) -> None:
         with self.sm.lock:
-            self.sm.qr_code_data = msg.data
+            if self.sm.state == MissionState.READING_QR and msg.data.strip():
+                self.sm.qr_code_data = msg.data
 
     def _estop_callback(self, msg: Any) -> None:
         if msg.data:

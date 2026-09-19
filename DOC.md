@@ -105,8 +105,8 @@ ros2 launch realsense2_camera rs_launch.py \
 ```bash
 ros2 run depthimage_to_laserscan depthimage_to_laserscan_node \
   --ros-args \
-  -r image:=/camera/camera/depth/image_rect_raw \
-  -r camera_info:=/camera/camera/depth/camera_info \
+  -r image:=/camera/depth/image_rect_raw \
+  -r camera_info:=/camera/depth/camera_info \
   -r scan:=/scan \
   -p range_min:=0.2 \
   -p range_max:=4.0 \
@@ -126,9 +126,9 @@ ros2 run depthimage_to_laserscan depthimage_to_laserscan_node \
 ros2 topic list | grep -E 'camera|scan'
 ```
 Ожидаемые топики:
-- `/camera/camera/color/image_raw` — цветное видео
-- `/camera/camera/color/image_raw/compressed` — сжатый JPEG поток для ноутбука
-- `/camera/camera/depth/image_rect_raw` — сырая карта глубины
+- `/camera/color/image_raw` — цветное видео
+- `/camera/color/image_raw/compressed` — сжатый JPEG поток для ноутбука и QR-ноды
+- `/camera/depth/image_rect_raw` — сырая карта глубины
 - `/scan` — 2D лазерскан для Nav2
 
 ### 2. Проверка частоты публикации:
@@ -137,7 +137,7 @@ ros2 topic list | grep -E 'camera|scan'
 ros2 topic hz /scan
 
 # Частота цветного потока (~15 Гц)
-ros2 topic hz /camera/camera/color/image_raw
+ros2 topic hz /camera/color/image_raw
 ```
 
 ### 3. Просмотр данных лазерскана:
@@ -145,6 +145,13 @@ ros2 topic hz /camera/camera/color/image_raw
 ros2 topic echo /scan --once
 ```
 В массиве `ranges` должны отображаться расстояния до препятствий в метрах (значения от 0.2 до 4.0, либо `inf` для свободного пространства).
+
+Перед запуском нод на ноутбуке проверьте точное имя RGB-топика:
+```bash
+ros2 topic list | grep 'color/image_raw/compressed'
+```
+Если камера публикует имя с дополнительным `/camera`, передайте это имя параметром
+`image_topic` QR-ноды. Инструкция запуска — в [`ijkbot_vision/README.md`](ijkbot_vision/README.md).
 
 ---
 
@@ -183,4 +190,3 @@ ros2 topic echo /scan --once
   vcgencmd get_throttled
   ```
   *(Если температура выше 75°C или флаг throttled отличен от `0x0`, проверьте кулер и радиатор на процессоре Raspberry Pi)*.
-
