@@ -17,6 +17,7 @@
   <exec_depend>image_transport</exec_depend>
   <exec_depend>image_transport_plugins</exec_depend>
   <exec_depend>sts3215_driver</exec_depend>
+  <exec_depend>ijkbot_description</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

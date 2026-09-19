@@ -56,10 +56,11 @@ mock работает в реальном времени, а не по `/clock` 
 После проверки ID и направлений на вывешенных колёсах:
 
 ```bash
-ros2 launch sts3215_driver driver.launch.py mock_hardware:=false serial_port:=/dev/ttyUSB0
+ros2 launch sts3215_driver driver.launch.py mock_hardware:=false serial_port:=/dev/ttyACM0
 ```
 
-Для другого адаптера можно задать `serial_port:=/dev/ttyACM0`.
+Порт по умолчанию — `/dev/ttyUSB0`. Если номер устройства изменился,
+задайте его через `serial_port:=...` при запуске.
 Скорость — 1 Мбод, 8N1. Требуются ответы на WRITE (регистр Response Status Level = 1)
 и поддержка Sync Read прошивкой обоих приводов. Настройка wheel mode проверяется чтением:
 если режим не применился, привод остаётся в состоянии ошибки; следует проверить блокировку EPROM.

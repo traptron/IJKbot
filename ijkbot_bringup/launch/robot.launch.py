@@ -26,10 +26,26 @@ def generate_launch_description():
         description='Запускать ли ноду драйвера сервоприводов STS3215'
     )
 
+    declare_mock_hardware = DeclareLaunchArgument(
+        'mock_hardware',
+        default_value='true',
+        description='Использовать симуляцию моторов без реального UART'
+    )
+
     enable_camera = LaunchConfiguration('enable_camera')
     enable_motors = LaunchConfiguration('enable_motors')
+    mock_hardware = LaunchConfiguration('mock_hardware')
 
     # 1. Сенсорный пайплайн (RealSense D435 + LaserScan)
+    # 1. Описание робота и публикация TF-дерева (Robot State Publisher)
+    pkg_description = get_package_share_directory('ijkbot_description')
+    rsp_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_description, 'launch', 'rsp.launch.py')
+        )
+    )
+
+    # 2. Сенсорный пайплайн (RealSense D435 + LaserScan)
     realsense_laserscan_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_bringup, 'launch', 'realsense_laserscan.launch.py')
@@ -37,18 +53,27 @@ def generate_launch_description():
         condition=IfCondition(enable_camera)
     )
 
-    # 2. Драйвер приводов STS3215 (C++ нода из пакета sts3215_driver)
+    # 3. Драйвер приводов STS3215 (C++ нода из пакета sts3215_driver)
+    pkg_driver = get_package_share_directory('sts3215_driver')
+    driver_params_file = os.path.join(pkg_driver, 'config', 'params.yaml')
+
     motor_driver_node = Node(
         package='sts3215_driver',
-        executable='node',
-        name='sts3215_driver_node',
+        executable='diff_drive_node',
+        name='diff_drive_node',
         output='screen',
+        parameters=[
+            driver_params_file,
+            {'mock_hardware': mock_hardware}
+        ],
         condition=IfCondition(enable_motors)
     )
 
     return LaunchDescription([
         declare_enable_camera,
         declare_enable_motors,
+        declare_mock_hardware,
+        rsp_launch,
         realsense_laserscan_launch,
         motor_driver_node,
     ])
