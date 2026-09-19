@@ -21,6 +21,8 @@ setup(
     entry_points={
         'console_scripts': [
             'llm_client = ijkbot_brain.llm_client:main',
+            'mission_sm = ijkbot_brain.mission_sm:main',
+            'dashboard_app = ijkbot_brain.dashboard_app:main',
         ],
     },
 )
