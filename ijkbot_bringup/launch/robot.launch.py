@@ -28,7 +28,7 @@ def generate_launch_description():
 
     declare_mock_hardware = DeclareLaunchArgument(
         'mock_hardware',
-        default_value='false',
+        default_value='true',
         description='Использовать симуляцию моторов без реального UART'
     )
 
