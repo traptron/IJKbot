@@ -157,10 +157,6 @@ void DiffDriveNode::tick()
     // Мягкое ограничение dt для стабильности дифференциальной кинематики без аварийных падений
     const double safe_dt = std::clamp(dt, 0.001, 0.2);
 
-    try {
-        if (mock_) {
-            odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
-        } else {
     // 1. Опрос энкодеров и расчет одометрии
     if (mock_) {
         odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
@@ -194,27 +190,16 @@ void DiffDriveNode::tick()
         }
     }
 
-        // Успешный цикл чтения/записи — сбрасываем счетчик ошибок
-        error_streak_ = 0;
     // 2. Управление скоростью моторов (выполняется ВСЕГДА, чтобы колеса не зависали)
     const bool expired = !have_command_ ||
         std::chrono::duration<double>(Clock::now() - last_command_).count() >= command_timeout_;
     if (expired && have_command_ && !watchdog_active_) {
         watchdog_active_ = true;
+        RCLCPP_WARN(get_logger(), "cmd_vel timeout: ramping both wheels to zero");
     }
     const std::array<double, 2> desired = expired ? std::array<double, 2>{0.0, 0.0} : target_;
     applied_ = ijkbot::ramp(applied_, desired, (expired ? deceleration_ : acceleration_) * safe_dt);
 
-        // Check freshness after I/O, so the read cannot prolong a stale command.
-        const bool expired = !have_command_ ||
-            std::chrono::duration<double>(Clock::now() - last_command_).count() >= command_timeout_;
-        if (expired && have_command_ && !watchdog_active_) {
-            watchdog_active_ = true;
-            RCLCPP_WARN(get_logger(), "cmd_vel timeout: ramping both wheels to zero");
-        }
-        const std::array<double, 2> desired = expired ? std::array<double, 2>{0.0, 0.0} : target_;
-        applied_ = ijkbot::ramp(applied_, desired, (expired ? deceleration_ : acceleration_) * safe_dt);
-        if (!mock_) {
     if (!mock_) {
         try {
             std::array<int16_t, 2> raw{};
@@ -224,20 +209,6 @@ void DiffDriveNode::tick()
             servo_->syncWriteSpeeds(ids_, raw);
         } catch (const std::exception&) {
             // Игнорируем редкие единичные помехи отправки
-        }
-        publishOdometry();
-    } catch (const std::exception& error) {
-        error_streak_++;
-        if (error_streak_ >= kMaxErrorStreak) {
-            latchFault(error.what());
-        } else {
-            RCLCPP_WARN_THROTTLE(
-                get_logger(), *get_clock(), 500,
-                "Transient servo error (%zu/%zu, back-EMF / UART spike): %s",
-                error_streak_, kMaxErrorStreak, error.what());
-            // Кратковременная экстраполяция одометрии по текущей скорости, чтобы не рвать TF
-            odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
-            publishOdometry();
         }
     }
 
