@@ -131,7 +131,8 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'autostart': autostart,
-            'node_names': ['map_server']
+            'node_names': ['map_server'],
+            'bond_timeout': 0.0
         }],
         condition=UnlessCondition(use_amcl)
     )
@@ -154,7 +155,8 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'autostart': autostart,
-            'node_names': ['map_server', 'amcl']
+            'node_names': ['map_server', 'amcl'],
+            'bond_timeout': 0.0
         }],
         condition=IfCondition(use_amcl)
     )
@@ -231,7 +233,8 @@ def generate_launch_description():
                 'planner_server',
                 'behavior_server',
                 'bt_navigator'
-            ]
+            ],
+            'bond_timeout': 0.0
         }]
     )
 
