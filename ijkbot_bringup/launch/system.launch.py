@@ -31,12 +31,19 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_bringup = get_package_share_directory('ijkbot_bringup')
     pkg_nav2 = get_package_share_directory('ijkbot_nav2')
+    pkg_vision = get_package_share_directory('ijkbot_vision')
 
     # Аргументы запуска
     declare_mock_hardware = DeclareLaunchArgument(
         'mock_hardware',
         default_value='false',
         description='Использовать симуляцию моторов без реального UART (false для реального робота)'
+    )
+
+    declare_enable_qr = DeclareLaunchArgument(
+        'enable_qr',
+        default_value='true',
+        description='Запускать ли распознавание QR-кодов (qr_reader_node)'
     )
 
     declare_enable_camera = DeclareLaunchArgument(
@@ -161,9 +168,18 @@ def generate_launch_description():
         }]
     )
 
+    # 4. Запуск распознавания QR-кодов (ноутбук)
+    qr_reader_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_vision, 'launch', 'qr_reader.launch.py')
+        ),
+        condition=IfCondition(LaunchConfiguration('enable_qr'))
+    )
+
     return LaunchDescription([
         SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1'),
         declare_mock_hardware,
+        declare_enable_qr,
         declare_enable_camera,
         declare_enable_motors,
         declare_use_amcl,
@@ -182,5 +198,6 @@ def generate_launch_description():
         robot_bringup_launch,
         navigation_launch,
         brain_node,
+        qr_reader_launch,
     ])
 
