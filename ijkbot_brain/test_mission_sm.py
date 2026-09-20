@@ -161,13 +161,11 @@ class TestMissionStateMachine(unittest.TestCase):
         """
         Сквозной тест полного цикла миссии:
         1. Ввод задания и распознавание LLM
-        2. Старт и движение к ориентиру
-        3. Поиск и обнаружение человека камерой
-        4. Подъезд в ячейку пострадавшего
-        5. Регламентное 5-секундное удержание
-        6. Считывание QR-кода состояния
-        7. Эвакуация в стартовую ячейку [0, 0]
-        8. Успешное завершение миссии и сохранение протокола.
+        2. Старт и движение к первой целевой ячейке
+        3. Круговой пошаговый осмотр (30° / 1.0с) и считывание QR-кода
+        4. Регламентное 5-секундное удержание в ячейке пострадавшего
+        5. Автоматическая эвакуация в стартовую ячейку [0.4, 0.4]
+        6. Успешное завершение миссии и сохранение протокола.
         """
         self.sm.wait_duration_required = 0.1
 
@@ -177,39 +175,28 @@ class TestMissionStateMachine(unittest.TestCase):
         self.assertEqual(self.sm.state, MissionState.NAVIGATING_TO_LANDMARK)
         self.assertTrue(self.sm.llm_parsed)
 
-        # 2. Достижение ориентира
+        # 2. Достижение первой целевой ячейки
         self.sm.robot_x = self.sm.current_waypoint.x
         self.sm.robot_y = self.sm.current_waypoint.y
         self.sm.robot_yaw = self.sm.current_waypoint.yaw
         self.sm.step(0.1)
         self.assertEqual(self.sm.state, MissionState.SEARCHING_VICTIM)
 
-        # 3. Визуальный поиск человека -> обнаружение
-        self.sm._search_time = 1.6
-        self.sm.step(0.1)
-        self.assertEqual(self.sm.state, MissionState.APPROACHING_VICTIM)
-        self.assertTrue(self.sm.victim_found)
-
-        # 4. Прибытие в ячейку пострадавшего -> ожидание 5 секунд
-        self.sm.robot_x = self.sm.current_waypoint.x
-        self.sm.robot_y = self.sm.current_waypoint.y
-        self.sm.robot_yaw = self.sm.current_waypoint.yaw
+        # 3. Круговой осмотр ячейки (12x30°). При обнаружении QR -> переход в WAIT_5_SECONDS
+        self.sm.qr_code_data = "ПОСТРАДАВШИЙ #1\nСостояние: Средней тяжести"
         self.sm.step(0.1)
         self.assertEqual(self.sm.state, MissionState.WAIT_5_SECONDS)
+        self.assertTrue(self.sm.victim_found)
+        self.assertTrue(self.sm.qr_scanned)
         self.assertIsNotNone(self.sm.wait_timer_start)
 
-        # 5. Ожидание регламентного времени (0.1 сек в тесте)
+        # 4. Ожидание регламентного времени (0.1 сек в тесте) -> возврат домой
         time.sleep(0.15)
         self.sm.step(0.1)
-        self.assertEqual(self.sm.state, MissionState.READING_QR)
-
-        # 6. Считывание QR -> возврат домой
-        self.sm.step(0.1)
         self.assertEqual(self.sm.state, MissionState.RETURNING_HOME)
-        self.assertTrue(self.sm.qr_scanned)
         self.assertEqual(self.sm.current_waypoint, START_WAYPOINT)
 
-        # 7. Прибытие на старт [0, 0] -> MISSION_COMPLETE
+        # 5. Прибытие на старт [0.4, 0.4] -> MISSION_COMPLETE
         self.sm.robot_x = START_WAYPOINT.x
         self.sm.robot_y = START_WAYPOINT.y
         self.sm.robot_yaw = START_WAYPOINT.yaw
@@ -217,6 +204,80 @@ class TestMissionStateMachine(unittest.TestCase):
         self.assertEqual(self.sm.state, MissionState.MISSION_COMPLETE)
         self.assertTrue(self.sm.evacuated_home)
         self.assertIsNotNone(self.sm.mission_end_time)
+
+    def test_multi_waypoint_search_progression(self):
+        """Проверка последовательного обхода нескольких ячеек при отсутствии QR."""
+        self.sm.set_task_description("Пострадавший у здания Стакан")
+        self.sm.parse_task_with_llm()
+        self.sm.waypoints_queue = [
+            Waypoint(x=1.2, y=1.2, name="Cell 1"),
+            Waypoint(x=2.0, y=1.2, name="Cell 2"),
+        ]
+        self.sm.start_mission()
+        self.assertEqual(self.sm.current_waypoint_idx, 0)
+        self.assertEqual(self.sm.current_waypoint.name, "Cell 1")
+
+        # Прибытие в первую ячейку
+        self.sm.robot_x = 1.2
+        self.sm.robot_y = 1.2
+        self.sm.step(0.1)
+        self.assertEqual(self.sm.state, MissionState.SEARCHING_VICTIM)
+
+        # Завершение всех 12 шагов осмотра без QR
+        self.sm.spin_step = 11
+        self.sm.spin_phase = "CHECK"
+        self.sm.qr_code_data = None
+        self.sm.step(0.1)
+
+        # Робот должен перейти к следующей ячейке Cell 2
+        self.assertEqual(self.sm.state, MissionState.NAVIGATING_TO_LANDMARK)
+        self.assertEqual(self.sm.current_waypoint_idx, 1)
+        self.assertEqual(self.sm.current_waypoint.name, "Cell 2")
+
+        # Прибытие во вторую ячейку и завершение 12 шагов без QR
+        self.sm.robot_x = 2.0
+        self.sm.robot_y = 1.2
+        self.sm.step(0.1)
+        self.assertEqual(self.sm.state, MissionState.SEARCHING_VICTIM)
+        self.sm.spin_step = 11
+        self.sm.spin_phase = "CHECK"
+        self.sm.qr_code_data = None
+        self.sm.step(0.1)
+
+        # Все точки исчерпаны -> автоматический возврат домой
+        self.assertEqual(self.sm.state, MissionState.RETURNING_HOME)
+        self.assertEqual(self.sm.current_waypoint, START_WAYPOINT)
+
+    def test_spin_and_scan_phases(self):
+        """Проверка фаз ROTATE (30°) -> PAUSE (1.0с) -> CHECK."""
+        self.sm.state = MissionState.SEARCHING_VICTIM
+        self.sm.spin_step = 0
+        self.sm.spin_phase = "ROTATE"
+        self.sm.spin_timer = 0.0
+        self.sm.spin_start_yaw = 0.0
+        self.sm.robot_yaw = 0.0
+
+        # Поворот на 30 градусов (0.50 рад)
+        self.sm.robot_yaw = 0.52
+        self.sm.step(0.1)
+        self.assertEqual(self.sm.spin_phase, "PAUSE")
+        self.assertEqual(self.sm.spin_timer, 0.0)
+
+        # Пауза стабилизации 1.0 сек
+        self.sm.step(0.5)
+        self.assertEqual(self.sm.spin_phase, "PAUSE")
+        self.sm.step(0.6)
+        self.assertEqual(self.sm.spin_phase, "CHECK")
+
+    def test_mission_watchdog_timeout(self):
+        """Проверка сторожевого таймера 250 сек (возврат домой при остатке < 50 сек)."""
+        self.sm.state = MissionState.SEARCHING_VICTIM
+        self.sm.robot_x = 2.0
+        self.sm.robot_y = 2.0
+        self.sm.mission_start_time = time.time() - 251.0
+        self.sm.step(0.1)
+        self.assertEqual(self.sm.state, MissionState.RETURNING_HOME)
+        self.assertEqual(self.sm.current_waypoint, START_WAYPOINT)
 
     def test_protocol_export_and_disk_save(self):
         """Проверка формирования протокола и сохранения на диск."""

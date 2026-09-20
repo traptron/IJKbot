@@ -20,7 +20,7 @@ import math
 from pathlib import Path
 from enum import Enum
 from typing import Dict, Any, Optional, List, Callable, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 try:
     import requests
@@ -155,6 +155,89 @@ def default_nav2_goal(target_id: str, arena: Dict[str, Any]) -> Optional[Dict[st
     return validate_nav2_goal({'frame_id': 'map', 'x': x, 'y': y, 'yaw': yaw}, target_id, arena)
 
 
+LANDMARK_CANDIDATE_WAYPOINTS: Dict[str, List[List[float]]] = {
+    LandmarkID.SMOKE_TOWER.value: [
+        [0.4, 2.8, 0.0],
+        [0.4, 3.6, 0.0],
+        [1.2, 3.6, -1.570796],
+        [0.4, 2.0, 1.570796],
+    ],
+    LandmarkID.PANEL_HOUSE.value: [
+        [2.0, 2.8, 3.141593],
+        [2.0, 3.6, -1.570796],
+        [2.0, 2.0, 1.570796],
+        [1.2, 3.6, 0.0],
+    ],
+    LandmarkID.BRIDGES.value: [
+        [2.8, 3.6, 0.0],
+        [3.6, 2.8, 1.570796],
+        [2.8, 2.0, 1.570796],
+        [3.6, 3.6, 3.141593],
+    ],
+    LandmarkID.TANKER_TRUCK.value: [
+        [2.0, 1.2, 0.0],
+        [2.0, 0.4, 1.570796],
+        [2.0, 2.0, -1.570796],
+        [3.6, 1.2, 3.141593],
+    ],
+    LandmarkID.FALLEN_TREE.value: [
+        [1.2, 0.4, 1.570796],
+        [2.0, 0.4, 3.141593],
+        [0.4, 0.4, 0.0],
+        [2.0, 1.2, -1.570796],
+    ],
+    LandmarkID.CAR_JAM.value: [
+        [2.8, 0.4, 1.570796],
+        [2.0, 0.4, 0.0],
+        [3.6, 0.4, 3.141593],
+        [2.8, 2.0, -1.570796],
+    ],
+    LandmarkID.DEBRIS_PVC.value: [
+        [0.4, 1.2, 0.0],
+        [0.4, 0.4, 1.570796],
+        [0.4, 2.0, -1.570796],
+        [2.0, 1.2, 3.141593],
+    ],
+}
+
+
+def get_target_waypoints(target_id: str, arena: Dict[str, Any], max_points: int = 4) -> List[Dict[str, Any]]:
+    """Return up to max_points candidate approach goals on the semantic map."""
+    goals = list(arena.get('objects', {}).get(target_id, {}).get('goals', []))
+    if target_id in LANDMARK_CANDIDATE_WAYPOINTS:
+        for g in LANDMARK_CANDIDATE_WAYPOINTS[target_id]:
+            if not any(abs(g[0] - ex[0]) < 1e-4 and abs(g[1] - ex[1]) < 1e-4 for ex in goals):
+                goals.append(g)
+
+    blocked = arena.get('blocked_cells', [])
+    cell_size = arena.get('cell_size_m', 0.8)
+    waypoints = []
+    for g in goals:
+        try:
+            val = validate_nav2_goal({'frame_id': 'map', 'x': g[0], 'y': g[1], 'yaw': g[2]}, target_id, arena)
+            if val and val not in waypoints:
+                waypoints.append(val)
+        except Exception:
+            cx = int(g[0] / cell_size)
+            cy = int(g[1] / cell_size)
+            if [cx, cy] not in blocked and 0 < g[0] < 4.0 and 0 < g[1] < 4.0:
+                item = {'frame_id': 'map', 'x': g[0], 'y': g[1], 'yaw': g[2]}
+                if item not in waypoints:
+                    waypoints.append(item)
+        if len(waypoints) >= max_points:
+            break
+
+    if not waypoints:
+        default_wp = default_nav2_goal(target_id, arena)
+        if default_wp:
+            waypoints.append(default_wp)
+        elif target_id in LANDMARK_CANDIDATE_WAYPOINTS and LANDMARK_CANDIDATE_WAYPOINTS[target_id]:
+            g0 = LANDMARK_CANDIDATE_WAYPOINTS[target_id][0]
+            waypoints.append({'frame_id': 'map', 'x': g0[0], 'y': g0[1], 'yaw': g0[2]})
+
+    return waypoints[:max_points]
+
+
 @dataclass
 class CommandInterpretation:
     """Структурированная команда и семантический результат работы LLM."""
@@ -166,6 +249,7 @@ class CommandInterpretation:
     latency_sec: float = 0.0
     raw_response: Optional[Dict[str, Any]] = None
     nav2_goal: Optional[Dict[str, Any]] = None
+    target_waypoints: List[Dict[str, Any]] = field(default_factory=list)
     raw_text: str = ""
     token_count: int = 0
 
@@ -244,14 +328,18 @@ class LLMClient:
 
     def __init__(
         self,
-        host: str = "http://localhost:11434",
-        model: str = "qwen2.5:7b",
+        host: Optional[str] = None,
+        model: Optional[str] = None,
         timeout: float = 15.0,
         temperature: float = 0.0,
         arena_file: Optional[str] = None
     ):
+        if host is None:
+            host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        if not host.startswith("http://") and not host.startswith("https://"):
+            host = f"http://{host}"
         self.host = host.rstrip("/")
-        self.model = model
+        self.model = model or os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
         self.timeout = timeout
         self.temperature = temperature
         self.arena = load_arena(arena_file)
@@ -346,6 +434,12 @@ class LLMClient:
             if 'nav2_goal' not in parsed_json:
                 raise ValueError('LLM omitted nav2_goal')
             goal = validate_nav2_goal(parsed_json['nav2_goal'], landmark_id, self.arena)
+            waypoints = get_target_waypoints(landmark_id, self.arena, max_points=4)
+            if goal and goal not in waypoints:
+                waypoints.insert(0, goal)
+            waypoints = waypoints[:4]
+            if not goal and waypoints:
+                goal = waypoints[0]
 
             return CommandInterpretation(
                 target_landmark_id=landmark_id,
@@ -356,6 +450,7 @@ class LLMClient:
                 latency_sec=round(latency, 3),
                 raw_response=parsed_json,
                 nav2_goal=goal,
+                target_waypoints=waypoints,
                 raw_text=raw_result,
                 token_count=token_count
             )
@@ -527,11 +622,19 @@ class LLMClient:
             )
 
         goal = default_nav2_goal(best_landmark, self.arena)
+        waypoints = get_target_waypoints(best_landmark, self.arena, max_points=4)
+        if goal and goal not in waypoints:
+            waypoints.insert(0, goal)
+        waypoints = waypoints[:4]
+        if not goal and waypoints:
+            goal = waypoints[0]
+
         fallback_dict = {
             "target_landmark_id": best_landmark,
             "search_strategy": target_details(best_landmark).get("default_strategy", "approach_and_inspect"),
             "reasoning": reasoning,
-            "nav2_goal": goal
+            "nav2_goal": goal,
+            "target_waypoints": waypoints
         }
         raw_json_str = json.dumps(fallback_dict, ensure_ascii=False, indent=2)
 
@@ -543,6 +646,7 @@ class LLMClient:
             source="heuristic_fallback",
             raw_response=fallback_dict,
             nav2_goal=goal,
+            target_waypoints=waypoints,
             raw_text=raw_json_str,
             token_count=len(raw_json_str.split()),
         )
@@ -639,8 +743,8 @@ def create_ros_node():
     class LLMInterpreterNode(Node):
         def __init__(self):
             super().__init__("llm_interpreter_node")
-            self.declare_parameter("host", "http://localhost:11434")
-            self.declare_parameter("model", "qwen2.5:7b")
+            self.declare_parameter("host", os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
+            self.declare_parameter("model", os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"))
             self.declare_parameter("timeout", 15.0)
             self.declare_parameter("log_dir", "")
             self.declare_parameter("arena_file", "")

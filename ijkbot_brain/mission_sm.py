@@ -377,6 +377,16 @@ class MissionStateMachine:
         self.path_history: List[Tuple[float, float]] = [(0.4, 0.4)]
         self.current_waypoint: Optional[Waypoint] = None
 
+        # Очередь целевых ячеек поиска (до 4 точек по регламенту)
+        self.waypoints_queue: List[Waypoint] = []
+        self.current_waypoint_idx: int = 0
+
+        # Состояние кругового пошагового осмотра ячейки (12 шагов по 30 градусов = 360°)
+        self.spin_step: int = 0  # 0..11
+        self.spin_phase: str = "ROTATE"  # "ROTATE", "PAUSE", "CHECK"
+        self.spin_timer: float = 0.0
+        self.spin_start_yaw: float = 0.0
+
         # Состояние зрения и QR-кода
         self.victim_detected: bool = False
         self.qr_code_data: Optional[str] = None
@@ -430,6 +440,19 @@ class MissionStateMachine:
     # ------------------------------------------------------------------------
     # Внешние действия пользователя и судей
     # ------------------------------------------------------------------------
+    def set_llm_config(self, host: str, model: Optional[str] = None) -> bool:
+        """Динамическое изменение адреса хоста и модели Ollama (например с другого ПК в сети)."""
+        with self.lock:
+            h = host.strip()
+            if not h.startswith("http://") and not h.startswith("https://"):
+                h = f"http://{h}"
+            self.llm_client.host = h.rstrip("/")
+            if model and model.strip():
+                self.llm_client.model = model.strip()
+            is_ok = self.llm_client.is_available()
+            self._log("LLM", f"Настройки Ollama обновлены: {self.llm_client.host} (модель: {self.llm_client.model}). Связь: {'OK' if is_ok else 'НЕТ СВЯЗИ'}")
+            return is_ok
+
     def set_task_description(self, task_text: str) -> None:
         with self.lock:
             self.current_task_text = task_text.strip()
@@ -519,9 +542,36 @@ class MissionStateMachine:
             if interp.nav2_goal:
                 self._log("LLM", f"Сформирован nav2_goal: X={interp.nav2_goal['x']:.2f}м, Y={interp.nav2_goal['y']:.2f}м, Yaw={interp.nav2_goal['yaw']:.2f}")
 
-            # Назначение путевой точки к ориентиру
-            self.current_waypoint = waypoint
+            # Формирование очереди целевых ячеек поиска (до 4 точек по регламенту)
+            self.waypoints_queue = []
+            if getattr(interp, "target_waypoints", None):
+                for i, wp_dict in enumerate(interp.target_waypoints[:4]):
+                    wx = float(wp_dict.get("x", 0.4))
+                    wy = float(wp_dict.get("y", 0.4))
+                    wyaw = float(wp_dict.get("yaw", 0.0))
+                    cx = int(wx / ARENA_CELL_SIZE)
+                    cy = int(wy / ARENA_CELL_SIZE)
+                    self.waypoints_queue.append(
+                        Waypoint(
+                            x=wx,
+                            y=wy,
+                            yaw=wyaw,
+                            cell=(cx, cy),
+                            name=f"{interp.target_landmark_id}_{i+1} [{cx}:{cy}]"
+                        )
+                    )
+
+            if not self.waypoints_queue:
+                self.waypoints_queue = [waypoint]
+
+            self.current_waypoint_idx = 0
+            self.current_waypoint = self.waypoints_queue[0]
+            self.spin_step = 0
+            self.spin_phase = "ROTATE"
+            self.spin_timer = 0.0
+            self.spin_start_yaw = self.robot_yaw
             self.state = MissionState.READY_TO_START
+            self._log("LLM", f"Сформирована очередь из {len(self.waypoints_queue)} точек поиска для обхода.")
             return interp
 
     def publish_nav2_goal(self) -> bool:
@@ -533,9 +583,10 @@ class MissionStateMachine:
 
             self._publish_goal_pose(self.current_waypoint)
             yaw_deg = int(math.degrees(self.current_waypoint.yaw)) % 360
+            total_wp = len(self.waypoints_queue) if self.waypoints_queue else 1
             self._log(
                 "NAV",
-                f"Цель nav2_goal передана в Nav2 (/goal_pose): "
+                f"Цель nav2_goal [{self.current_waypoint_idx + 1}/{total_wp}] передана в Nav2 (/goal_pose): "
                 f"X={self.current_waypoint.x:.2f}м, Y={self.current_waypoint.y:.2f}м, Yaw={yaw_deg}°"
             )
             return True
@@ -556,8 +607,18 @@ class MissionStateMachine:
 
             self.mission_start_time = time.time()
             self.mission_end_time = None
+            self.current_waypoint_idx = 0
+            self.spin_step = 0
+            self.spin_phase = "ROTATE"
+            self.spin_timer = 0.0
+            self.spin_start_yaw = self.robot_yaw
+
+            if self.waypoints_queue:
+                self.current_waypoint = self.waypoints_queue[0]
+
             self.state = MissionState.NAVIGATING_TO_LANDMARK
-            self._log("STATE", f"СТАРТ МИССИИ! Движение к ориентиру: {self.current_waypoint.name}")
+            total_wp = len(self.waypoints_queue) if self.waypoints_queue else 1
+            self._log("STATE", f"СТАРТ МИССИИ! Движение к точке [1/{total_wp}]: {self.current_waypoint.name}")
 
             # Публикация цели Nav2 в ROS 2
             self._publish_goal_pose(self.current_waypoint)
@@ -607,6 +668,12 @@ class MissionStateMachine:
             self.robot_yaw = 0.0
             self.path_history = [(0.4, 0.4)]
             self.current_waypoint = None
+            self.waypoints_queue = []
+            self.current_waypoint_idx = 0
+            self.spin_step = 0
+            self.spin_phase = "ROTATE"
+            self.spin_timer = 0.0
+            self.spin_start_yaw = 0.0
             self.victim_detected = False
             self.qr_code_data = None
             self.latest_qr_text = None
@@ -619,6 +686,21 @@ class MissionStateMachine:
     # ------------------------------------------------------------------------
     def step(self, dt: float = 0.1) -> None:
         with self.lock:
+            # 0. Проверка лимита времени (5 минут = 300 сек). При t >= 250 сек (< 50 сек до конца) — автовозврат на базу
+            elapsed = self.get_elapsed_mission_sec()
+            if elapsed >= 250.0 and self.state not in [
+                MissionState.PREPARATION,
+                MissionState.READY_TO_START,
+                MissionState.RETURNING_HOME,
+                MissionState.MISSION_COMPLETE,
+                MissionState.EMERGENCY_STOP,
+                MissionState.PAUSED,
+            ]:
+                self._log("WARN", f"ТАЙМАУТ МИССИИ ({elapsed:.1f}с / 300с)! До конца осталось менее 50с. Экстренный возврат на базу [0.4, 0.4]!")
+                self.current_waypoint = START_WAYPOINT
+                self.state = MissionState.RETURNING_HOME
+                self._publish_goal_pose(START_WAYPOINT)
+
             # 1. Симуляция движения в mock-режиме
             if self.mock_mode and self.current_waypoint and self.state in [
                 MissionState.NAVIGATING_TO_LANDMARK,
@@ -630,11 +712,21 @@ class MissionStateMachine:
             # 2. Логика переходов автомата состояний
             if self.state == MissionState.NAVIGATING_TO_LANDMARK:
                 if self._check_reached_waypoint(self.current_waypoint):
-                    self._log("NAV", f"Робот прибыл к точке ориентира «{self.current_waypoint.name}». Начало визуального поиска пострадавшего...")
+                    total_wp = len(self.waypoints_queue) if self.waypoints_queue else 1
+                    self._log(
+                        "NAV",
+                        f"Робот прибыл в ячейку [{self.current_waypoint_idx + 1}/{total_wp}] «{self.current_waypoint.name}». "
+                        f"Начало кругового сканирования (12 шагов по 30° с паузой 1.0с)..."
+                    )
                     self.state = MissionState.SEARCHING_VICTIM
+                    self.spin_step = 0
+                    self.spin_phase = "ROTATE"
+                    self.spin_timer = 0.0
+                    self.spin_start_yaw = self.robot_yaw
+                    self._publish_zero_velocity()
 
             elif self.state == MissionState.SEARCHING_VICTIM:
-                self._handle_victim_search(dt)
+                self._handle_spin_and_scan(dt)
 
             elif self.state == MissionState.APPROACHING_VICTIM:
                 if self._check_reached_waypoint(self.current_waypoint):
@@ -648,9 +740,10 @@ class MissionStateMachine:
                 if self.wait_timer_start is not None:
                     wait_elapsed = time.time() - self.wait_timer_start
                     if wait_elapsed >= self.wait_duration_required:
-                        self._log("STATE", f"Регламентная 5-секундная фиксация выполнена ({wait_elapsed:.1f}с). Переход к считыванию QR-кода...")
-                        self.state = MissionState.READING_QR
-                        self.qr_code_data = None
+                        self._log("STATE", f"Регламентная 5-секундная фиксация выполнена ({wait_elapsed:.1f}с). Начало эвакуации в стартовую ячейку [0.4, 0.4]...")
+                        self.current_waypoint = START_WAYPOINT
+                        self.state = MissionState.RETURNING_HOME
+                        self._publish_goal_pose(START_WAYPOINT)
 
             elif self.state == MissionState.READING_QR:
                 self._handle_qr_reading(dt)
@@ -666,54 +759,127 @@ class MissionStateMachine:
     # ------------------------------------------------------------------------
     # Обработчики конкретных состояний
     # ------------------------------------------------------------------------
-    def _handle_victim_search(self, dt: float) -> None:
-        """Поиск человека камерой."""
-        if not hasattr(self, "_search_time"):
-            self._search_time = 0.0
-        self._search_time += dt
+    def _handle_spin_and_scan(self, dt: float) -> None:
+        """
+        Круговой пошаговый осмотр ячейки:
+        12 дискретных шагов по 30 градусов (12 * 30° = 360°).
+        Каждый шаг:
+          1. ROTATE: поворот на месте на 30° со скоростью 0.4 рад/с.
+          2. PAUSE: полная остановка на 1.0 сек для стабилизации камеры RealSense D435.
+          3. CHECK: проверка считывания QR-кода.
+             - Если QR считан: переход в WAIT_5_SECONDS.
+             - Если нет: следующий шаг (spin_step += 1).
+        Если все 12 шагов завершены без QR: переход к следующей ячейке из waypoints_queue.
+        Если все ячейки исчерпаны: возврат на базу [0.4, 0.4].
+        """
+        TURN_SPEED = 0.4  # рад/с
+        total_wp = len(self.waypoints_queue) if self.waypoints_queue else 1
 
-        if self.mock_mode:
-            # Плавный поворот камеры/робота для осмотра
-            self.robot_yaw = (self.robot_yaw + 0.3 * dt) % (2 * math.pi)
+        # Проверка: если в любой момент во время сканирования пришел QR-код
+        if self.qr_code_data and not self.qr_scanned:
+            self.victim_detected = True
+            self.victim_found = True
+            self.qr_scanned = True
+            self._log(
+                "QR",
+                f"QR-код успешно считан в ячейке [{self.current_waypoint_idx + 1}/{total_wp}] "
+                f"(шаг {self.spin_step + 1}/12):\n{self.qr_code_data}"
+            )
+            self.state = MissionState.WAIT_5_SECONDS
+            self.wait_timer_start = time.time()
+            self._publish_zero_velocity()
+            self._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
+            return
 
-            # Через 1.5 секунды осмотра находим пострадавшего
-            if self._search_time >= 1.5:
-                self._search_time = 0.0
-                self.victim_detected = True
-                self.victim_found = True
-                self._log("VISION", "Пострадавший человек обнаружен в смежной ячейке!")
+        if self.spin_phase == "ROTATE":
+            self.spin_timer += dt
+            if self.mock_mode:
+                self.robot_yaw = (self.robot_yaw + TURN_SPEED * dt) % (2 * math.pi)
+            else:
+                if self.ros_node:
+                    self.ros_node.send_cmd_vel(0.0, TURN_SPEED)
 
-                # Назначаем путевую точку вплотную к пострадавшему
-                target_x = self.current_waypoint.x + 0.3 * math.cos(self.robot_yaw)
-                target_y = self.current_waypoint.y + 0.3 * math.sin(self.robot_yaw)
-                self.current_waypoint = Waypoint(
-                    x=min(3.6, max(0.4, target_x)),
-                    y=min(3.6, max(0.4, target_y)),
-                    yaw=self.robot_yaw,
-                    name="Ячейка пострадавшего"
+            yaw_diff = abs((self.robot_yaw - self.spin_start_yaw + math.pi) % (2 * math.pi) - math.pi)
+
+            # 30 градусов = ~0.5236 рад. Поворот завершен по углу (>= 0.50 рад) или по таймауту (1.5с)
+            if yaw_diff >= 0.50 or self.spin_timer >= 1.5:
+                self._publish_zero_velocity()
+                self.spin_phase = "PAUSE"
+                self.spin_timer = 0.0
+                deg_turned = (self.spin_step + 1) * 30
+                self._log(
+                    "VISION",
+                    f"Ячейка [{self.current_waypoint_idx + 1}/{total_wp}], "
+                    f"шаг {self.spin_step + 1}/12 ({deg_turned}°): поворот 30° завершен. Стабилизация камеры 1.0с..."
                 )
-                self.state = MissionState.APPROACHING_VICTIM
-                self._log("NAV", "Начало подъезда в ячейку пострадавшего...")
-                self._publish_goal_pose(self.current_waypoint)
-        else:
-            # Реальный режим: ожидание флага детекции
-            if self.victim_detected:
-                self._search_time = 0.0
+
+        elif self.spin_phase == "PAUSE":
+            self._publish_zero_velocity()
+            self.spin_timer += dt
+            if self.spin_timer >= 1.0:
+                self.spin_phase = "CHECK"
+                self.spin_timer = 0.0
+
+        elif self.spin_phase == "CHECK":
+            self._publish_zero_velocity()
+
+            # В mock-режиме имитируем чтение QR на 4-м шаге первой ячейки
+            if self.mock_mode and not self.qr_code_data:
+                if self.current_waypoint_idx == 0 and self.spin_step == 3:
+                    self.qr_code_data = (
+                        "ПОСТРАДАВШИЙ #1\n"
+                        "ФИО: Иванов И.И.\n"
+                        "Состояние: Средней тяжести\n"
+                        "Пульс: 74 уд/мин, SpO2: 96%\n"
+                        "Травма: Перелом голени, сознание сохранено"
+                    )
+
+            if self.qr_code_data and not self.qr_scanned:
                 self.victim_detected = True
                 self.victim_found = True
-                self._log("VISION", "Пострадавший человек обнаружен!")
-                if self.current_waypoint:
-                    target_x = self.current_waypoint.x + 0.25 * math.cos(self.robot_yaw)
-                    target_y = self.current_waypoint.y + 0.25 * math.sin(self.robot_yaw)
-                    self.current_waypoint = Waypoint(
-                        x=min(3.6, max(0.4, target_x)),
-                        y=min(3.6, max(0.4, target_y)),
-                        yaw=self.robot_yaw,
-                        name="Ячейка пострадавшего"
+                self.qr_scanned = True
+                self._log(
+                    "QR",
+                    f"QR-код успешно считан в ячейке [{self.current_waypoint_idx + 1}/{total_wp}] "
+                    f"(шаг {self.spin_step + 1}/12):\n{self.qr_code_data}"
+                )
+                self.state = MissionState.WAIT_5_SECONDS
+                self.wait_timer_start = time.time()
+                self._publish_zero_velocity()
+                self._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
+                return
+
+            # QR не обнаружен — переход к следующему шагу осмотра
+            self.spin_step += 1
+            if self.spin_step >= 12:
+                self._log(
+                    "VISION",
+                    f"В ячейке [{self.current_waypoint_idx + 1}/{total_wp}] "
+                    f"({self.current_waypoint.name}) QR-код не обнаружен за полный оборот 360°."
+                )
+                if self.current_waypoint_idx + 1 < len(self.waypoints_queue):
+                    self.current_waypoint_idx += 1
+                    self.current_waypoint = self.waypoints_queue[self.current_waypoint_idx]
+                    self.state = MissionState.NAVIGATING_TO_LANDMARK
+                    self._log(
+                        "NAV",
+                        f"Переход к следующей ячейке поиска [{self.current_waypoint_idx + 1}/{total_wp}]: "
+                        f"{self.current_waypoint.name} (X={self.current_waypoint.x:.2f}м, Y={self.current_waypoint.y:.2f}м)..."
                     )
                     self._publish_goal_pose(self.current_waypoint)
-                self.state = MissionState.APPROACHING_VICTIM
-                self._log("NAV", "Начало подъезда в ячейку пострадавшего...")
+                else:
+                    self._log("NAV", "Все ячейки проверены, QR-код не найден. Возврат на базу в стартовую ячейку [0.4, 0.4]...")
+                    self.current_waypoint = START_WAYPOINT
+                    self.state = MissionState.RETURNING_HOME
+                    self._publish_goal_pose(START_WAYPOINT)
+            else:
+                self.spin_phase = "ROTATE"
+                self.spin_start_yaw = self.robot_yaw
+                self.spin_timer = 0.0
+
+    def _handle_victim_search(self, dt: float) -> None:
+        """Совместимость — делегирует в _handle_spin_and_scan."""
+        self._handle_spin_and_scan(dt)
 
     def _handle_qr_reading(self, dt: float) -> None:
         """Ожидание результата отдельной ноды ijkbot_vision/qr_reader_node."""
@@ -891,6 +1057,7 @@ class MissionROSNode:
                 self.node.create_subscription(Odometry, "/odom", self._odom_callback, 10)
                 self.node.create_subscription(RosString, "/victim_status", self._qr_callback, 10)
                 self.node.create_subscription(RosBool, "/victim_detected", self._victim_detected_callback, 10)
+                self.node.create_subscription(RosBool, "/vision/qr/detected", self._qr_detected_callback, 10)
                 self.node.create_subscription(RosString, "/mission/judge_task", self._judge_task_callback, 10)
                 self.node.create_subscription(RosBool, "/emergency_stop", self._estop_callback, 10)
 
@@ -915,6 +1082,11 @@ class MissionROSNode:
             if msg.data and not self.sm.victim_detected:
                 self.sm.victim_detected = True
 
+    def _qr_detected_callback(self, msg: Any) -> None:
+        with self.sm.lock:
+            if msg.data and not self.sm.victim_detected:
+                self.sm.victim_detected = True
+
     def _judge_task_callback(self, msg: Any) -> None:
         text = msg.data.strip()
         if text:
@@ -934,8 +1106,17 @@ class MissionROSNode:
                 self.sm._log('QR', f'Получен текст QR:\n{msg.data}')
             self.sm.latest_qr_text = msg.data
             self.sm.latest_qr_received_at = self.sm._now_str()
-            if self.sm.state == MissionState.READING_QR:
+            if self.sm.state in [MissionState.SEARCHING_VICTIM, MissionState.READING_QR]:
                 self.sm.qr_code_data = msg.data
+                if not self.sm.qr_scanned and self.sm.state == MissionState.SEARCHING_VICTIM:
+                    self.sm.victim_detected = True
+                    self.sm.victim_found = True
+                    self.sm.qr_scanned = True
+                    self.sm._log("QR", f"Получены данные QR-кода из топика /victim_status:\n{msg.data.strip()}")
+                    self.sm.state = MissionState.WAIT_5_SECONDS
+                    self.sm.wait_timer_start = time.time()
+                    self.sm._publish_zero_velocity()
+                    self.sm._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
 
     def _estop_callback(self, msg: Any) -> None:
         if msg.data:
@@ -1019,6 +1200,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
         with ui.row().classes("items-center gap-4"):
             mock_switch = ui.switch("Режим симуляции (Mock)", value=sm.mock_mode).classes("text-sm text-slate-300")
             mock_switch.on_value_change(lambda e: setattr(sm, "mock_mode", e.value))
+            mission_timer_badge = ui.badge("ТАЙМЕР: 00:00 / 05:00").classes("px-3 py-1.5 text-xs font-mono font-bold rounded bg-slate-700 text-slate-300")
             state_badge = ui.badge("PREPARATION").classes("px-4 py-2 text-sm font-bold rounded-lg shadow-md uppercase")
 
     # ------------------------------------------------------------------------
@@ -1244,6 +1426,38 @@ def build_judge_dashboard(sm: MissionStateMachine):
                             ui.label("Результат анализа LLM (Qwen 2.5 7B)").classes("text-base font-semibold text-slate-100")
                         llm_tokens_badge = ui.badge("0 токенов", color="slate-700").classes("text-xs font-mono px-2 py-0.5 rounded")
 
+                    # 0. Настройки подключения к Ollama (на другом ПК / ноутбуке)
+                    with ui.row().classes("w-full items-center justify-between gap-2 bg-slate-950/70 p-2 rounded-lg border border-slate-700/60"):
+                        with ui.row().classes("items-center gap-2 flex-grow"):
+                            ui.icon("lan", size="1.2rem").classes("text-blue-400")
+                            llm_host_input = ui.input(
+                                label="Хост Ollama (IP другого ПК)",
+                                value=sm.llm_client.host,
+                                placeholder="http://192.168.1.20:11434"
+                            ).props("dense").classes("text-xs w-52 font-mono")
+                            llm_model_input = ui.input(
+                                label="Модель",
+                                value=sm.llm_client.model,
+                                placeholder="qwen2.5:7b"
+                            ).props("dense").classes("text-xs w-32 font-mono")
+
+                        def check_llm_connection():
+                            h = llm_host_input.value or "http://localhost:11434"
+                            m = llm_model_input.value or "qwen2.5:7b"
+                            ok = sm.set_llm_config(h, m)
+                            if ok:
+                                llm_conn_badge.text = "СВЯЗЬ: OK"
+                                llm_conn_badge.classes(replace="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-600 text-white font-bold")
+                                ui.notify(f"Связь с Ollama установлена ({sm.llm_client.host})!", type="positive")
+                            else:
+                                llm_conn_badge.text = "НЕТ СВЯЗИ"
+                                llm_conn_badge.classes(replace="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-600 text-white font-bold")
+                                ui.notify(f"Не удалось подключиться к Ollama на {sm.llm_client.host}. Убедитесь, что на том ПК запущен 'OLLAMA_HOST=0.0.0.0:11434 ollama serve'!", type="negative")
+
+                        with ui.row().classes("items-center gap-1"):
+                            llm_conn_badge = ui.badge("ПРОВЕРИТЬ", color="slate-700").classes("text-[10px] font-mono px-2 py-0.5 rounded")
+                            ui.button("Ping", on_click=check_llm_connection, icon="sync").props("dense flat").classes("text-xs text-blue-300 hover:bg-blue-900/40")
+
                     # 1. Ориентир и тактика
                     with ui.row().classes("w-full items-center justify-between gap-2 bg-slate-900/80 p-2 rounded-lg border border-slate-700/60"):
                         landmark_name_label = ui.label("Ориентир: ожидание задания").classes("text-sm font-bold text-blue-300")
@@ -1257,6 +1471,15 @@ def build_judge_dashboard(sm: MissionStateMachine):
                                 ui.label("Целевая точка Nav2 (nav2_goal из JSON):").classes("text-xs font-bold text-purple-300 uppercase tracking-wider")
                             nav2_goal_status = ui.badge("Не задана", color="gray-700").classes("text-xs")
                         nav2_goal_coords_label = ui.label("frame_id: — | X: — | Y: — | Yaw: —").classes("text-xs font-mono text-slate-300")
+
+                    # 2b. Очередь ячеек поиска (до 4 точек по регламенту)
+                    with ui.column().classes("w-full bg-slate-950/80 p-2.5 rounded-lg border border-indigo-800/50 gap-1.5"):
+                        with ui.row().classes("w-full items-center justify-between"):
+                            with ui.row().classes("items-center gap-1.5"):
+                                ui.icon("alt_route", size="1.1rem").classes("text-indigo-400")
+                                ui.label("Очередь ячеек поиска (до 4 точек):").classes("text-xs font-bold text-indigo-300 uppercase tracking-wider")
+                            waypoints_queue_badge = ui.badge("0/0", color="gray-700").classes("text-xs")
+                        waypoints_list_label = ui.label("Маршрут не сформирован").classes("text-xs font-mono text-slate-300 whitespace-pre-wrap")
 
                     # 3. Обоснование модели
                     with ui.column().classes("w-full gap-1"):
@@ -1276,6 +1499,16 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         tokens_display = ui.code("Ожидание запуска генерации...", language="json").classes(
                             "w-full max-h-48 overflow-y-auto font-mono text-xs bg-slate-950 p-2 rounded-lg border border-slate-800 text-emerald-300 select-all"
                         )
+
+                # Карточка кругового осмотра ячейки (12x30°) и удержания
+                with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
+                    with ui.row().classes("w-full justify-between items-center mb-1"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.icon("radar", size="1.4rem").classes("text-amber-400")
+                            ui.label("Круговой осмотр ячейки (12×30°)").classes("text-base font-semibold text-slate-200")
+                        scan_step_badge = ui.badge("НЕАКТИВЕН", color="gray-700").classes("text-xs")
+                    scan_info_label = ui.label("Осмотр запускается при прибытии в целевую ячейку").classes("text-xs font-mono text-slate-300")
+                    hold_timer_label = ui.label("Удержание в ячейке: —").classes("text-xs font-mono text-cyan-300")
 
                 # Карточка считанного QR-кода
                 with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
@@ -1413,8 +1646,28 @@ def build_judge_dashboard(sm: MissionStateMachine):
                 f'<polyline points="{path_str}" fill="none" stroke="#38bdf8" stroke-width="2" stroke-dasharray="3,3" opacity="0.8"/>'
             )
 
-        # Текущая цель Nav2 (Waypoint / nav2_goal)
-        if sm.current_waypoint:
+        # Очередь целевых точек Nav2 (до 4 точек)
+        for idx, wp in enumerate(sm.waypoints_queue):
+            gx = wp.x * scale
+            gy = svg_size - wp.y * scale
+            is_active = (idx == sm.current_waypoint_idx) and (sm.state != MissionState.RETURNING_HOME)
+
+            if is_active:
+                rx = sm.robot_x * scale
+                ry = svg_size - sm.robot_y * scale
+                svg_parts.append(
+                    f'<line x1="{rx}" y1="{ry}" x2="{gx}" y2="{gy}" stroke="#c084fc" stroke-width="2" stroke-dasharray="5,4"/>'
+                    f'<circle cx="{gx}" cy="{gy}" r="15" fill="#9333ea" fill-opacity="0.35" stroke="#c084fc" stroke-width="2.5"/>'
+                    f'<circle cx="{gx}" cy="{gy}" r="4" fill="#f3e8ff"/>'
+                    f'<text x="{gx}" y="{gy - 18}" fill="#f3e8ff" font-size="9" font-weight="bold" font-family="monospace" text-anchor="middle">[{idx+1}/{len(sm.waypoints_queue)}] {wp.x:.2f},{wp.y:.2f}</text>'
+                )
+            else:
+                svg_parts.append(
+                    f'<circle cx="{gx}" cy="{gy}" r="11" fill="#312e81" fill-opacity="0.5" stroke="#818cf8" stroke-width="1.5" stroke-dasharray="3,2"/>'
+                    f'<text x="{gx}" y="{gy + 3}" fill="#c7d2fe" font-size="8" font-weight="bold" font-family="monospace" text-anchor="middle">{idx+1}</text>'
+                )
+
+        if not sm.waypoints_queue and sm.current_waypoint:
             gx = sm.current_waypoint.x * scale
             gy = svg_size - sm.current_waypoint.y * scale
             rx = sm.robot_x * scale
@@ -1424,6 +1677,18 @@ def build_judge_dashboard(sm: MissionStateMachine):
                 f'<circle cx="{gx}" cy="{gy}" r="14" fill="#9333ea" fill-opacity="0.3" stroke="#c084fc" stroke-width="2.5"/>'
                 f'<circle cx="{gx}" cy="{gy}" r="3.5" fill="#f3e8ff"/>'
                 f'<text x="{gx}" y="{gy - 17}" fill="#f3e8ff" font-size="9" font-weight="bold" font-family="monospace" text-anchor="middle">nav2_goal [{sm.current_waypoint.x:.2f},{sm.current_waypoint.y:.2f}]</text>'
+            )
+
+        # Линия возврата на базу при эвакуации
+        if sm.state == MissionState.RETURNING_HOME:
+            hx = START_WAYPOINT.x * scale
+            hy = svg_size - START_WAYPOINT.y * scale
+            rx = sm.robot_x * scale
+            ry = svg_size - sm.robot_y * scale
+            svg_parts.append(
+                f'<line x1="{rx}" y1="{ry}" x2="{hx}" y2="{hy}" stroke="#10b981" stroke-width="2.5" stroke-dasharray="4,3"/>'
+                f'<circle cx="{hx}" cy="{hy}" r="14" fill="#059669" fill-opacity="0.3" stroke="#10b981" stroke-width="2"/>'
+                f'<text x="{hx}" y="{hy - 18}" fill="#34d399" font-size="9" font-weight="bold" font-family="monospace" text-anchor="middle">БАЗА (Эвакуация)</text>'
             )
 
         # Робот: положение (X, Y) и стрелка ориентации (Yaw)
@@ -1467,6 +1732,28 @@ def build_judge_dashboard(sm: MissionStateMachine):
             launch_status_badge.text = "ОСТАНОВЛЕН"
             launch_status_badge.classes(replace="bg-gray-600 text-white px-3 py-1 text-xs font-bold rounded uppercase")
 
+        # 1c. Таймер миссии (5 минут = 300 сек)
+        elapsed_sec = sm.get_elapsed_mission_sec()
+        mins = int(elapsed_sec // 60)
+        secs = int(elapsed_sec % 60)
+        rem_sec = max(0, 300 - int(elapsed_sec))
+        rem_m = rem_sec // 60
+        rem_s = rem_sec % 60
+
+        if sm.mission_start_time is not None and sm.mission_end_time is None:
+            if rem_sec < 50:
+                mission_timer_badge.text = f"ТАЙМЕР: {mins:02d}:{secs:02d} (Осталось {rem_m:02d}:{rem_s:02d}!)"
+                mission_timer_badge.classes(replace="px-3 py-1.5 text-xs font-mono font-bold rounded bg-rose-600 text-white animate-pulse")
+            else:
+                mission_timer_badge.text = f"ТАЙМЕР: {mins:02d}:{secs:02d} (Осталось {rem_m:02d}:{rem_s:02d})"
+                mission_timer_badge.classes(replace="px-3 py-1.5 text-xs font-mono font-bold rounded bg-indigo-600 text-white")
+        elif sm.mission_end_time is not None:
+            mission_timer_badge.text = f"ИТОГ: {mins:02d}:{secs:02d}"
+            mission_timer_badge.classes(replace="px-3 py-1.5 text-xs font-mono font-bold rounded bg-emerald-600 text-white")
+        else:
+            mission_timer_badge.text = "ТАЙМЕР: 00:00 / 05:00"
+            mission_timer_badge.classes(replace="px-3 py-1.5 text-xs font-mono font-bold rounded bg-slate-700 text-slate-300")
+
         # 2. Координаты робота
         yaw_deg = int(math.degrees(sm.robot_yaw)) % 360
         coords_label.text = f"X: {sm.robot_x:.2f} м | Y: {sm.robot_y:.2f} м | Yaw: {yaw_deg}°"
@@ -1497,10 +1784,46 @@ def build_judge_dashboard(sm: MissionStateMachine):
                 nav2_goal_status.text = "NULL"
                 nav2_goal_status.classes(replace="text-xs bg-slate-800 text-slate-400")
 
+            # Очередь ячеек поиска (до 4 точек)
+            if sm.waypoints_queue:
+                waypoints_queue_badge.text = f"Точка {sm.current_waypoint_idx + 1} из {len(sm.waypoints_queue)}"
+                waypoints_queue_badge.classes(replace="text-xs bg-indigo-700 text-indigo-100 font-bold")
+                lines = []
+                for idx, wp in enumerate(sm.waypoints_queue):
+                    marker = "▶ " if idx == sm.current_waypoint_idx else "  "
+                    lines.append(f"{marker}[{idx+1}] ({wp.x:.2f}, {wp.y:.2f}) {wp.name}")
+                waypoints_list_label.text = "\n".join(lines)
+            else:
+                waypoints_queue_badge.text = "0/0"
+                waypoints_list_label.text = "Маршрут не сформирован"
+
             # Все токены от LLM
             if sm.command_interpretation.raw_text:
                 tokens_display.content = sm.command_interpretation.raw_text
                 llm_tokens_badge.text = f"{sm.command_interpretation.token_count} токенов"
+
+        # 4b. Карточка кругового осмотра ячейки (12×30°) и удержания
+        if sm.state == MissionState.SEARCHING_VICTIM:
+            phase_ru = {"ROTATE": "Поворот 30°", "PAUSE": "Стабилизация 1.0с", "CHECK": "Анализ QR"}.get(sm.spin_phase, sm.spin_phase)
+            deg = (sm.spin_step + 1) * 30
+            scan_step_badge.text = f"ШАГ {sm.spin_step + 1}/12 ({deg}°)"
+            scan_step_badge.classes(replace="text-xs bg-amber-600 text-black font-bold animate-pulse")
+            scan_info_label.text = f"Фаза: {phase_ru} | Время фазы: {sm.spin_timer:.1f}с"
+        elif sm.state == MissionState.WAIT_5_SECONDS:
+            wait_el = (time.time() - sm.wait_timer_start) if sm.wait_timer_start else 0.0
+            scan_step_badge.text = f"ФИКСАЦИЯ 5с ({min(5.0, wait_el):.1f}/5.0с)"
+            scan_step_badge.classes(replace="text-xs bg-cyan-600 text-white font-bold animate-pulse")
+            scan_info_label.text = "QR обнаружен! Остановка на 5 секунд по регламенту"
+        else:
+            scan_step_badge.text = "НЕАКТИВЕН"
+            scan_step_badge.classes(replace="text-xs bg-gray-700 text-slate-400")
+            scan_info_label.text = "Осмотр запускается при прибытии в целевую ячейку"
+
+        if sm.wait_timer_start is not None and sm.state == MissionState.WAIT_5_SECONDS:
+            wait_el = time.time() - sm.wait_timer_start
+            hold_timer_label.text = f"Удержание: {wait_el:.1f} / 5.0 с {'(ГОТОВО)' if wait_el >= 5.0 else ''}"
+        else:
+            hold_timer_label.text = "Удержание в ячейке: —"
 
         # 5. Карточка QR-кода
         if sm.latest_qr_text:
@@ -1510,6 +1833,10 @@ def build_judge_dashboard(sm: MissionStateMachine):
         elif sm.mock_mode and sm.qr_code_data:
             qr_status_badge.text = "QR: симуляция"
             qr_status_badge.classes(replace="bg-amber-600 text-white text-xs w-fit mb-2")
+            qr_text_label.text = sm.qr_code_data
+        elif sm.qr_code_data:
+            qr_status_badge.text = "QR-код успешно считан"
+            qr_status_badge.classes(replace="bg-emerald-600 text-white text-xs w-fit mb-2 font-bold")
             qr_text_label.text = sm.qr_code_data
         else:
             qr_status_badge.text = "QR не считан"
@@ -1557,6 +1884,8 @@ def main(args=None):
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Хост веб-сервера")
     parser.add_argument("--mock", action="store_true", default=True, help="Запуск в режиме симуляции (по умолчанию True)")
     parser.add_argument("--no-mock", dest="mock", action="store_false", help="Запуск с реальным ROS 2 железом")
+    parser.add_argument("--llm-host", type=str, default=os.environ.get("OLLAMA_HOST", "http://192.168.1.20:11434"), help="URL хоста Ollama (например http://192.168.1.20:11434)")
+    parser.add_argument("--llm-model", type=str, default=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"), help="Имя модели Ollama")
     parser.add_argument("--headless", action="store_true", help="Запуск без Web GUI (только ROS 2)")
 
     clean_args = []
@@ -1576,10 +1905,12 @@ def main(args=None):
     print("=" * 70)
     print("IJKbot — Mission State Machine & Judge Web Dashboard (Этап 5)")
     print(f"Режим: {'СИМУЛЯЦИЯ (Mock)' if parsed_args.mock else 'ФИЗИЧЕСКОЕ ЖЕЛЕЗО (Hardware)'}")
+    print(f"Ollama Хост: {parsed_args.llm_host} | Модель: {parsed_args.llm_model}")
     print(f"Веб-интерфейс: http://{parsed_args.host}:{parsed_args.port}")
     print("=" * 70)
 
-    sm = MissionStateMachine(mock_mode=parsed_args.mock)
+    llm_client = LLMClient(host=parsed_args.llm_host, model=parsed_args.llm_model)
+    sm = MissionStateMachine(llm_client=llm_client, mock_mode=parsed_args.mock)
 
     if ROS2_AVAILABLE:
         ros_wrapper = MissionROSNode(sm)
