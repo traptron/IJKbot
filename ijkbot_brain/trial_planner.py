@@ -5,8 +5,8 @@ import math
 import time
 
 import rclpy
-from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import PoseStamped, Twist
+from action_msgs.msg import GoalStatus, GoalStatusArray
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
@@ -44,13 +44,19 @@ class TrialPlanner(Node):
         self.stationary_since = None
         self.last_odom = None
         self.stationary = False
+        self.active_goals = set()
+        self.owned_goal_id = None
+        self.legacy_active = False
         self.client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
-        self.velocity_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.state_pub = self.create_publisher(String, '/trial/state', 10)
-        self.create_subscription(PoseStamped, '/goal_pose', self.on_goal, 10)
+        self.create_subscription(PoseStamped, '/trial/goal_pose', self.on_goal, 10)
+        self.create_subscription(PoseStamped, '/goal_pose', self.on_external_goal, 10)
+        self.create_subscription(String, '/mission/state', self.on_mission_state, 10)
+        self.create_subscription(
+            GoalStatusArray, '/navigate_to_pose/_action/status', self.on_nav_status,
+            qos_profile_sensor_data)
         self.create_subscription(Odometry, '/odom', self.on_odom, qos_profile_sensor_data)
         self.create_subscription(Bool, '/emergency_stop', self.on_stop, 10)
-        self.create_subscription(Twist, '/trial/cmd_vel', self.on_velocity, 10)
         self.create_timer(0.05, self.tick)
         self.transition('IDLE')
 
@@ -63,6 +69,9 @@ class TrialPlanner(Node):
         if self.estopped or self.pending or self.handle is not None or self.state not in (
                 'IDLE', 'COMPLETE', 'FAILED', 'STOPPED'):
             self.get_logger().warning('Цель отклонена: миссия занята или E-STOP активен')
+            return
+        if self.active_goals or self.legacy_active:
+            self.get_logger().warning('Испытание не запущено: система уже выполняет миссию')
             return
         p, q = pose.pose.position, pose.pose.orientation
         values = (p.x, p.y, p.z, q.x, q.y, q.z, q.w)
@@ -101,6 +110,7 @@ class TrialPlanner(Node):
                 self.fail('Nav2 отклонил цель')
                 return
             self.handle = handle
+            self.owned_goal_id = bytes(handle.goal_id.uuid)
             handle.get_result_async().add_done_callback(self.finished)
             if self.state not in ('OUTBOUND', 'RETURNING'):
                 self.cancel()
@@ -119,29 +129,35 @@ class TrialPlanner(Node):
             elif self.state == 'OUTBOUND':
                 self.stationary_since = None
                 self.transition('HOLDING')
-                self.stop_velocity()
             else:
                 self.transition('COMPLETE')
-                self.stop_velocity()
         except Exception as exc:
             self.fail(str(exc))
 
-    def on_velocity(self, msg: Twist) -> None:
-        """Single motor command publisher: block Nav2 while holding or stopping."""
-        if (self.estopped or self.state not in ('OUTBOUND', 'RETURNING')
-                or self.handle is None):
-            self.stop_velocity()
+    def on_external_goal(self, msg: PoseStamped) -> None:
+        """Yield to the existing system rather than competing with its goals."""
+        if self.state in ('OUTBOUND', 'HOLDING', 'RETURNING'):
+            self.fail('Внешняя цель /goal_pose: испытание отменено, управление у системы')
+
+    def on_mission_state(self, msg: String) -> None:
+        self.legacy_active = msg.data in {
+            'NAVIGATING_TO_LANDMARK', 'SEARCHING_VICTIM', 'APPROACHING_VICTIM',
+            'WAIT_5_SECONDS', 'READING_QR', 'RETURNING_HOME', 'PAUSED', 'EMERGENCY_STOP',
+        }
+        if self.legacy_active and self.state in ('OUTBOUND', 'HOLDING', 'RETURNING'):
+            self.fail('Старый автомат миссии активен; испытание отменено')
+
+    def on_nav_status(self, msg: GoalStatusArray) -> None:
+        self.active_goals = {
+            bytes(item.goal_info.goal_id.uuid) for item in msg.status_list
+            if item.status in (GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING,
+                               GoalStatus.STATUS_CANCELING)
+        }
+        if self.state not in ('OUTBOUND', 'HOLDING', 'RETURNING') or self.pending:
             return
-        if self.last_odom is None or time.monotonic() - self.last_odom > 0.5:
-            self.fail('Потеря колёсной одометрии')
-            return
-        if not all(math.isfinite(v) for v in (msg.linear.x, msg.angular.z)):
-            self.fail('Некорректная скорость от Nav2')
-            return
-        command = Twist()
-        command.linear.x = max(-0.25, min(0.25, msg.linear.x))
-        command.angular.z = max(-1.0, min(1.0, msg.angular.z))
-        self.velocity_pub.publish(command)
+        own = {self.owned_goal_id} if self.owned_goal_id is not None else set()
+        if self.active_goals - own:
+            self.fail('Другая action-цель Nav2: испытание отменено')
 
     def on_odom(self, msg: Odometry) -> None:
         now = time.monotonic()
@@ -164,15 +180,12 @@ class TrialPlanner(Node):
             if self.last_odom is None or now - self.last_odom > 0.5:
                 self.fail('Потеря колёсной одометрии')
         if self.state == 'HOLDING':
-            self.stop_velocity()
             if not self.stationary or self.last_odom is None or now - self.last_odom > 0.5:
                 self.stationary_since = None
             elif self.stationary_since is None:
                 self.stationary_since = now
             elif now - self.stationary_since >= 5.0:
                 self.send(self.home, 'RETURNING')
-        elif self.state in ('IDLE', 'COMPLETE', 'STOPPED', 'FAILED'):
-            self.stop_velocity()
         self.state_pub.publish(String(data=self.state))
 
     def cancel(self) -> None:
@@ -194,17 +207,11 @@ class TrialPlanner(Node):
         if msg.data:
             self.transition('STOPPED')
             self.cancel()
-            self.stop_velocity()
 
     def fail(self, reason: str) -> None:
         self.get_logger().error(reason)
         self.transition('FAILED')
         self.cancel()
-        self.stop_velocity()
-
-    def stop_velocity(self) -> None:
-        self.velocity_pub.publish(Twist())
-
 
 def main(args=None):
     rclpy.init(args=args)

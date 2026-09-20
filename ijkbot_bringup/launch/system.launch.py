@@ -14,9 +14,8 @@ system.launch.py — Единый мастер-лаунч мобильного �
    - Velocity Smoother
    - Planner Server (Navfn A*)
    - Behavior Server
-   - BT Navigator (цели от trial_planner; trial_mode=false: напрямую /goal_pose)
+   - BT Navigator (принимает /goal_pose от Web Dashboard / LLM)
    - Lifecycle Managers (автоматический переход всех нод в Active)
-3. По умолчанию trial_planner: цель → удержание 5 секунд → старт.
 """
 
 import os
@@ -25,7 +24,6 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch.conditions import IfCondition, UnlessCondition
 
 
 def generate_launch_description():
@@ -110,7 +108,6 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_nav2, 'launch', 'navigation.launch.py')
         ),
-        condition=UnlessCondition(LaunchConfiguration('trial_mode')),
         launch_arguments={
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'autostart': LaunchConfiguration('autostart'),
@@ -124,8 +121,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument('trial_mode', default_value='true',
-                              description='Цель → 5 секунд → старт; false: только Nav2'),
         SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1'),
         declare_mock_hardware,
         declare_enable_camera,
@@ -141,17 +136,5 @@ def generate_launch_description():
         # Включение подсистем
         robot_bringup_launch,
         navigation_launch,
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(pkg_nav2, 'launch', 'trial.launch.py')),
-            condition=IfCondition(LaunchConfiguration('trial_mode')),
-            launch_arguments={
-                'use_sim_time': LaunchConfiguration('use_sim_time'),
-                'autostart': LaunchConfiguration('autostart'),
-                'map': LaunchConfiguration('map'),
-                'use_amcl': LaunchConfiguration('use_amcl'),
-                'initial_x': LaunchConfiguration('initial_x'),
-                'initial_y': LaunchConfiguration('initial_y'),
-                'initial_yaw': LaunchConfiguration('initial_yaw'),
-            }.items()),
     ])
+
