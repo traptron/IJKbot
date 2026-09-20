@@ -70,9 +70,29 @@ class TestMissionStateMachine(unittest.TestCase):
         message = SimpleNamespace(data='  Состояние: стабильно\n')
         MissionROSNode._qr_callback(wrapper, message)
         self.assertIsNone(self.sm.qr_code_data)
+        self.assertEqual(self.sm.latest_qr_text, message.data)
+        self.assertIsNotNone(self.sm.latest_qr_received_at)
+        self.assertFalse(self.sm.qr_scanned)
         self.sm.state = MissionState.READING_QR
         MissionROSNode._qr_callback(wrapper, message)
         self.assertEqual(self.sm.qr_code_data, message.data)
+
+    def test_qr_dashboard_ignores_blank_and_deduplicates_log(self):
+        from types import SimpleNamespace
+        from ijkbot_brain.mission_sm import MissionROSNode
+        wrapper = SimpleNamespace(sm=self.sm)
+        self.sm.state = MissionState.WAIT_5_SECONDS
+        message = SimpleNamespace(data='  QR <b>текст</b>\nстрока 2  ')
+        MissionROSNode._qr_callback(wrapper, message)
+        count = len(self.sm.logs)
+        MissionROSNode._qr_callback(wrapper, message)
+        MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='  \n'))
+        self.assertEqual(len(self.sm.logs), count)
+        self.assertEqual(self.sm.latest_qr_text, message.data)
+        self.assertEqual(self.sm.state, MissionState.WAIT_5_SECONDS)
+        self.assertIsNone(self.sm.qr_code_data)
+        self.sm.reset_mission()
+        self.assertIsNone(self.sm.latest_qr_text)
 
 
     def setUp(self):

@@ -11,6 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', ['config/arena.json']),
+        ('share/' + package_name + '/launch', ['launch/dashboard_qr.launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

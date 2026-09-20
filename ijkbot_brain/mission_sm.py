@@ -380,6 +380,8 @@ class MissionStateMachine:
         # Состояние зрения и QR-кода
         self.victim_detected: bool = False
         self.qr_code_data: Optional[str] = None
+        self.latest_qr_text: Optional[str] = None
+        self.latest_qr_received_at: Optional[str] = None
 
         # Состояние стриминга токенов LLM
         self.streaming_tokens: str = ""
@@ -607,6 +609,8 @@ class MissionStateMachine:
             self.current_waypoint = None
             self.victim_detected = False
             self.qr_code_data = None
+            self.latest_qr_text = None
+            self.latest_qr_received_at = None
             self._publish_zero_velocity()
             self._log("SYS", "Сброс миссии выполнен. Все состояния и координаты возвращены в исходное положение.")
 
@@ -836,6 +840,8 @@ class MissionStateMachine:
                     "final_state": self.state.value,
                 },
                 "qr_code_data": self.qr_code_data,
+                "latest_qr_text": self.latest_qr_text,
+                "latest_qr_received_at": self.latest_qr_received_at,
                 "chronology": [asdict(l) for l in self.logs]
             }
 
@@ -922,7 +928,13 @@ class MissionROSNode:
 
     def _qr_callback(self, msg: Any) -> None:
         with self.sm.lock:
-            if self.sm.state == MissionState.READING_QR and msg.data.strip():
+            if not msg.data.strip():
+                return
+            if msg.data != self.sm.latest_qr_text:
+                self.sm._log('QR', f'Получен текст QR:\n{msg.data}')
+            self.sm.latest_qr_text = msg.data
+            self.sm.latest_qr_received_at = self.sm._now_str()
+            if self.sm.state == MissionState.READING_QR:
                 self.sm.qr_code_data = msg.data
 
     def _estop_callback(self, msg: Any) -> None:
@@ -1491,13 +1503,18 @@ def build_judge_dashboard(sm: MissionStateMachine):
                 llm_tokens_badge.text = f"{sm.command_interpretation.token_count} токенов"
 
         # 5. Карточка QR-кода
-        if sm.qr_code_data:
-            qr_status_badge.text = "QR-код успешно считан"
+        if sm.latest_qr_text:
+            qr_status_badge.text = f"QR получен: {sm.latest_qr_received_at}"
             qr_status_badge.classes(replace="bg-emerald-600 text-white text-xs w-fit mb-2 font-bold")
+            qr_text_label.text = sm.latest_qr_text
+        elif sm.mock_mode and sm.qr_code_data:
+            qr_status_badge.text = "QR: симуляция"
+            qr_status_badge.classes(replace="bg-amber-600 text-white text-xs w-fit mb-2")
             qr_text_label.text = sm.qr_code_data
         else:
             qr_status_badge.text = "QR не считан"
             qr_status_badge.classes(replace="bg-gray-600 text-white text-xs w-fit mb-2")
+            qr_text_label.text = "Ожидание подтверждённого QR-кода с камеры..."
 
         # 6. Добавление новых строк в судейский лог
         current_len = len(sm.logs)
