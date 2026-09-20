@@ -627,7 +627,7 @@ class MissionROSNode:
                     rclpy.init()
                 self.node = Node("mission_state_machine")
                 self.cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
-                self.node.declare_parameter('goal_topic', '/nav2_goal')
+                self.node.declare_parameter('goal_topic', '/goal_pose')
                 self.goal_pub = self.node.create_publisher(
                     PoseStamped, self.node.get_parameter('goal_topic').value, 10)
                 self.state_pub = self.node.create_publisher(RosString, "/mission/state", 10)

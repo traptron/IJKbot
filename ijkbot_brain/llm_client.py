@@ -581,7 +581,7 @@ def create_ros_node():
             self.declare_parameter("timeout", 15.0)
             self.declare_parameter("log_dir", "")
             self.declare_parameter("arena_file", "")
-            self.declare_parameter("goal_topic", "/nav2_goal")
+            self.declare_parameter("goal_topic", "/goal_pose")
 
             host = self.get_parameter("host").get_parameter_value().string_value
             model = self.get_parameter("model").get_parameter_value().string_value
