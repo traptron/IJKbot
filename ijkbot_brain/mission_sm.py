@@ -18,6 +18,8 @@ import sys
 import time
 import math
 import json
+import signal
+import subprocess
 import threading
 from pathlib import Path
 from enum import Enum
@@ -140,6 +142,105 @@ START_WAYPOINT = Waypoint(
 DEFAULT_TASK_EXAMPLE = "Пострадавший не может выбраться из автомобильного затора, образовавшегося на мосту. Необходимо найти его среди автомобилей"
 
 
+class SystemLauncher:
+    """Управление единым мастером запуска robot_bringup + Nav2 (system.launch.py)."""
+    def __init__(self):
+        self.process: Optional[subprocess.Popen] = None
+        self.is_running: bool = False
+        self.log_lines: List[str] = []
+        self.lock = threading.Lock()
+        self.ssh_host: str = "192.168.1.10"
+        self.ssh_user: str = "otmorozki"
+
+    def is_alive(self) -> bool:
+        if self.process is not None:
+            if self.process.poll() is None:
+                self.is_running = True
+                return True
+            self.is_running = False
+            self.process = None
+        return False
+
+    def start(self, mock_hardware: bool = False, use_ssh: bool = False,
+              initial_x: float = 0.4, initial_y: float = 0.4, initial_yaw: float = 0.0) -> Tuple[bool, str]:
+        if self.is_alive():
+            assert self.process
+            return True, f"Система уже работает (PID {self.process.pid})"
+
+        mock_str = "true" if mock_hardware else "false"
+
+        if use_ssh:
+            remote_cmd = (
+                f"bash -c 'source /opt/ros/jazzy/setup.bash 2>/dev/null || true; "
+                f"source /home/{self.ssh_user}/IJKbot/install/setup.bash 2>/dev/null || true; "
+                f"ros2 launch ijkbot_bringup system.launch.py "
+                f"mock_hardware:={mock_str} initial_x:={initial_x} initial_y:={initial_y} initial_yaw:={initial_yaw}'"
+            )
+            cmd = [
+                "ssh", "-tt", "-o", "ConnectTimeout=5",
+                f"{self.ssh_user}@{self.ssh_host}",
+                remote_cmd
+            ]
+            desc = f"SSH ({self.ssh_user}@{self.ssh_host})"
+        else:
+            cmd = [
+                "ros2", "launch", "ijkbot_bringup", "system.launch.py",
+                f"mock_hardware:={mock_str}",
+                f"initial_x:={initial_x}",
+                f"initial_y:={initial_y}",
+                f"initial_yaw:={initial_yaw}",
+            ]
+            desc = "локальный процесс"
+
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                preexec_fn=os.setsid
+            )
+            self.is_running = True
+
+            def _reader():
+                assert self.process and self.process.stdout
+                for line in iter(self.process.stdout.readline, ""):
+                    if not line:
+                        break
+                    with self.lock:
+                        self.log_lines.append(line.rstrip())
+                        if len(self.log_lines) > 500:
+                            self.log_lines.pop(0)
+
+            t = threading.Thread(target=_reader, daemon=True)
+            t.start()
+            return True, f"Запущен {desc} (PID {self.process.pid})"
+        except Exception as e:
+            self.is_running = False
+            self.process = None
+            err_msg = f"Ошибка запуска system.launch.py: {e}"
+            with self.lock:
+                self.log_lines.append(f"[ERROR] {err_msg}")
+            return False, err_msg
+
+    def stop(self) -> str:
+        if self.process is not None:
+            pid = self.process.pid
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGINT)
+                self.process.wait(timeout=3)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            self.process = None
+            self.is_running = False
+            return f"Система остановлена (PID {pid})"
+        return "Система не была запущена"
+
+
 # ============================================================================
 # 2. КОНЕЧНЫЙ АВТОМАТ МИССИИ (MISSION STATE MACHINE)
 # ============================================================================
@@ -155,6 +256,9 @@ class MissionStateMachine:
         self.state = MissionState.PREPARATION
         self.previous_state = MissionState.PREPARATION
         self.mock_mode = mock_mode
+
+        # Менеджер единого лаунча (Bringup + Nav2)
+        self.system_launcher = SystemLauncher()
 
         # LLM клиент
         self.llm_client = llm_client or LLMClient()
@@ -764,6 +868,53 @@ def build_judge_dashboard(sm: MissionStateMachine):
     # ------------------------------------------------------------------------
     with ui.column().classes("w-full max-w-7xl mx-auto p-4 gap-4"):
 
+        # 0. ПАНЕЛЬ УПРАВЛЕНИЯ БОРТОВЫМ СТЕКОМ (system.launch.py)
+        with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
+            with ui.row().classes("w-full justify-between items-center"):
+                with ui.row().classes("items-center gap-3"):
+                    ui.icon("rocket_launch", size="1.4rem").classes("text-cyan-400")
+                    ui.label("Бортовой стек робота (Bringup + Nav2)").classes("text-base font-semibold text-slate-200")
+                    launch_status_badge = ui.badge("ОСТАНОВЛЕН", color="gray-600").classes("px-3 py-1 text-xs font-bold rounded uppercase")
+
+                with ui.row().classes("items-center gap-3"):
+                    ssh_switch = ui.switch("Запуск по SSH на робота (192.168.1.10)", value=False).classes("text-xs text-slate-300")
+
+                    def handle_launch_system():
+                        ok, msg = sm.system_launcher.start(
+                            mock_hardware=sm.mock_mode,
+                            use_ssh=ssh_switch.value
+                        )
+                        sm._log("SYS", f"Запуск стека: {msg}")
+                        ui.notify(msg, type="positive" if ok else "negative")
+
+                    def handle_stop_system():
+                        msg = sm.system_launcher.stop()
+                        sm._log("SYS", msg)
+                        ui.notify(msg, type="info")
+
+                    ui.button("Запустить стек", on_click=handle_launch_system, icon="play_arrow").classes(
+                        "bg-cyan-600 hover:bg-cyan-500 font-semibold px-4 text-xs"
+                    )
+                    ui.button("Остановить", on_click=handle_stop_system, icon="stop").classes(
+                        "bg-slate-700 hover:bg-rose-700 font-semibold px-3 text-xs text-slate-200"
+                    )
+
+                    with ui.dialog() as launch_log_dialog, ui.card().classes("w-[800px] max-w-4xl bg-slate-900 border border-slate-700"):
+                        ui.label("Консольный вывод system.launch.py").classes("text-sm font-bold text-cyan-300 mb-2")
+                        launch_log_view = ui.column().classes("w-full max-h-96 overflow-y-auto font-mono text-xs bg-black p-3 rounded border border-slate-800 gap-0.5")
+                        ui.button("Закрыть", on_click=launch_log_dialog.close).classes("mt-3 self-end text-xs")
+
+                    def open_launch_log():
+                        launch_log_view.clear()
+                        with launch_log_view:
+                            for line in sm.system_launcher.log_lines[-200:]:
+                                ui.label(line).classes("text-slate-300 whitespace-pre-wrap")
+                        launch_log_dialog.open()
+
+                    ui.button("Логи стека", on_click=open_launch_log, icon="terminal").classes(
+                        "bg-slate-700 hover:bg-slate-600 text-xs text-slate-200"
+                    )
+
         # 1. ПАНЕЛЬ ВВОДА ЗАДАНИЯ И КНОПКИ УПРАВЛЕНИЯ
         with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
             with ui.row().classes("w-full items-center gap-2 mb-2"):
@@ -779,6 +930,43 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
             with ui.row().classes("w-full justify-between items-center mt-3 pt-3 border-t border-slate-700/60"):
                 with ui.row().classes("gap-3 items-center"):
+                    # Кнопка «ВСЁ В 1 КЛИК: Распознать и Поехать»
+                    def handle_all_in_one():
+                        text = task_input.value or ""
+                        if not text.strip():
+                            ui.notify("Пожалуйста, введите текст задания судей!", type="warning")
+                            return
+                        sm.set_task_description(text)
+
+                        # Шаг 1: LLM
+                        try:
+                            sm.parse_task_with_llm()
+                            ui.notify("1/3 Задание успешно распознано LLM!", type="positive")
+                        except Exception as ex:
+                            ui.notify(f"Ошибка LLM: {ex}", type="negative")
+                            return
+
+                        # Шаг 2: System Launch (если ещё не запущен)
+                        if not sm.system_launcher.is_alive():
+                            ok, msg = sm.system_launcher.start(
+                                mock_hardware=sm.mock_mode,
+                                use_ssh=ssh_switch.value
+                            )
+                            sm._log("SYS", f"Автозапуск стека: {msg}")
+                            ui.notify(f"2/3 {msg}", type="info" if ok else "warning")
+
+                        # Шаг 3: Старт миссии
+                        sm.start_mission()
+                        ui.notify("3/3 МИССИЯ ЗАПУЩЕНА! Робот следует к цели.", type="positive")
+
+                    ui.button(
+                        "ВСЁ В 1 КЛИК",
+                        on_click=handle_all_in_one,
+                        icon="bolt"
+                    ).classes(
+                        "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black px-6 text-base shadow-lg tracking-wide"
+                    )
+
                     # 1. Шаг 1: Распознать задание
                     def handle_llm_parse():
                         text = task_input.value or ""
@@ -989,6 +1177,15 @@ def build_judge_dashboard(sm: MissionStateMachine):
         st = sm.state
         state_badge.text = st.value
         state_badge.classes(replace=STATE_COLORS.get(st, "bg-gray-700 text-white"))
+
+        # 1b. Статус запуска бортового стека
+        if sm.system_launcher.is_alive():
+            pid = sm.system_launcher.process.pid if sm.system_launcher.process else "?"
+            launch_status_badge.text = f"АКТИВЕН (PID {pid})"
+            launch_status_badge.classes(replace="bg-emerald-600 text-white px-3 py-1 text-xs font-bold rounded uppercase")
+        else:
+            launch_status_badge.text = "ОСТАНОВЛЕН"
+            launch_status_badge.classes(replace="bg-gray-600 text-white px-3 py-1 text-xs font-bold rounded uppercase")
 
         # 2. Координаты робота
         yaw_deg = int(math.degrees(sm.robot_yaw)) % 360
