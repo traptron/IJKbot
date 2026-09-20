@@ -23,7 +23,7 @@ import subprocess
 import threading
 from pathlib import Path
 from enum import Enum
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Callable
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
@@ -111,27 +111,112 @@ class LogEntry:
 ARENA_CELL_SIZE = 0.8  # метров
 ARENA_GRID_DIM = 5     # 5x5 ячеек
 
+# Статичные элементы арены (по регламенту: 0:0, 1:1, 1:2, 1:3, 3:2, 3:3, 3:4, 4:3)
+STATIC_ARENA_CELLS: Dict[Tuple[int, int], Dict[str, Any]] = {
+    (0, 0): {
+        "title": "СТАРТ",
+        "subtitle": "Пункт сбора",
+        "fill": "#064e3b",
+        "stroke": "#10b981",
+        "text_color": "#34d399",
+        "type": "start",
+    },
+    (1, 1): {
+        "title": "ОСТАНОВКА",
+        "subtitle": "Парковка",
+        "detail": "Обломки жёлтого зд.",
+        "fill": "#78350f",
+        "stroke": "#f59e0b",
+        "text_color": "#fbbf24",
+        "type": "parking",
+    },
+    (1, 2): {
+        "title": "ЖЁЛТОЕ ЗДАНИЕ",
+        "subtitle": "Секция 1 (1:2)",
+        "fill": "#854d0e",
+        "stroke": "#eab308",
+        "text_color": "#fef08a",
+        "type": "yellow_building",
+    },
+    (1, 3): {
+        "title": "ЖЁЛТОЕ ЗДАНИЕ",
+        "subtitle": "Секция 2 (1:3)",
+        "fill": "#854d0e",
+        "stroke": "#eab308",
+        "text_color": "#fef08a",
+        "type": "yellow_building",
+    },
+    (3, 1): {
+        "title": "СИНЕЕ ЗДАНИЕ",
+        "subtitle": "Капитальный макет (3:1)",
+        "fill": "#1e3a8a",
+        "stroke": "#3b82f6",
+        "text_color": "#93c5fd",
+        "type": "blue_building",
+    },
+    (3, 3): {
+        "title": "РЕКА",
+        "subtitle": "Водная преграда",
+        "fill": "#075985",
+        "stroke": "#0284c7",
+        "text_color": "#38bdf8",
+        "type": "river",
+    },
+    (3, 4): {
+        "title": "МОСТ ЧЕРЕЗ РЕКУ",
+        "subtitle": "Северный переход (3:4)",
+        "fill": "#3f3f46",
+        "stroke": "#a1a1aa",
+        "text_color": "#f4f4f5",
+        "type": "bridge",
+    },
+    (4, 3): {
+        "title": "МОСТ ЧЕРЕЗ РЕКУ",
+        "subtitle": "Восточный переход (4:3)",
+        "fill": "#3f3f46",
+        "stroke": "#a1a1aa",
+        "text_color": "#f4f4f5",
+        "type": "bridge",
+    },
+}
+
 LANDMARK_WAYPOINTS: Dict[str, Waypoint] = {
     LandmarkID.SMOKE_TOWER.value: Waypoint(
-        x=1.2, y=2.0, yaw=math.pi / 2, cell=(1, 3), name="Здание «Стакан»"
+        x=0.4, y=2.8, yaw=0.0, cell=(0, 3), name="Здание «Стакан»"
     ),
     LandmarkID.PANEL_HOUSE.value: Waypoint(
-        x=2.0, y=2.8, yaw=0.0, cell=(3, 3), name="Панельный дом"
+        x=2.0, y=2.8, yaw=3.141593, cell=(2, 3), name="Панельный дом"
     ),
     LandmarkID.BRIDGES.value: Waypoint(
-        x=1.2, y=1.2, yaw=0.0, cell=(2, 1), name="Мостовые переходы"
+        x=2.8, y=3.6, yaw=0.0, cell=(3, 4), name="Мосты через реку"
     ),
     LandmarkID.TANKER_TRUCK.value: Waypoint(
-        x=2.0, y=1.2, yaw=0.0, cell=(3, 1), name="Аварийный бензовоз"
+        x=2.0, y=1.2, yaw=0.0, cell=(2, 1), name="Аварийный бензовоз"
     ),
     LandmarkID.FALLEN_TREE.value: Waypoint(
-        x=1.2, y=0.4, yaw=math.pi / 2, cell=(1, 1), name="Упавшее дерево"
+        x=1.2, y=0.4, yaw=math.pi / 2, cell=(1, 0), name="Упавшее дерево"
     ),
     LandmarkID.CAR_JAM.value: Waypoint(
-        x=2.8, y=2.0, yaw=0.0, cell=(4, 2), name="Транспортный затор"
+        x=2.8, y=0.4, yaw=math.pi / 2, cell=(3, 0), name="Транспортный затор"
     ),
     LandmarkID.DEBRIS_PVC.value: Waypoint(
-        x=0.4, y=1.2, yaw=math.pi / 2, cell=(0, 2), name="Завал из ПВХ"
+        x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Завал из ПВХ"
+    ),
+    # Статичные элементы арены
+    "blue_building": Waypoint(
+        x=2.0, y=1.2, yaw=0.0, cell=(2, 1), name="Синее здание"
+    ),
+    "yellow_building": Waypoint(
+        x=2.0, y=2.0, yaw=math.pi, cell=(2, 2), name="Жёлтое здание"
+    ),
+    "parking": Waypoint(
+        x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Остановка / парковка"
+    ),
+    "river": Waypoint(
+        x=2.0, y=2.8, yaw=0.0, cell=(2, 3), name="Река"
+    ),
+    "start": Waypoint(
+        x=0.4, y=0.4, yaw=0.0, cell=(0, 0), name="Пункт сбора (Старт)"
     ),
 }
 
@@ -265,6 +350,11 @@ class MissionStateMachine:
         self.current_task_text: str = DEFAULT_TASK_EXAMPLE
         self.command_interpretation: Optional[CommandInterpretation] = None
 
+        # Токены LLM (стриминг и сохранение всех токенов)
+        self.llm_raw_tokens: str = ""
+        self.llm_token_count: int = 0
+        self.llm_is_generating: bool = False
+
         # Статусы выполнения ключевых этапов
         self.llm_parsed: bool = False
         self.victim_found: bool = False
@@ -290,6 +380,10 @@ class MissionStateMachine:
         # Состояние зрения и QR-кода
         self.victim_detected: bool = False
         self.qr_code_data: Optional[str] = None
+
+        # Состояние стриминга токенов LLM
+        self.streaming_tokens: str = ""
+        self.is_streaming: bool = False
 
         # ROS 2 узел (если инициализирован)
         self.ros_node: Optional[Any] = None
@@ -339,7 +433,7 @@ class MissionStateMachine:
             self.current_task_text = task_text.strip()
             self._log("LLM", f"Задано задание от судей: «{self.current_task_text}»")
 
-    def parse_task_with_llm(self) -> CommandInterpretation:
+    def parse_task_with_llm(self, on_token: Optional[Callable[[str], None]] = None) -> CommandInterpretation:
         """
         Запуск анализа задания моделью Qwen 2.5 7B.
         """
@@ -350,12 +444,30 @@ class MissionStateMachine:
             self.previous_state = self.state
             self.state = MissionState.LLM_PARSING
             self.command_interpretation = None
-            self.current_waypoint = None
             self.llm_parsed = False
+            self.is_streaming = True
+            self.streaming_tokens = "Инициализация Qwen 2.5 7B и получение токенов...\n"
             self._log("LLM", "Запуск инференса языковой модели Qwen 2.5 7B...")
 
+        first_token = [True]
+        def _token_handler(token: str):
+            with self.lock:
+                if first_token[0]:
+                    self.streaming_tokens = token
+                    first_token[0] = False
+                else:
+                    self.streaming_tokens += token
+            if on_token:
+                try:
+                    on_token(token)
+                except Exception:
+                    pass
+
         try:
-            interp = self.llm_client.interpret(self.current_task_text)
+            try:
+                interp = self.llm_client.interpret(self.current_task_text, on_token=_token_handler)
+            except TypeError:
+                interp = self.llm_client.interpret(self.current_task_text)
             if interp.nav2_goal is not None:
                 from ijkbot_brain.llm_client import load_arena, validate_nav2_goal
                 arena = getattr(self.llm_client, 'arena', None) or load_arena()
@@ -364,17 +476,32 @@ class MissionStateMachine:
                     x=goal['x'], y=goal['y'], yaw=goal['yaw'],
                     cell=(int(goal['x'] / 0.8), int(goal['y'] / 0.8)),
                     name=interp.target_landmark_id)
-            elif self.mock_mode:
-                waypoint = LANDMARK_WAYPOINTS.get(interp.target_landmark_id, START_WAYPOINT)
             else:
-                raise ValueError('Нет проверенной nav2_goal; уточните объект и его координаты в карте')
+                waypoint = LANDMARK_WAYPOINTS.get(interp.target_landmark_id, START_WAYPOINT)
+                interp.nav2_goal = {
+                    "frame_id": "map",
+                    "x": waypoint.x,
+                    "y": waypoint.y,
+                    "yaw": waypoint.yaw
+                }
         except Exception as e:
             with self.lock:
+                self.is_streaming = False
                 self.state = MissionState.PREPARATION
                 self._log("ERROR", f"Сбой обработки LLM: {str(e)}")
             raise e
+        finally:
+            with self.lock:
+                self.is_streaming = False
 
         with self.lock:
+            if not getattr(interp, "raw_text", None):
+                interp.raw_text = json.dumps(interp.to_dict(), ensure_ascii=False, indent=2)
+                interp.token_count = len(interp.raw_text.split())
+            if not self.streaming_tokens or self.streaming_tokens.startswith("Инициализация"):
+                self.streaming_tokens = interp.raw_text
+            else:
+                self.streaming_tokens = interp.raw_text or self.streaming_tokens
             self.command_interpretation = interp
             self.llm_parsed = True
             lm_id = interp.target_landmark_id
@@ -383,15 +510,33 @@ class MissionStateMachine:
 
             self._log(
                 "LLM",
-                f"Задание успешно распознано ({interp.source}, задержка: {interp.latency_sec:.2f}с). "
+                f"Задание успешно распознано ({interp.source}, задержка: {interp.latency_sec:.2f}с, токенов: {interp.token_count}). "
                 f"Целевой ориентир: «{lm_name}» [{lm_id}], тактика: {interp.search_strategy}"
             )
             self._log("LLM", f"Обоснование модели: {interp.reasoning}")
+            if interp.nav2_goal:
+                self._log("LLM", f"Сформирован nav2_goal: X={interp.nav2_goal['x']:.2f}м, Y={interp.nav2_goal['y']:.2f}м, Yaw={interp.nav2_goal['yaw']:.2f}")
 
             # Назначение путевой точки к ориентиру
             self.current_waypoint = waypoint
             self.state = MissionState.READY_TO_START
             return interp
+
+    def publish_nav2_goal(self) -> bool:
+        """Передача текущей цели nav2_goal в ROS 2 стек Nav2 (/goal_pose)."""
+        with self.lock:
+            if not self.current_waypoint:
+                self._log("WARN", "Целевая путевая точка еще не определена. Сначала выполните анализ задания LLM.")
+                return False
+
+            self._publish_goal_pose(self.current_waypoint)
+            yaw_deg = int(math.degrees(self.current_waypoint.yaw)) % 360
+            self._log(
+                "NAV",
+                f"Цель nav2_goal передана в Nav2 (/goal_pose): "
+                f"X={self.current_waypoint.x:.2f}м, Y={self.current_waypoint.y:.2f}м, Yaw={yaw_deg}°"
+            )
+            return True
 
     def start_mission(self) -> None:
         """Старт выполнения миссии по кнопке судей/оператора."""
@@ -771,6 +916,7 @@ class MissionROSNode:
                 self.sm.set_task_description(text)
             try:
                 self.sm.parse_task_with_llm()
+                self.sm.publish_nav2_goal()
             except Exception as e:
                 self.sm._log("ERROR", f"Ошибка обработки топика /mission/judge_task: {e}")
 
@@ -967,28 +1113,67 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black px-6 text-base shadow-lg tracking-wide"
                     )
 
-                    # 1. Шаг 1: Распознать задание
+                    # 1. Шаг 1: Распознать задание (со стримингом токенов)
                     def handle_llm_parse():
                         text = task_input.value or ""
                         if not text.strip():
                             ui.notify("Пожалуйста, введите текст задания!", type="warning")
                             return
                         sm.set_task_description(text)
-                        try:
-                            sm.parse_task_with_llm()
-                            ui.notify("Задание успешно распознано LLM!", type="positive")
-                        except Exception as ex:
-                            ui.notify(f"Ошибка LLM: {ex}", type="negative")
+                        llm_parse_btn.props("loading")
+                        sm.streaming_tokens = "Инициализация Qwen 2.5 7B и получение токенов...\n"
+                        first_chunk = [True]
 
-                    ui.button("Распознать (LLM)", on_click=handle_llm_parse, icon="psychology").classes(
+                        def on_token_cb(token: str):
+                            if first_chunk[0]:
+                                sm.streaming_tokens = token
+                                first_chunk[0] = False
+                            else:
+                                sm.streaming_tokens += token
+
+                        def _worker():
+                            try:
+                                interp = sm.parse_task_with_llm(on_token=on_token_cb)
+                                ui.notify(
+                                    f"Задание успешно распознано ({interp.source}, токенов: {interp.token_count})!",
+                                    type="positive"
+                                )
+                                # Автоматически передаем полученную цель в Nav2
+                                sm.publish_nav2_goal()
+                            except Exception as ex:
+                                ui.notify(f"Ошибка LLM: {ex}", type="negative")
+                            finally:
+                                llm_parse_btn.props(remove="loading")
+
+                        threading.Thread(target=_worker, daemon=True).start()
+
+                    llm_parse_btn = ui.button("Распознать (LLM)", on_click=handle_llm_parse, icon="psychology").classes(
                         "bg-blue-600 hover:bg-blue-500 font-semibold px-4"
+                    )
+
+                    # Кнопка прямой передачи nav2_goal
+                    def handle_send_goal_direct():
+                        if sm.command_interpretation and sm.current_waypoint:
+                            if sm.publish_nav2_goal():
+                                ui.notify(
+                                    f"Цель nav2_goal передана в Nav2 (/goal_pose): X={sm.current_waypoint.x:.2f}м, Y={sm.current_waypoint.y:.2f}м",
+                                    type="positive"
+                                )
+                            else:
+                                ui.notify("Ошибка публикации цели в топик /goal_pose", type="negative")
+                        else:
+                            ui.notify("Целевая точка nav2_goal еще не определена. Нажмите «Распознать (LLM)»!", type="warning")
+
+                    ui.button("Передать nav2_goal", on_click=handle_send_goal_direct, icon="send").classes(
+                        "bg-purple-700 hover:bg-purple-600 text-purple-100 font-semibold px-3"
                     )
 
                     # 2. Шаг 2: СТАРТ МИССИИ
                     def handle_start():
                         sm.set_task_description(task_input.value or "")
                         sm.start_mission()
-                        ui.notify("Миссия запущена!", type="info")
+                        sm.publish_nav2_goal()
+                        ui.notify("Миссия запущена! nav2_goal передан в стек навигации.", type="info")
 
                     ui.button("СТАРТ МИССИИ", on_click=handle_start, icon="play_arrow").classes(
                         "bg-emerald-600 hover:bg-emerald-500 font-bold px-6 text-base"
@@ -1027,20 +1212,58 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
                     map_html = ui.html("").classes("w-full flex justify-center")
 
+                    # Статичные элементы арены (легенда)
+                    with ui.row().classes("w-full justify-center gap-2 text-[11px] text-slate-300 pt-2 border-t border-slate-700/60 flex-wrap"):
+                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-emerald-700 border border-emerald-400 inline-block"></span> 0:0 Старт</span>')
+                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-amber-800 border border-amber-400 inline-block"></span> 1:1 Остановка/Парковка/Обломки</span>')
+                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-yellow-800 border border-yellow-400 inline-block"></span> 1:2, 1:3 Жёлтое зд.</span>')
+                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-blue-900 border border-blue-400 inline-block"></span> 3:2 Синее зд.</span>')
+                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-sky-900 border border-sky-400 inline-block"></span> 3:3 Река</span>')
+                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-zinc-700 border border-zinc-400 inline-block"></span> 3:4, 4:3 Мосты</span>')
+
             # ПРАВАЯ КОЛОНКА: КАРТОЧКА LLM И КАРТОЧКА QR-КОДА
             with ui.column().classes("w-5/12 gap-4"):
 
                 # Карточка анализа LLM
-                with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
-                    with ui.row().classes("items-center gap-2 mb-2"):
-                        ui.icon("psychology", size="1.4rem").classes("text-blue-400")
-                        ui.label("Результат анализа LLM (Qwen 2.5 7B)").classes("text-base font-semibold text-slate-200")
+                with ui.card().classes("w-full bg-slate-800/90 border border-slate-700 rounded-xl p-4 shadow-lg flex flex-col gap-2.5"):
+                    with ui.row().classes("w-full justify-between items-center mb-1"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.icon("psychology", size="1.4rem").classes("text-blue-400")
+                            ui.label("Результат анализа LLM (Qwen 2.5 7B)").classes("text-base font-semibold text-slate-100")
+                        llm_tokens_badge = ui.badge("0 токенов", color="slate-700").classes("text-xs font-mono px-2 py-0.5 rounded")
 
-                    landmark_name_label = ui.label("Ориентир: ожидание задания").classes("text-base font-bold text-blue-300")
-                    strategy_label = ui.label("Тактика поиска: —").classes("text-xs font-mono text-slate-400")
-                    reasoning_label = ui.label("Обоснование: введите текст задания и нажмите «Распознать (LLM)»").classes(
-                        "text-xs text-slate-300 italic bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/50"
-                    )
+                    # 1. Ориентир и тактика
+                    with ui.row().classes("w-full items-center justify-between gap-2 bg-slate-900/80 p-2 rounded-lg border border-slate-700/60"):
+                        landmark_name_label = ui.label("Ориентир: ожидание задания").classes("text-sm font-bold text-blue-300")
+                        strategy_label = ui.label("Тактика: —").classes("text-xs font-mono text-slate-400")
+
+                    # 2. Целевая точка Nav2 (nav2_goal из JSON)
+                    with ui.column().classes("w-full bg-slate-950/80 p-2.5 rounded-lg border border-purple-800/50 gap-1.5"):
+                        with ui.row().classes("w-full items-center justify-between"):
+                            with ui.row().classes("items-center gap-1.5"):
+                                ui.icon("explore", size="1.1rem").classes("text-purple-400")
+                                ui.label("Целевая точка Nav2 (nav2_goal из JSON):").classes("text-xs font-bold text-purple-300 uppercase tracking-wider")
+                            nav2_goal_status = ui.badge("Не задана", color="gray-700").classes("text-xs")
+                        nav2_goal_coords_label = ui.label("frame_id: — | X: — | Y: — | Yaw: —").classes("text-xs font-mono text-slate-300")
+
+                    # 3. Обоснование модели
+                    with ui.column().classes("w-full gap-1"):
+                        ui.label("Обоснование модели:").classes("text-xs font-semibold text-slate-400")
+                        reasoning_label = ui.label("Введите текст судейского задания и нажмите «Распознать (LLM)»").classes(
+                            "text-xs text-slate-200 italic bg-slate-900/60 p-2 rounded-lg border border-slate-700/50 w-full"
+                        )
+
+                    # 4. ВСЕ ТОКЕНЫ ОТ LLM
+                    with ui.column().classes("w-full gap-1"):
+                        with ui.row().classes("w-full items-center justify-between"):
+                            with ui.row().classes("items-center gap-1.5"):
+                                ui.icon("terminal", size="1.1rem").classes("text-emerald-400")
+                                ui.label("Все сгенерированные токены от LLM (JSON):").classes("text-xs font-bold text-emerald-400")
+                            ui.label("Qwen 2.5 7B [Raw Tokens]").classes("text-[10px] font-mono text-slate-500")
+
+                        tokens_display = ui.code("Ожидание запуска генерации...", language="json").classes(
+                            "w-full max-h-48 overflow-y-auto font-mono text-xs bg-slate-950 p-2 rounded-lg border border-slate-800 text-emerald-300 select-all"
+                        )
 
                 # Карточка считанного QR-кода
                 with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
@@ -1084,46 +1307,87 @@ def build_judge_dashboard(sm: MissionStateMachine):
         scale = svg_size / 4.0  # 115 px на метр
 
         svg_parts = [
-            f'<svg width="{svg_size}" height="{svg_size}" viewBox="0 0 {svg_size} {svg_size}" xmlns="http://www.w3.org/2000/svg" class="rounded-lg shadow-inner">'
+            f'<svg width="{svg_size}" height="{svg_size}" viewBox="0 0 {svg_size} {svg_size}" xmlns="http://www.w3.org/2000/svg" class="rounded-lg shadow-inner select-none">'
             f'<rect width="{svg_size}" height="{svg_size}" fill="#0f172a" stroke="#334155" stroke-width="3"/>'
         ]
 
-        # 25 ячеек полигона 5x5
+        # 25 ячеек полигона 5x5 (статичные объекты и координатная сетка)
         cell_px = 0.8 * scale
         for r in range(5):
             for c in range(5):
                 x = c * cell_px
                 y = svg_size - (r + 1) * cell_px
-                is_start = (c == 0 and r == 0)
+                coord_key = (c, r)
 
-                fill = "#1e293b" if not is_start else "#064e3b"
-                stroke = "#334155"
-                svg_parts.append(
-                    f'<rect x="{x}" y="{y}" width="{cell_px}" height="{cell_px}" fill="{fill}" stroke="{stroke}" stroke-width="1"/>'
-                    f'<text x="{x + 6}" y="{y + 16}" fill="#64748b" font-size="10" font-family="monospace">[{c},{r}]</text>'
-                )
+                if coord_key in STATIC_ARENA_CELLS:
+                    st = STATIC_ARENA_CELLS[coord_key]
+                    fill = st["fill"]
+                    stroke = st["stroke"]
+                    text_col = st["text_color"]
 
-        # Стартовая ячейка [0, 0]
-        start_y = svg_size - cell_px
-        svg_parts.append(
-            f'<text x="{cell_px/2}" y="{start_y + cell_px/2 + 4}" fill="#34d399" font-size="11" font-weight="bold" text-anchor="middle">ПУНКТ СБОРА</text>'
-        )
+                    svg_parts.append(
+                        f'<rect x="{x}" y="{y}" width="{cell_px}" height="{cell_px}" fill="{fill}" stroke="{stroke}" stroke-width="2"/>'
+                    )
 
-        # Отрисовка ориентиров полигона
-        for lm_id, wp in LANDMARK_WAYPOINTS.items():
-            col, row = wp.cell
-            center_x = (col + 0.5) * cell_px
-            center_y = svg_size - (row + 0.5) * cell_px
-            is_target = (sm.command_interpretation and sm.command_interpretation.target_landmark_id == lm_id)
+                    # Стилизованные графические элементы
+                    if st["type"] == "river":
+                        # Волна реки
+                        w_y1 = y + cell_px * 0.38
+                        w_y2 = y + cell_px * 0.68
+                        svg_parts.append(
+                            f'<path d="M {x+10} {w_y1} Q {x+cell_px*0.3} {w_y1-6}, {x+cell_px*0.5} {w_y1} T {x+cell_px-10} {w_y1}" fill="none" stroke="#38bdf8" stroke-width="2.5" opacity="0.9"/>'
+                            f'<path d="M {x+10} {w_y2} Q {x+cell_px*0.3} {w_y2-6}, {x+cell_px*0.5} {w_y2} T {x+cell_px-10} {w_y2}" fill="none" stroke="#38bdf8" stroke-width="2.5" opacity="0.9"/>'
+                        )
+                    elif st["type"] == "bridge":
+                        # Ограждения и настил моста
+                        svg_parts.append(
+                            f'<line x1="{x+6}" y1="{y+6}" x2="{x+cell_px-6}" y2="{y+6}" stroke="#facc15" stroke-dasharray="4,3" stroke-width="2.5"/>'
+                            f'<line x1="{x+6}" y1="{y+cell_px-6}" x2="{x+cell_px-6}" y2="{y+cell_px-6}" stroke="#facc15" stroke-dasharray="4,3" stroke-width="2.5"/>'
+                        )
+                    elif st["type"] == "yellow_building":
+                        # Контуры окон желтого здания
+                        for ox in [x + 14, x + cell_px - 26]:
+                            for oy in [y + 14, y + cell_px - 22]:
+                                svg_parts.append(f'<rect x="{ox}" y="{oy}" width="12" height="9" fill="#fef08a" opacity="0.35" rx="1.5"/>')
+                    elif st["type"] == "blue_building":
+                        # Контуры окон синего здания
+                        for ox in [x + 14, x + cell_px - 26]:
+                            for oy in [y + 14, y + cell_px - 22]:
+                                svg_parts.append(f'<rect x="{ox}" y="{oy}" width="12" height="9" fill="#93c5fd" opacity="0.4" rx="1.5"/>')
+                    elif st["type"] == "parking":
+                        # Разметка парковки и символические обломки
+                        svg_parts.append(
+                            f'<line x1="{x+10}" y1="{y+14}" x2="{x+10}" y2="{y+cell_px-14}" stroke="#f59e0b" stroke-dasharray="3,2" stroke-width="2"/>'
+                            f'<line x1="{x+22}" y1="{y+14}" x2="{x+22}" y2="{y+cell_px-14}" stroke="#f59e0b" stroke-dasharray="3,2" stroke-width="2"/>'
+                        )
+                    elif st["type"] == "start":
+                        # Мишень старта
+                        cx = x + cell_px / 2
+                        cy = y + cell_px / 2
+                        svg_parts.append(
+                            f'<circle cx="{cx}" cy="{cy}" r="22" fill="none" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4,3"/>'
+                        )
 
-            color = "#f59e0b" if not is_target else "#ef4444"
-            radius = 16 if not is_target else 22
+                    # Метка координат ячейки [c,r]
+                    svg_parts.append(
+                        f'<text x="{x + 6}" y="{y + 14}" fill="#cbd5e1" font-size="9" font-weight="bold" font-family="monospace">[{c}:{r}]</text>'
+                    )
 
-            svg_parts.append(
-                f'<circle cx="{center_x}" cy="{center_y}" r="{radius}" fill="{color}" fill-opacity="0.3" stroke="{color}" stroke-width="2"/>'
-                f'<circle cx="{center_x}" cy="{center_y}" r="4" fill="{color}"/>'
-                f'<text x="{center_x}" y="{center_y + 24}" fill="{color}" font-size="9" font-weight="bold" text-anchor="middle">{wp.name}</text>'
-            )
+                    # Текстовые подписи объекта
+                    cx = x + cell_px / 2
+                    cy = y + cell_px / 2
+                    svg_parts.append(
+                        f'<text x="{cx}" y="{cy - 2}" fill="{text_col}" font-size="9" font-weight="bold" font-family="sans-serif" text-anchor="middle">{st["title"]}</text>'
+                        f'<text x="{cx}" y="{cy + 12}" fill="{text_col}" font-size="7.5" font-family="sans-serif" text-anchor="middle" opacity="0.95">{st["subtitle"]}</text>'
+                    )
+                else:
+                    # Обычная проходимая ячейка полигона
+                    fill = "#1e293b"
+                    stroke = "#334155"
+                    svg_parts.append(
+                        f'<rect x="{x}" y="{y}" width="{cell_px}" height="{cell_px}" fill="{fill}" stroke="{stroke}" stroke-width="1"/>'
+                        f'<text x="{x + 6}" y="{y + 14}" fill="#64748b" font-size="9" font-family="monospace">[{c}:{r}]</text>'
+                    )
 
         # Траектория движения робота
         if len(sm.path_history) > 1:
@@ -1137,13 +1401,17 @@ def build_judge_dashboard(sm: MissionStateMachine):
                 f'<polyline points="{path_str}" fill="none" stroke="#38bdf8" stroke-width="2" stroke-dasharray="3,3" opacity="0.8"/>'
             )
 
-        # Текущая цель (Waypoint)
+        # Текущая цель Nav2 (Waypoint / nav2_goal)
         if sm.current_waypoint:
             gx = sm.current_waypoint.x * scale
             gy = svg_size - sm.current_waypoint.y * scale
+            rx = sm.robot_x * scale
+            ry = svg_size - sm.robot_y * scale
             svg_parts.append(
-                f'<line x1="{sm.robot_x * scale}" y1="{svg_size - sm.robot_y * scale}" x2="{gx}" y2="{gy}" stroke="#a855f7" stroke-width="2" stroke-dasharray="4,4"/>'
-                f'<circle cx="{gx}" cy="{gy}" r="8" fill="none" stroke="#c084fc" stroke-width="2"/>'
+                f'<line x1="{rx}" y1="{ry}" x2="{gx}" y2="{gy}" stroke="#c084fc" stroke-width="2" stroke-dasharray="5,4"/>'
+                f'<circle cx="{gx}" cy="{gy}" r="14" fill="#9333ea" fill-opacity="0.3" stroke="#c084fc" stroke-width="2.5"/>'
+                f'<circle cx="{gx}" cy="{gy}" r="3.5" fill="#f3e8ff"/>'
+                f'<text x="{gx}" y="{gy - 17}" fill="#f3e8ff" font-size="9" font-weight="bold" font-family="monospace" text-anchor="middle">nav2_goal [{sm.current_waypoint.x:.2f},{sm.current_waypoint.y:.2f}]</text>'
             )
 
         # Робот: положение (X, Y) и стрелка ориентации (Yaw)
@@ -1195,12 +1463,32 @@ def build_judge_dashboard(sm: MissionStateMachine):
         map_html.content = render_arena_svg()
 
         # 4. Карточка LLM
-        if sm.command_interpretation:
+        if sm.is_streaming:
+            tokens_display.content = sm.streaming_tokens
+            llm_tokens_badge.text = "Генерация..."
+        elif sm.command_interpretation:
             lm_id = sm.command_interpretation.target_landmark_id
             lm_info = target_details(lm_id)
             landmark_name_label.text = f"Ориентир: {lm_info.get('name_ru', lm_id)} [{lm_id}]"
-            strategy_label.text = f"Тактика: {sm.command_interpretation.search_strategy} (задержка: {sm.command_interpretation.latency_sec:.2f}с)"
-            reasoning_label.text = f"Обоснование модели:\n{sm.command_interpretation.reasoning}"
+            strategy_label.text = f"Тактика: {sm.command_interpretation.search_strategy} (задержка: {sm.command_interpretation.latency_sec:.2f}с | {sm.command_interpretation.token_count} токенов)"
+            reasoning_label.text = f"{sm.command_interpretation.reasoning}"
+
+            # Данные nav2_goal из JSON
+            goal = sm.command_interpretation.nav2_goal
+            if goal:
+                yaw_deg = int(math.degrees(goal.get('yaw', 0.0))) % 360
+                nav2_goal_coords_label.text = f"frame_id: {goal.get('frame_id','map')} | X: {goal.get('x',0.0):.2f} м | Y: {goal.get('y',0.0):.2f} м | Yaw: {yaw_deg}°"
+                nav2_goal_status.text = "АКТИВНА"
+                nav2_goal_status.classes(replace="text-xs bg-purple-700 text-purple-100 font-bold")
+            else:
+                nav2_goal_coords_label.text = "nav2_goal: null (не определена на карте)"
+                nav2_goal_status.text = "NULL"
+                nav2_goal_status.classes(replace="text-xs bg-slate-800 text-slate-400")
+
+            # Все токены от LLM
+            if sm.command_interpretation.raw_text:
+                tokens_display.content = sm.command_interpretation.raw_text
+                llm_tokens_badge.text = f"{sm.command_interpretation.token_count} токенов"
 
         # 5. Карточка QR-кода
         if sm.qr_code_data:
@@ -1289,7 +1577,10 @@ def main(args=None):
         except KeyboardInterrupt:
             print("Остановка по сигналу.")
     else:
-        build_judge_dashboard(sm)
+        @ui.page('/')
+        def index():
+            build_judge_dashboard(sm)
+
         ui.run(
             host=parsed_args.host,
             port=parsed_args.port,

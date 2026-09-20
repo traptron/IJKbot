@@ -19,7 +19,7 @@ import re
 import math
 from pathlib import Path
 from enum import Enum
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable, Tuple
 from dataclasses import dataclass, asdict
 
 try:
@@ -166,6 +166,8 @@ class CommandInterpretation:
     latency_sec: float = 0.0
     raw_response: Optional[Dict[str, Any]] = None
     nav2_goal: Optional[Dict[str, Any]] = None
+    raw_text: str = ""
+    token_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Конвертация в словарь."""
@@ -292,12 +294,18 @@ class LLMClient:
         except Exception:
             return False
 
-    def interpret(self, task_description: str, use_fallback: bool = True) -> CommandInterpretation:
+    def interpret(
+        self,
+        task_description: str,
+        use_fallback: bool = True,
+        on_token: Optional[Callable[[str], None]] = None
+    ) -> CommandInterpretation:
         """
         Преобразует текстовое описание задания в структурированную команду.
 
         :param task_description: Текст судейского задания (русский язык)
         :param use_fallback: Включить ли эвристический fallback при недоступности LLM
+        :param on_token: Опциональный коллбэк для стриминга токенов модели
         :return: CommandInterpretation объект с валидированным target_landmark_id
         """
         cleaned_text = task_description.strip()
@@ -307,12 +315,24 @@ class LLMClient:
                 search_strategy="default_search",
                 reasoning="Получен пустой текст задания. Выбран ориентир по умолчанию.",
                 confidence=0.0,
-                source="fallback_empty"
+                source="fallback_empty",
+                raw_text="{}",
+                token_count=0
             )
 
         t_start = time.time()
         try:
-            raw_result = self._query_ollama(cleaned_text)
+            if on_token is not None:
+                query_res = self._query_ollama(cleaned_text, on_token=on_token)
+            else:
+                query_res = self._query_ollama(cleaned_text)
+
+            if isinstance(query_res, tuple):
+                raw_result, token_count = query_res
+            else:
+                raw_result = query_res
+                token_count = len(raw_result.split())
+
             latency = time.time() - t_start
 
             parsed_json = self._extract_json(raw_result)
@@ -335,7 +355,9 @@ class LLMClient:
                 source="llm",
                 latency_sec=round(latency, 3),
                 raw_response=parsed_json,
-                nav2_goal=goal
+                nav2_goal=goal,
+                raw_text=raw_result,
+                token_count=token_count
             )
 
         except Exception as e:
@@ -347,11 +369,14 @@ class LLMClient:
                     f"[Внимание: активирован fallback из-за сбоя LLM: {e}]. "
                     + fallback_res.reasoning
                 )
+                if not fallback_res.raw_text:
+                    fallback_res.raw_text = json.dumps(fallback_res.to_dict(), ensure_ascii=False, indent=2)
+                    fallback_res.token_count = len(fallback_res.raw_text.split())
                 return fallback_res
             else:
                 raise RuntimeError(f"Ошибка вызова LLM: {e}") from e
 
-    def _query_ollama(self, prompt: str) -> str:
+    def _query_ollama(self, prompt: str, on_token: Optional[Callable[[str], None]] = None) -> Tuple[str, int]:
         """Отправка HTTP запроса к Ollama /api/chat с JSON Schema."""
         url = f"{self.host}/api/chat"
         payload = {
@@ -361,13 +386,36 @@ class LLMClient:
                 {"role": "user", "content": prompt}
             ],
             "format": OLLAMA_JSON_SCHEMA,
-            "stream": False,
+            "stream": bool(on_token and HAS_REQUESTS),
             "keep_alive": -1,
             "options": {
                 "temperature": self.temperature,
                 "num_predict": 512
             }
         }
+
+        if on_token and HAS_REQUESTS:
+            response = requests.post(
+                url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=self.timeout,
+                stream=True
+            )
+            response.raise_for_status()
+            collected = []
+            eval_count = 0
+            for line in response.iter_lines():
+                if line:
+                    chunk = json.loads(line.decode("utf-8"))
+                    token = chunk.get("message", {}).get("content", "")
+                    if token:
+                        collected.append(token)
+                        on_token(token)
+                    if chunk.get("done"):
+                        eval_count = chunk.get("eval_count", len(collected))
+            full_str = "".join(collected)
+            return full_str, eval_count
 
         data_bytes = json.dumps(payload).encode("utf-8")
 
@@ -389,7 +437,9 @@ class LLMClient:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 res_data = json.loads(resp.read().decode("utf-8"))
 
-        return res_data["message"]["content"]
+        raw_content = res_data["message"]["content"]
+        eval_count = res_data.get("eval_count", len(raw_content.split()))
+        return raw_content, eval_count
 
     def navigation_prompt(self) -> str:
         """Ground interpretation in an explicit coordinate grid and allowed poses."""
@@ -400,6 +450,7 @@ class LLMClient:
         ]
         return (
             'Ты интерпретатор задания робота. Верни только JSON по схеме. '
+            'Поле reasoning пиши СТРОГО на русском языке для судей. '
             'Поля target_landmark_id, search_strategy, reasoning и nav2_goal обязательны. '
             'nav2_goal: {frame_id: map, x: метры, y: метры, yaw: радианы} или null. '
             'Выбери точку из goals нужного объекта. Не путай объект с точкой подъезда. '
@@ -475,13 +526,25 @@ class LLMClient:
                 f"({target_details(best_landmark)['name_ru']})."
             )
 
+        goal = default_nav2_goal(best_landmark, self.arena)
+        fallback_dict = {
+            "target_landmark_id": best_landmark,
+            "search_strategy": target_details(best_landmark).get("default_strategy", "approach_and_inspect"),
+            "reasoning": reasoning,
+            "nav2_goal": goal
+        }
+        raw_json_str = json.dumps(fallback_dict, ensure_ascii=False, indent=2)
+
         return CommandInterpretation(
             target_landmark_id=best_landmark,
-            search_strategy=target_details(best_landmark).get("default_strategy", "approach_and_inspect"),
+            search_strategy=fallback_dict["search_strategy"],
             reasoning=reasoning,
             confidence=round(confidence, 2),
             source="heuristic_fallback",
-            nav2_goal=default_nav2_goal(best_landmark, self.arena),
+            raw_response=fallback_dict,
+            nav2_goal=goal,
+            raw_text=raw_json_str,
+            token_count=len(raw_json_str.split()),
         )
 
 

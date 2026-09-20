@@ -28,7 +28,8 @@ from ijkbot_brain.mission_sm import (
     Waypoint,
     LANDMARK_WAYPOINTS,
     START_WAYPOINT,
-    DEFAULT_TASK_EXAMPLE
+    DEFAULT_TASK_EXAMPLE,
+    STATIC_ARENA_CELLS
 )
 
 
@@ -37,7 +38,7 @@ class DummyLLMClient:
     def __init__(self, target_id: str = "smoke_tower"):
         self.target_id = target_id
 
-    def interpret(self, text: str, use_fallback: bool = True) -> CommandInterpretation:
+    def interpret(self, text: str, use_fallback: bool = True, on_token=None) -> CommandInterpretation:
         # Для проверки примера судейского задания с автомобильным затором
         if "затор" in text.lower() or "автомобил" in text.lower():
             target = "car_jam"
@@ -231,6 +232,37 @@ class TestMissionStateMachine(unittest.TestCase):
         real_sm.step(0.1)
         self.assertEqual(real_sm.state, MissionState.RETURNING_HOME)
         self.assertTrue(real_sm.qr_scanned)
+
+    def test_static_arena_elements(self):
+        """Проверка неизменности и наличия всех обязательных статичных элементов арены."""
+        expected_static_cells = {
+            (0, 0): "start",
+            (1, 1): "parking",
+            (1, 2): "yellow_building",
+            (1, 3): "yellow_building",
+            (3, 1): "blue_building",
+            (3, 3): "river",
+            (3, 4): "bridge",
+            (4, 3): "bridge",
+        }
+        for cell, elem_type in expected_static_cells.items():
+            self.assertIn(cell, STATIC_ARENA_CELLS, f"Ячейка {cell} отсутствует в STATIC_ARENA_CELLS")
+            self.assertEqual(STATIC_ARENA_CELLS[cell]["type"], elem_type)
+
+        # Проверка описания ячейки 1:1
+        p11 = STATIC_ARENA_CELLS[(1, 1)]
+        self.assertEqual(p11["title"], "ОСТАНОВКА")
+        self.assertEqual(p11["subtitle"], "Парковка")
+        self.assertIn("Обломки", p11["detail"])
+
+    def test_llm_tokens_captured(self):
+        """Проверка фиксации сгенерированных токенов от LLM в конечном автомате."""
+        self.sm.set_task_description("Пострадавший возле моста")
+        interp = self.sm.parse_task_with_llm()
+
+        self.assertIsNotNone(interp.raw_text)
+        self.assertGreater(len(self.sm.streaming_tokens), 0)
+        self.assertEqual(self.sm.streaming_tokens, interp.raw_text)
 
 
 if __name__ == "__main__":
