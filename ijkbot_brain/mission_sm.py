@@ -1297,6 +1297,83 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
             with ui.row().classes("w-full justify-between items-center mt-3 pt-3 border-t border-slate-700/60"):
                 with ui.row().classes("gap-3 items-center"):
+                    # 1. Шаг 1: Распознать задание (со стримингом токенов)
+                    def handle_llm_parse():
+                        text = task_input.value or ""
+                        if not text.strip():
+                            ui.notify("Пожалуйста, введите текст задания судей!", type="warning")
+                            return
+                        sm.set_task_description(text)
+                        llm_parse_btn.props("loading")
+                        sm.streaming_tokens = "Инициализация Qwen 2.5 7B и получение токенов...\n"
+                        first_chunk = [True]
+
+                        def on_token_cb(token: str):
+                            if first_chunk[0]:
+                                sm.streaming_tokens = token
+                                first_chunk[0] = False
+                            else:
+                                sm.streaming_tokens += token
+
+                        def _worker():
+                            try:
+                                interp = sm.parse_task_with_llm(on_token=on_token_cb)
+                                ui.notify(
+                                    f"Задание успешно распознано ({interp.source}, токенов: {interp.token_count})! "
+                                    f"Нажмите «2. СТАРТ МИССИИ» для начала движения.",
+                                    type="positive"
+                                )
+                            except Exception as ex:
+                                ui.notify(f"Ошибка LLM: {ex}", type="negative")
+                            finally:
+                                llm_parse_btn.props(remove="loading")
+
+                        threading.Thread(target=_worker, daemon=True).start()
+
+                    llm_parse_btn = ui.button("1. Распознать (LLM)", on_click=handle_llm_parse, icon="psychology").classes(
+                        "bg-blue-600 hover:bg-blue-500 font-bold px-5 text-base shadow-md"
+                    )
+
+                    # 2. Шаг 2: СТАРТ МИССИИ / ПЛАНЕРА
+                    def handle_start():
+                        sm.set_task_description(task_input.value or "")
+                        if not sm.command_interpretation:
+                            ui.notify("Сначала нажмите «1. Распознать (LLM)» для определения ориентира!", type="warning")
+                            return
+                        sm.start_mission()
+                        ui.notify("МИССИЯ ЗАПУЩЕНА! Цель передана в Nav2, робот следует к ячейке поиска.", type="positive")
+
+                    ui.button("2. СТАРТ МИССИИ", on_click=handle_start, icon="play_arrow").classes(
+                        "bg-emerald-600 hover:bg-emerald-500 font-black px-7 text-base shadow-lg tracking-wide"
+                    )
+
+                    # Кнопка прямой передачи nav2_goal (повторная отправка)
+                    def handle_send_goal_direct():
+                        if sm.command_interpretation and sm.current_waypoint:
+                            if sm.publish_nav2_goal():
+                                ui.notify(
+                                    f"Цель nav2_goal передана в Nav2 (/goal_pose): X={sm.current_waypoint.x:.2f}м, Y={sm.current_waypoint.y:.2f}м",
+                                    type="positive"
+                                )
+                            else:
+                                ui.notify("Ошибка публикации цели в топик /goal_pose", type="negative")
+                        else:
+                            ui.notify("Целевая точка nav2_goal еще не определена. Нажмите «1. Распознать (LLM)»!", type="warning")
+
+                    ui.button("Передать nav2_goal", on_click=handle_send_goal_direct, icon="send").classes(
+                        "bg-purple-700 hover:bg-purple-600 text-purple-100 font-semibold px-3"
+                    )
+
+                    # Пауза
+                    ui.button("Пауза", on_click=sm.toggle_pause, icon="pause").classes(
+                        "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                    )
+
+                    # Сброс
+                    ui.button("Сброс", on_click=sm.reset_mission, icon="replay").classes(
+                        "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                    )
+
                     # Кнопка «ВСЁ В 1 КЛИК: Распознать и Поехать»
                     def handle_all_in_one():
                         text = task_input.value or ""
@@ -1331,83 +1408,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         on_click=handle_all_in_one,
                         icon="bolt"
                     ).classes(
-                        "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black px-6 text-base shadow-lg tracking-wide"
-                    )
-
-                    # 1. Шаг 1: Распознать задание (со стримингом токенов)
-                    def handle_llm_parse():
-                        text = task_input.value or ""
-                        if not text.strip():
-                            ui.notify("Пожалуйста, введите текст задания!", type="warning")
-                            return
-                        sm.set_task_description(text)
-                        llm_parse_btn.props("loading")
-                        sm.streaming_tokens = "Инициализация Qwen 2.5 7B и получение токенов...\n"
-                        first_chunk = [True]
-
-                        def on_token_cb(token: str):
-                            if first_chunk[0]:
-                                sm.streaming_tokens = token
-                                first_chunk[0] = False
-                            else:
-                                sm.streaming_tokens += token
-
-                        def _worker():
-                            try:
-                                interp = sm.parse_task_with_llm(on_token=on_token_cb)
-                                ui.notify(
-                                    f"Задание успешно распознано ({interp.source}, токенов: {interp.token_count})!",
-                                    type="positive"
-                                )
-                                # Автоматически передаем полученную цель в Nav2
-                                sm.publish_nav2_goal()
-                            except Exception as ex:
-                                ui.notify(f"Ошибка LLM: {ex}", type="negative")
-                            finally:
-                                llm_parse_btn.props(remove="loading")
-
-                        threading.Thread(target=_worker, daemon=True).start()
-
-                    llm_parse_btn = ui.button("Распознать (LLM)", on_click=handle_llm_parse, icon="psychology").classes(
-                        "bg-blue-600 hover:bg-blue-500 font-semibold px-4"
-                    )
-
-                    # Кнопка прямой передачи nav2_goal
-                    def handle_send_goal_direct():
-                        if sm.command_interpretation and sm.current_waypoint:
-                            if sm.publish_nav2_goal():
-                                ui.notify(
-                                    f"Цель nav2_goal передана в Nav2 (/goal_pose): X={sm.current_waypoint.x:.2f}м, Y={sm.current_waypoint.y:.2f}м",
-                                    type="positive"
-                                )
-                            else:
-                                ui.notify("Ошибка публикации цели в топик /goal_pose", type="negative")
-                        else:
-                            ui.notify("Целевая точка nav2_goal еще не определена. Нажмите «Распознать (LLM)»!", type="warning")
-
-                    ui.button("Передать nav2_goal", on_click=handle_send_goal_direct, icon="send").classes(
-                        "bg-purple-700 hover:bg-purple-600 text-purple-100 font-semibold px-3"
-                    )
-
-                    # 2. Шаг 2: СТАРТ МИССИИ
-                    def handle_start():
-                        sm.set_task_description(task_input.value or "")
-                        sm.start_mission()
-                        sm.publish_nav2_goal()
-                        ui.notify("Миссия запущена! nav2_goal передан в стек навигации.", type="info")
-
-                    ui.button("СТАРТ МИССИИ", on_click=handle_start, icon="play_arrow").classes(
-                        "bg-emerald-600 hover:bg-emerald-500 font-bold px-6 text-base"
-                    )
-
-                    # Пауза
-                    ui.button("Пауза", on_click=sm.toggle_pause, icon="pause").classes(
-                        "bg-slate-700 hover:bg-slate-600 text-slate-200"
-                    )
-
-                    # Сброс
-                    ui.button("Сброс", on_click=sm.reset_mission, icon="replay").classes(
-                        "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                        "bg-gradient-to-r from-teal-700 to-cyan-700 hover:from-teal-600 hover:to-cyan-600 text-white font-semibold px-4 text-sm"
                     )
 
                 # Кнопка E-STOP
