@@ -4,12 +4,23 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
-from launch.conditions import IfCondition
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, PushRosNamespace
+from launch.substitution import Substitution
 from launch_ros.descriptions import ParameterFile
-from nav2_common.launch import RewrittenYaml
+
+try:
+    from nav2_common.launch import RewrittenYaml
+except ImportError:
+    class RewrittenYaml(Substitution):
+        def __init__(self, source_file, param_rewrites=None, value_rewrites=None, convert_types=True):
+            super().__init__()
+            self.source_file = source_file
+        def perform(self, context):
+            if hasattr(self.source_file, 'perform'):
+                return self.source_file.perform(context)
+            return str(self.source_file)
 
 
 def generate_launch_description():
@@ -43,7 +54,6 @@ def generate_launch_description():
     declare_use_localization = DeclareLaunchArgument(
         'use_localization',
         default_value='true',
-        description='Запускать ли map_server и AMCL (false при использовании slam_toolbox)'
         description='Запускать ли карту и локализацию (false при использовании slam_toolbox)'
     )
 
@@ -96,15 +106,12 @@ def generate_launch_description():
         allow_substs=True
     )
 
-    # 1. Ноды локализации и карты (map_server + amcl)
     # 1. Ноды локализации и карты (map_server + статический TF или AMCL)
     map_server_node = Node(
         package='nav2_map_server',
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[configured_params],
-        condition=IfCondition(use_localization)
         parameters=[configured_params]
     )
 
@@ -148,11 +155,9 @@ def generate_launch_description():
         name='amcl',
         output='screen',
         parameters=[configured_params],
-        condition=IfCondition(use_localization)
         condition=IfCondition(use_amcl)
     )
 
-    loc_lifecycle_manager = Node(
     loc_lifecycle_manager_amcl = Node(
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',
@@ -161,10 +166,8 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'autostart': autostart,
-            'autostart': True,
             'node_names': ['map_server', 'amcl']
         }],
-        condition=IfCondition(use_localization)
         condition=IfCondition(use_amcl)
     )
 
@@ -234,7 +237,6 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'autostart': autostart,
-            'autostart': True,
             'node_names': [
                 'controller_server',
                 'velocity_smoother',
@@ -258,10 +260,6 @@ def generate_launch_description():
         declare_initial_y,
         declare_initial_yaw,
 
-        # Локализация
-        map_server_node,
-        amcl_node,
-        loc_lifecycle_manager,
         # Локализация (чисто одометрия + static TF по умолчанию, либо AMCL)
         localization_group,
 

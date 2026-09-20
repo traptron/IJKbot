@@ -97,6 +97,24 @@ MAP_OBJECT_DETAILS: Dict[str, Dict[str, Any]] = {
     "river": {"name_ru": "Река", "aliases": ["река", "реке", "реку", "берег"]},
 }
 
+ALLOWED_TARGET_IDS = [
+    # Статичные ориентиры арены (главные приоритетные объекты)
+    "blue_building",
+    "yellow_building",
+    "bridges",
+    "parking",
+    "river",
+    # Регламентные ориентиры
+    "smoke_tower",
+    "panel_house",
+    "tanker_truck",
+    "fallen_tree",
+    "car_jam",
+    "debris_pvc",
+    "start",
+]
+
+
 def target_details(target_id: str) -> Dict[str, Any]:
     """Return a description for either a regulation landmark or a map object."""
     try:
@@ -134,7 +152,7 @@ def validate_nav2_goal(goal: Any, _landmark_id: str, arena: Dict[str, Any]) -> O
     candidates = []
     for object_data in arena['objects'].values():
         candidates.extend(object_data.get('goals', []))
-    match = next((p for p in candidates if all(abs(a-b) < 1e-5 for a, b in zip(values, p))), None)
+    match = next((p for p in candidates if all(abs(a-b) < 1e-4 for a, b in zip(values, p))), None)
     if match is None:
         raise ValueError('nav2_goal is not an allowed approach pose on the map')
     x, y, yaw = match
@@ -146,13 +164,37 @@ def validate_nav2_goal(goal: Any, _landmark_id: str, arena: Dict[str, Any]) -> O
     return dict(frame_id='map', x=x, y=y, yaw=yaw)
 
 
+def validate_nav2_goals(goals: Any, target_id: str, arena: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Accept candidate approach poses on the semantic map."""
+    if not goals or not isinstance(goals, list):
+        return []
+    res = []
+    for g in goals:
+        try:
+            v = validate_nav2_goal(g, target_id, arena)
+            if v:
+                res.append(v)
+        except Exception:
+            pass
+    return res
+
+
+def default_nav2_goals(target_id: str, arena: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return all configured approach poses for the target object (e.g. all 4 inspection points)."""
+    goals = arena.get('objects', {}).get(target_id, {}).get('goals', [])
+    if not goals and target_id == LandmarkID.PANEL_HOUSE.value:
+        goals = arena.get('objects', {}).get('yellow_building', {}).get('goals', [])
+    res = []
+    for p in goals:
+        if len(p) >= 3:
+            res.append(dict(frame_id='map', x=float(p[0]), y=float(p[1]), yaw=float(p[2])))
+    return res
+
+
 def default_nav2_goal(target_id: str, arena: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Return the first configured approach pose, or no pose for an unmapped target."""
-    goals = arena.get('objects', {}).get(target_id, {}).get('goals', [])
-    if not goals:
-        return None
-    x, y, yaw = goals[0]
-    return validate_nav2_goal({'frame_id': 'map', 'x': x, 'y': y, 'yaw': yaw}, target_id, arena)
+    goals = default_nav2_goals(target_id, arena)
+    return goals[0] if goals else None
 
 
 @dataclass
@@ -166,6 +208,7 @@ class CommandInterpretation:
     latency_sec: float = 0.0
     raw_response: Optional[Dict[str, Any]] = None
     nav2_goal: Optional[Dict[str, Any]] = None
+    nav2_goals: Optional[List[Dict[str, Any]]] = None
     raw_text: str = ""
     token_count: int = 0
 
@@ -178,36 +221,34 @@ class CommandInterpretation:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
 
     def is_valid(self) -> bool:
-        """Проверка валидности регламентного ориентира."""
-        return self.target_landmark_id in {landmark.value for landmark in LandmarkID}
+        """Проверка валидности ориентира или объекта карты."""
+        return self.target_landmark_id in ALLOWED_TARGET_IDS
 
 
 # Системный промпт с описанием правил и ориентиров полигона
 SYSTEM_PROMPT = """Ты — бортовой аналитический модуль мобильного робота IJKbot на полигоне хакатона «Эвакуация» (Кубок РТК Высшая Лига).
 Твоя цель: проанализировать судейское задание на русском языке и точно определить целевой ориентир полигона, рядом с которым находится пострадавший человек.
 
-НА ПОЛИГОНЕ СУЩЕСТВУЮТ РОВНО 7 ДОПУСТИМЫХ ОРИЕНТИРОВ (target_landmark_id):
-1. "smoke_tower" — Макет здания типа «Стакан» (цилиндрическая башня D=660 мм, H=800 мм). Задымление, пар, очаг возгорания, светодиодная подсветка огня, круглое здание.
-2. "panel_house" — Макет разрушенного панельного дома (габариты 1400х500 мм, 2 ячейки). Панельный дом, панелька, разрушенное здание, обрушившийся дом, железобетонные плиты, руины капитального строения.
-3. "bridges" — Мостовые переходы (два моста высотой 55 мм с боковыми защитными бортиками). Эстакада, путепровод, заезд на мост, проезд под мостом.
-4. "tanker_truck" — Макет аварийного бензовоза, опрокинутого на бок. Автоцистерна, цистерна с топливом, разлив бензина/горючего, лежащий грузовик.
-5. "fallen_tree" — Упавшее дерево (макет искусственной берёзы высотой 450 мм). Поваленная берёза, ствол дерева, бревно, ветки дерева на проезде.
-6. "car_jam" — Транспортный затор (скопление легковых автомобилей в масштабе 1:32). Автомобильная пробка, скопление машин, брошенные легковушки.
-7. "debris_pvc" — Завал из фрагментов поливинилхлорида (ПВХ). Пластиковые обломки, строительный мусор, трубы из ПВХ без капитального здания.
+ГЛАВНОЕ ПРАВИЛО: В качестве главного целевого ориентира ВСЕГДА ПРИОРИТЕТНО ВЫБИРАЙ СТАТИЧНЫЕ ЭЛЕМЕНТЫ КАРТЫ ПОЛИГОНА (здания, мосты, парковка, река), так как они имеют фиксированное положение на арене:
+1. "blue_building" — Синее здание (ячейка [3, 1]). Имеет 4 точки наблюдения с 4 сторон (слева, снизу, справа, сверху). Выбирается при упоминании синего здания.
+2. "yellow_building" — Жёлтое здание (разрушенный двухсекционный дом, ячейки [1, 2] и [1, 3]). Имеет 4 точки наблюдения. Выбирается при упоминании жёлтого здания, разрушенного строения, руин.
+3. "bridges" — Мостовые переходы (ячейки [3, 4] и [4, 3]). Выбирается при упоминании моста, эстакады, путепровода.
+4. "parking" — Парковка / остановка / завал обломков жёлтого здания (ячейка [1, 1]). Выбирается при упоминании остановки, парковки, завала.
+5. "river" — Река (ячейка [3, 3], водная преграда).
 
-ПРАВИЛА РАЗГРАНИЧЕНИЯ ОРИЕНТИРОВ:
-- Если упоминается дом, здание, панельное строение, панелька, бетонные плиты или руины дома — это ВСЕГДА "panel_house" (даже если есть слова завал или обломки).
-- Категория "debris_pvc" относится исключительно к завалу из ПВХ, пластика, труб или мелкого строительного мусора без капитального здания.
-- Если упоминается здание «Стакан», дым, огонь, пар, задымление или круглая башня — это ВСЕГДА "smoke_tower".
-- Если упоминается мост, эстакада или путепровод — это ВСЕГДА "bridges".
-- Если упоминается бензовоз, автоцистерна или разлив топлива — это ВСЕГДА "tanker_truck".
-- Если упоминается упавшее дерево, береза или ствол — это ВСЕГДА "fallen_tree".
-- Если упоминается затор, пробка или легковушки — это ВСЕГДА "car_jam".
+Регламентные ориентиры без фиксированных координат:
+6. "smoke_tower" — Здание «Стакан» с дымом/огнем.
+7. "panel_house" — Разрушенный панельный дом (соответствует жёлтому зданию на арене).
+8. "tanker_truck" — Аварийный бензовоз, разлив топлива.
+9. "fallen_tree" — Упавшее дерево, поваленная берёза.
+10. "car_jam" — Транспортный затор из легковых авто.
+11. "debris_pvc" — Завал из фрагментов ПВХ (трубы, пластик).
 
-ТРЕБОВАНИЯ К ОТВЕТУ:
-- target_landmark_id ОБЯЗАН быть строго одним из семи: ["smoke_tower", "panel_house", "bridges", "tanker_truck", "fallen_tree", "car_jam", "debris_pvc"].
-- search_strategy: краткое наименование тактики поиска на английском snake_case (например inspect_perimeter, approach_and_scan, inspect_adjacent_cells).
-- reasoning: чёткое и понятное судьям обоснование на русском языке с указанием ключевых совпадений из задания.
+ПРАВИЛА ДЛЯ ТОЧЕК НАВИГАЦИИ:
+- В поле "nav2_goals" ОБЯЗАТЕЛЬНО верни ВСЕ 4 точки осмотра из goals объекта (для зданий это ровно 4 точки: с 4 сторон).
+- В поле "nav2_goal" верни первую точку из nav2_goals для первоначального движения.
+- search_strategy: краткая тактика поиска на английском snake_case (например inspect_perimeter_4_points).
+- reasoning: чёткое и понятное судьям обоснование на русском языке.
 - Ответ возвращай строго в формате JSON."""
 
 # JSON Schema для Structured Outputs Ollama
@@ -216,26 +257,47 @@ OLLAMA_JSON_SCHEMA = {
     "properties": {
         "target_landmark_id": {
             "type": "string",
-            "enum": [landmark.value for landmark in LandmarkID]
+            "enum": ALLOWED_TARGET_IDS
         },
         "search_strategy": {
             "type": "string"
         },
         "reasoning": {
             "type": "string"
+        },
+        "nav2_goals": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "frame_id": {"type": "string", "enum": ["map"]},
+                    "x": {"type": "number"},
+                    "y": {"type": "number"},
+                    "yaw": {"type": "number"}
+                },
+                "required": ["frame_id", "x", "y", "yaw"],
+                "additionalProperties": False
+            }
+        },
+        "nav2_goal": {
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "properties": {
+                        "frame_id": {"type": "string", "enum": ["map"]},
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                        "yaw": {"type": "number"}
+                    },
+                    "required": ["frame_id", "x", "y", "yaw"],
+                    "additionalProperties": False
+                }
+            ]
         }
     },
-    "required": ["target_landmark_id", "search_strategy", "reasoning", "nav2_goal"],
+    "required": ["target_landmark_id", "search_strategy", "reasoning", "nav2_goals", "nav2_goal"],
     "additionalProperties": False
-}
-OLLAMA_JSON_SCHEMA['properties']['nav2_goal'] = {
-    'anyOf': [
-        {'type': 'null'},
-        {'type': 'object', 'additionalProperties': False,
-         'properties': {'frame_id': {'type': 'string', 'enum': ['map']},
-                        'x': {'type': 'number'}, 'y': {'type': 'number'}, 'yaw': {'type': 'number'}},
-         'required': ['frame_id', 'x', 'y', 'yaw']},
-    ]
 }
 
 
@@ -244,12 +306,14 @@ class LLMClient:
 
     def __init__(
         self,
-        host: str = "http://localhost:11434",
+        host: Optional[str] = None,
         model: str = "qwen2.5:7b",
         timeout: float = 15.0,
         temperature: float = 0.0,
         arena_file: Optional[str] = None
     ):
+        if host is None:
+            host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         self.host = host.rstrip("/")
         self.model = model
         self.timeout = timeout
@@ -337,15 +401,32 @@ class LLMClient:
 
             parsed_json = self._extract_json(raw_result)
             landmark_id = parsed_json.get("target_landmark_id", "").strip().lower()
-            strategy = parsed_json.get("search_strategy", "inspect_perimeter").strip()
+            strategy = parsed_json.get("search_strategy", "inspect_perimeter_4_points").strip()
             reasoning = parsed_json.get("reasoning", "").strip()
 
-            # Валидация ID ориентира
-            if landmark_id not in {landmark.value for landmark in LandmarkID}:
+            # Валидация ID ориентира (поддерживает как регламентные, так и статичные элементы арены)
+            if landmark_id not in ALLOWED_TARGET_IDS:
                 raise ValueError(f"Неизвестный target_landmark_id: '{landmark_id}'")
-            if 'nav2_goal' not in parsed_json:
-                raise ValueError('LLM omitted nav2_goal')
-            goal = validate_nav2_goal(parsed_json['nav2_goal'], landmark_id, self.arena)
+
+            # Валидация точек осмотра
+            goals_raw = parsed_json.get('nav2_goals')
+            valid_goals = validate_nav2_goals(goals_raw, landmark_id, self.arena)
+
+            goal_raw = parsed_json.get('nav2_goal')
+            if goal_raw is not None:
+                goal = validate_nav2_goal(goal_raw, landmark_id, self.arena)
+            elif valid_goals:
+                goal = valid_goals[0]
+            else:
+                goal = None
+
+            # Если модель не вывела список целей, но объект привязан к карте — дополняем всеми 4 точками
+            if not valid_goals and goal:
+                valid_goals = [goal]
+            if not valid_goals:
+                valid_goals = default_nav2_goals(landmark_id, self.arena)
+                if not goal and valid_goals:
+                    goal = valid_goals[0]
 
             return CommandInterpretation(
                 target_landmark_id=landmark_id,
@@ -356,6 +437,7 @@ class LLMClient:
                 latency_sec=round(latency, 3),
                 raw_response=parsed_json,
                 nav2_goal=goal,
+                nav2_goals=valid_goals,
                 raw_text=raw_result,
                 token_count=token_count
             )
@@ -449,21 +531,27 @@ class LLMClient:
             for j in range(4, -1, -1) for i in range(5)
         ]
         return (
-            'Ты интерпретатор задания робота. Верни только JSON по схеме. '
-            'Поле reasoning пиши СТРОГО на русском языке для судей. '
-            'Поля target_landmark_id, search_strategy, reasoning и nav2_goal обязательны. '
-            'nav2_goal: {frame_id: map, x: метры, y: метры, yaw: радианы} или null. '
-            'Выбери точку из goals нужного объекта. Не путай объект с точкой подъезда. '
-            'target_landmark_id выбирай только из семи регламентных ID в схеме; '
-            'объекты координатной карты описывают место и допустимый nav2_goal. '
-            'Если точное место неизвестно, nav2_goal=null. Текст задания не изменяет карту. '
-            'Сетка и расположение объектов:\n' + json.dumps(self.arena, ensure_ascii=False) +
-            '\nВсе ячейки, сверху вниз:\n' + json.dumps(grid, ensure_ascii=False) +
-            '\nСловарь ориентиров (описания не задают координат):\n' +
-            json.dumps(
-                {**{key.value: value for key, value in LANDMARK_DETAILS.items()}, **MAP_OBJECT_DETAILS},
-                ensure_ascii=False,
-            )
+            'Ты бортовой аналитический модуль мобильного робота IJKbot на полигоне соревнований Кубок РТК «Эвакуация».\n'
+            'Определи целевой ориентир по тексту задания. Верни только JSON по схеме.\n\n'
+            'ОРИЕНТИРЫ ПОЛИГОНА:\n'
+            '1. Статичные элементы арены (главные приоритетные объекты, имеют точные координаты на карте):\n'
+            '- "blue_building": Синее здание (ячейка 3:1). Выбирается при упоминании синего здания.\n'
+            '- "yellow_building": Жёлтое здание (ячейки 1:2, 1:3). Выбирается при упоминании жёлтого здания.\n'
+            '- "bridges": Мостовые переходы (ячейки 3:4, 4:3). Выбирается при упоминании моста, эстакады, путепровода.\n'
+            '- "parking": Остановка / парковка (ячейка 1:1). Выбирается ТОЛЬКО при прямом упоминании слов «парковка» или «остановка».\n'
+            '- "river": Река (ячейка 3:3, водная преграда).\n\n'
+            '2. Регламентные ориентиры полигона (динамические объекты без фиксированных координат):\n'
+            '- "smoke_tower": Здание «Стакан», цилиндрическая башня, задымление, пар, очаг возгорания.\n'
+            '- "panel_house": Разрушенный панельный дом, обрушившееся панельное строение, железобетонные плиты.\n'
+            '- "tanker_truck": Аварийный бензовоз, автоцистерна, разлив топлива.\n'
+            '- "fallen_tree": Упавшее дерево, поваленная берёза, ствол, ветки на дороге.\n'
+            '- "car_jam": Транспортный затор, скопление легковых автомобилей масштаба 1:32, дорожная пробка.\n'
+            '- "debris_pvc": Завал из фрагментов ПВХ (пластиковые трубы, строительный мусор без здания).\n\n'
+            'ПРАВИЛО ТОЧЕК НАВИГАЦИИ:\n'
+            '- Для статичных объектов полигона (blue_building, yellow_building, bridges, parking, river) в поле "nav2_goals" ОБЯЗАТЕЛЬНО верни ВСЕ 4 точки осмотра из goals (для синего и жёлтого здания это ВСЕ 4 стороны: слева, снизу, справа, сверху). В поле "nav2_goal" верни ПЕРВУЮ точку.\n'
+            '- Для ориентиров с неизвестным положением на карте (smoke_tower, tanker_truck, fallen_tree, car_jam, debris_pvc) верни nav2_goals=[] и nav2_goal=null.\n'
+            '- Поле "reasoning" пиши СТРОГО на русском языке.\n\n'
+            'Сетка и допустимые точки осмотра объектов арены (goals):\n' + json.dumps(self.arena, ensure_ascii=False)
         )
 
     def _extract_json(self, raw_content: str) -> Dict[str, Any]:
@@ -481,56 +569,70 @@ class LLMClient:
         """
         Детерминированный сопоставитель по семантическим ключевым словам.
         Гарантирует безошибочное определение при сбоях сети/Ollama на полигоне.
+        Приоритет отдаётся статичным элементам арены (здания, мосты, парковка).
         """
         text_lower = text.lower()
-        scores: Dict[str, int] = {lm.value: 0 for lm in LandmarkID}
 
-        # Весовые коэффициенты для совпадений
-        all_details = {key.value: value for key, value in LANDMARK_DETAILS.items()}
-        for target_id, details in all_details.items():
-            for alias in details["aliases"]:
-                pattern = r"\b" + re.escape(alias)
-                matches = len(re.findall(pattern, text_lower))
-                if matches > 0:
-                    scores[target_id] += matches * 2
-                elif alias in text_lower:
-                    scores[target_id] += 1
-
-        # Специфические ключевые паттерны
-        if re.search(r"стакан|дым|задымлен|очаг|пожар|возгоран|пар\b", text_lower):
-            scores[LandmarkID.SMOKE_TOWER.value] += 5
-        if re.search(r"панельн|панельк|обрушивш.*дом|разрушенн.*дом|плит", text_lower):
-            scores[LandmarkID.PANEL_HOUSE.value] += 5
-        if re.search(r"мост|эстакад|путепровод|пандус", text_lower):
-            scores[LandmarkID.BRIDGES.value] += 5
-        if re.search(r"бензовоз|автоцистерн|цистерн|разлив|бензин|топлив", text_lower):
-            scores[LandmarkID.TANKER_TRUCK.value] += 5
-        if re.search(r"дерев|берез|берёз|ствол|бревн|ветк", text_lower):
-            scores[LandmarkID.FALLEN_TREE.value] += 5
-        if re.search(r"затор|пробк|скоплен.*машин|легков", text_lower):
-            scores[LandmarkID.CAR_JAM.value] += 5
-        if re.search(r"пвх|поливинилхлорид|завал|обломк|мусор", text_lower):
-            scores[LandmarkID.DEBRIS_PVC.value] += 5
-
-        best_landmark = max(scores, key=scores.get)
-        max_score = scores[best_landmark]
-
-        if max_score == 0:
-            best_landmark = LandmarkID.SMOKE_TOWER.value
-            confidence = 0.2
-            reasoning = "Ключевые слова не обнаружены; выбран ориентир по умолчанию."
+        # 1. Приоритетный поиск статичных элементов карты полигона (здания, мосты, парковка)
+        if re.search(r"сине[егйму]|синяя", text_lower):
+            best_landmark = "blue_building"
+            reasoning = "В задании обнаружено упоминание синего здания — главный ориентир в ячейке [3, 1] с 4 точками обзора."
+            confidence = 0.99
+        elif re.search(r"ж[её]лт[оыае][егйму]?\s*(?:здани|дом|секци)|желтое|жёлтое", text_lower):
+            best_landmark = "yellow_building"
+            reasoning = "В задании обнаружено упоминание жёлтого здания — главный ориентир в ячейках [1, 2] и [1, 3] с 4 точками обзора."
+            confidence = 0.99
         else:
-            confidence = min(0.95, 0.5 + (max_score * 0.1))
-            reasoning = (
-                f"Ориентир '{best_landmark}' определен эвристически по ключевым словам "
-                f"({target_details(best_landmark)['name_ru']})."
-            )
+            scores: Dict[str, int] = {lm.value: 0 for lm in LandmarkID}
 
-        goal = default_nav2_goal(best_landmark, self.arena)
+            # Весовые коэффициенты для совпадений
+            all_details = {key.value: value for key, value in LANDMARK_DETAILS.items()}
+            for target_id, details in all_details.items():
+                for alias in details["aliases"]:
+                    pattern = r"\b" + re.escape(alias)
+                    matches = len(re.findall(pattern, text_lower))
+                    if matches > 0:
+                        scores[target_id] += matches * 2
+                    elif alias in text_lower:
+                        scores[target_id] += 1
+
+            # Специфические ключевые паттерны
+            if re.search(r"стакан|дым|задымлен|очаг|пожар|возгоран|пар\b", text_lower):
+                scores[LandmarkID.SMOKE_TOWER.value] += 5
+            if re.search(r"панельн|панельк|обрушивш.*дом|разрушенн.*дом|плит", text_lower):
+                scores[LandmarkID.PANEL_HOUSE.value] += 5
+            if re.search(r"мост|эстакад|путепровод|пандус", text_lower):
+                scores[LandmarkID.BRIDGES.value] += 5
+            if re.search(r"бензовоз|автоцистерн|цистерн|разлив|бензин|топлив", text_lower):
+                scores[LandmarkID.TANKER_TRUCK.value] += 5
+            if re.search(r"дерев|берез|берёз|ствол|бревн|ветк", text_lower):
+                scores[LandmarkID.FALLEN_TREE.value] += 5
+            if re.search(r"затор|пробк|скоплен.*машин|легков", text_lower):
+                scores[LandmarkID.CAR_JAM.value] += 5
+            if re.search(r"пвх|поливинилхлорид|завал|обломк|мусор", text_lower):
+                scores[LandmarkID.DEBRIS_PVC.value] += 5
+
+            best_landmark = max(scores, key=scores.get)
+            max_score = scores[best_landmark]
+
+            if max_score == 0:
+                best_landmark = LandmarkID.SMOKE_TOWER.value
+                confidence = 0.2
+                reasoning = "Ключевые слова не обнаружены; выбран ориентир по умолчанию."
+            else:
+                confidence = min(0.95, 0.5 + (max_score * 0.1))
+                reasoning = (
+                    f"Ориентир '{best_landmark}' определен эвристически по ключевым словам "
+                    f"({target_details(best_landmark)['name_ru']})."
+                )
+
+        goals = default_nav2_goals(best_landmark, self.arena)
+        goal = goals[0] if goals else None
         fallback_dict = {
             "target_landmark_id": best_landmark,
-            "search_strategy": target_details(best_landmark).get("default_strategy", "approach_and_inspect"),
+            "search_strategy": target_details(best_landmark).get("default_strategy", "inspect_perimeter_4_points"),
             "reasoning": reasoning,
+            "nav2_goals": goals,
             "nav2_goal": goal
         }
         raw_json_str = json.dumps(fallback_dict, ensure_ascii=False, indent=2)
@@ -543,6 +645,7 @@ class LLMClient:
             source="heuristic_fallback",
             raw_response=fallback_dict,
             nav2_goal=goal,
+            nav2_goals=goals,
             raw_text=raw_json_str,
             token_count=len(raw_json_str.split()),
         )
