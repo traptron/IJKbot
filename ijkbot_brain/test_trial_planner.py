@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 
@@ -21,7 +21,8 @@ def planner():
         get_clock=Mock(return_value=Mock()),
     )
     for name in ('transition', 'on_goal', 'accepted', 'finished', 'on_odom',
-                 'tick', 'cancel', 'canceled', 'on_stop', 'fail', 'stop_velocity'):
+                 'tick', 'cancel', 'canceled', 'on_stop', 'fail', 'stop_velocity',
+                 'on_velocity'):
         setattr(node, name, getattr(TrialPlanner, name).__get__(node))
     node.send = Mock()
     return node
@@ -113,3 +114,38 @@ def test_busy_and_invalid_goal_do_not_replace_mission():
     node.state = 'IDLE'
     node.on_goal(PoseStamped())
     node.send.assert_not_called()
+
+
+def test_velocity_gate_blocks_nav2_in_all_nonmoving_states():
+    node = planner()
+    node.handle = Mock()
+    command = Twist()
+    command.linear.x = 0.2
+    for state in ('IDLE', 'HOLDING', 'COMPLETE', 'STOPPED', 'FAILED'):
+        node.state = state
+        node.on_velocity(command)
+        assert node.velocity_pub.publish.call_args.args[0].linear.x == 0.0
+
+
+def test_velocity_gate_limits_speed_and_blocks_stale_odom():
+    node = planner()
+    node.handle = Mock()
+    node.last_odom = 10.0
+    command = Twist()
+    command.linear.x = 0.5
+    with patch('ijkbot_brain.trial_planner.time.monotonic', return_value=10.1):
+        node.on_velocity(command)
+    assert node.velocity_pub.publish.call_args.args[0].linear.x == 0.25
+    with patch('ijkbot_brain.trial_planner.time.monotonic', return_value=11.0):
+        node.on_velocity(command)
+    assert node.state == 'FAILED'
+    assert node.velocity_pub.publish.call_args.args[0].linear.x == 0.0
+    node.handle.cancel_goal_async.assert_called_once()
+
+
+def test_result_transport_error_keeps_handle_for_cancellation():
+    node = planner()
+    node.handle = Mock()
+    node.finished(Mock(result=Mock(side_effect=RuntimeError('connection lost'))))
+    assert node.state == 'FAILED'
+    node.handle.cancel_goal_async.assert_called_once()

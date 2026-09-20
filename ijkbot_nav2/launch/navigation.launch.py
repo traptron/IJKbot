@@ -43,7 +43,6 @@ def generate_launch_description():
     declare_use_localization = DeclareLaunchArgument(
         'use_localization',
         default_value='true',
-        description='Запускать ли map_server и AMCL (false при использовании slam_toolbox)'
         description='Запускать ли карту и локализацию (false при использовании slam_toolbox)'
     )
 
@@ -103,8 +102,6 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[configured_params],
-        condition=IfCondition(use_localization)
         parameters=[configured_params]
     )
 
@@ -148,11 +145,9 @@ def generate_launch_description():
         name='amcl',
         output='screen',
         parameters=[configured_params],
-        condition=IfCondition(use_localization)
         condition=IfCondition(use_amcl)
     )
 
-    loc_lifecycle_manager = Node(
     loc_lifecycle_manager_amcl = Node(
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',
@@ -161,10 +156,8 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'autostart': autostart,
-            'autostart': True,
             'node_names': ['map_server', 'amcl']
         }],
-        condition=IfCondition(use_localization)
         condition=IfCondition(use_amcl)
     )
 
@@ -197,7 +190,7 @@ def generate_launch_description():
         parameters=[configured_params],
         remappings=[
             ('cmd_vel', 'cmd_vel_nav'),
-            ('cmd_vel_smoothed', 'cmd_vel')
+            ('cmd_vel_smoothed', LaunchConfiguration('nav_cmd_vel_topic'))
         ]
     )
 
@@ -214,7 +207,8 @@ def generate_launch_description():
         executable='behavior_server',
         name='behavior_server',
         output='screen',
-        parameters=[configured_params]
+        parameters=[configured_params],
+        remappings=[('cmd_vel', 'cmd_vel_nav')]
     )
 
     bt_navigator_node = Node(
@@ -234,7 +228,6 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'autostart': autostart,
-            'autostart': True,
             'node_names': [
                 'controller_server',
                 'velocity_smoother',
@@ -247,6 +240,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('goal_pose_topic', default_value='/goal_pose'),
+        DeclareLaunchArgument('nav_cmd_vel_topic', default_value='/cmd_vel'),
         SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1'),
         declare_use_sim_time,
         declare_params_file,
@@ -259,9 +253,6 @@ def generate_launch_description():
         declare_initial_yaw,
 
         # Локализация
-        map_server_node,
-        amcl_node,
-        loc_lifecycle_manager,
         # Локализация (чисто одометрия + static TF по умолчанию, либо AMCL)
         localization_group,
 
@@ -273,4 +264,3 @@ def generate_launch_description():
         bt_navigator_node,
         nav_lifecycle_manager
     ])
-

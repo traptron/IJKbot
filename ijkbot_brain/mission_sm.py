@@ -420,6 +420,8 @@ class MissionStateMachine:
         with self.lock:
             self.previous_state = self.state
             self.state = MissionState.EMERGENCY_STOP
+            if self.ros_node and getattr(self.ros_node, 'trial_mode', False):
+                self.ros_node.set_trial_stop(True)
             self._publish_zero_velocity()
             self._log("EMERGENCY", "ВНИМАНИЕ: АКТИВИРОВАН E-STOP! Движение мгновенно остановлено.")
 
@@ -427,12 +429,20 @@ class MissionStateMachine:
         """Сброс аварийной остановки."""
         with self.lock:
             if self.state == MissionState.EMERGENCY_STOP:
+                if self.ros_node and getattr(self.ros_node, 'trial_mode', False):
+                    self.ros_node.set_trial_stop(False)
+                    self.state = MissionState.READY_TO_START
+                    return
                 self.state = self.previous_state or MissionState.PREPARATION
                 self._log("SYS", f"E-STOP сброшен. Возврат в состояние: {self.state}")
 
     def toggle_pause(self) -> None:
         """Пауза / возобновление миссии."""
         with self.lock:
+            if not self.mock_mode and self.ros_node and getattr(self.ros_node, 'trial_mode', False):
+                self.trigger_emergency_stop()
+                self._log('WARN', 'Испытание отменено; для повторного запуска сбросьте E-STOP и нажмите Старт')
+                return
             if self.state == MissionState.PAUSED:
                 self.state = self.previous_state or MissionState.READY_TO_START
                 self._log("STATE", f"Миссия возобновлена. Состояние: {self.state}")
@@ -445,6 +455,8 @@ class MissionStateMachine:
     def reset_mission(self) -> None:
         """Полный сброс автомата миссии к исходному состоянию."""
         with self.lock:
+            if not self.mock_mode and self.ros_node and getattr(self.ros_node, 'trial_mode', False):
+                self.ros_node.set_trial_stop(True)
             self.state = MissionState.PREPARATION
             self.previous_state = MissionState.PREPARATION
             self.llm_parsed = False
@@ -470,6 +482,10 @@ class MissionStateMachine:
     # ------------------------------------------------------------------------
     def step(self, dt: float = 0.1) -> None:
         with self.lock:
+            if not self.mock_mode and self.ros_node and getattr(self.ros_node, 'trial_mode', False):
+                # Реальную последовательность ведёт trial_planner; GUI отображает его статус.
+                self.ros_node.publish_mission_status()
+                return
             # 1. Симуляция движения в mock-режиме
             if self.mock_mode and self.current_waypoint and self.state in [
                 MissionState.NAVIGATING_TO_LANDMARK,
@@ -659,14 +675,14 @@ class MissionStateMachine:
     # ROS 2 интеграция (публикация команд и целей)
     # ------------------------------------------------------------------------
     def _publish_goal_pose(self, wp: Waypoint) -> None:
-        if self.ros_node and ROS2_AVAILABLE:
+        if self.ros_node and ROS2_AVAILABLE and not self.mock_mode:
             try:
                 self.ros_node.send_nav_goal(wp.x, wp.y, wp.yaw)
             except Exception as e:
                 self._log("WARN", f"Ошибка отправки цели в Nav2: {e}")
 
     def _publish_zero_velocity(self) -> None:
-        if self.ros_node and ROS2_AVAILABLE:
+        if self.ros_node and ROS2_AVAILABLE and not self.mock_mode:
             try:
                 self.ros_node.send_cmd_vel(0.0, 0.0)
             except Exception:
@@ -730,7 +746,13 @@ class MissionROSNode:
                 if not rclpy.ok():
                     rclpy.init()
                 self.node = Node("mission_state_machine")
-                self.cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
+                self.node.declare_parameter('trial_mode', True)
+                self.trial_mode = self.node.get_parameter('trial_mode').value
+                self.stop_pub = self.node.create_publisher(RosBool, '/emergency_stop', 10)
+                if not self.trial_mode:
+                    self.cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
+                else:
+                    self.node.create_subscription(RosString, '/trial/state', self._trial_callback, 10)
                 self.node.declare_parameter('goal_topic', '/goal_pose')
                 self.goal_pub = self.node.create_publisher(
                     PoseStamped, self.node.get_parameter('goal_topic').value, 10)
@@ -740,7 +762,8 @@ class MissionROSNode:
                 self.node.create_subscription(Odometry, "/odom", self._odom_callback, 10)
                 self.node.create_subscription(RosString, "/victim_status", self._qr_callback, 10)
                 self.node.create_subscription(RosBool, "/victim_detected", self._victim_detected_callback, 10)
-                self.node.create_subscription(RosString, "/mission/judge_task", self._judge_task_callback, 10)
+                if not self.trial_mode:
+                    self.node.create_subscription(RosString, "/mission/judge_task", self._judge_task_callback, 10)
                 self.node.create_subscription(RosBool, "/emergency_stop", self._estop_callback, 10)
 
                 self.sm.ros_node = self
@@ -781,7 +804,39 @@ class MissionROSNode:
 
     def _estop_callback(self, msg: Any) -> None:
         if msg.data:
-            self.sm.trigger_emergency_stop()
+            if getattr(self, 'trial_mode', False):
+                with self.sm.lock:
+                    if not self.sm.mock_mode:
+                        self.sm.state = MissionState.EMERGENCY_STOP
+            else:
+                self.sm.trigger_emergency_stop()
+
+    def set_trial_stop(self, stopped: bool) -> None:
+        if not self.sm.mock_mode:
+            self.stop_pub.publish(RosBool(data=stopped))
+
+    def _trial_callback(self, msg: Any) -> None:
+        states = {
+            'OUTBOUND': MissionState.NAVIGATING_TO_LANDMARK,
+            'HOLDING': MissionState.WAIT_5_SECONDS,
+            'RETURNING': MissionState.RETURNING_HOME,
+            'COMPLETE': MissionState.MISSION_COMPLETE,
+            'FAILED': MissionState.EMERGENCY_STOP,
+            'STOPPED': MissionState.EMERGENCY_STOP,
+        }
+        with self.sm.lock:
+            if self.sm.mock_mode or msg.data not in states:
+                return
+            if getattr(self, '_last_trial_state', None) == msg.data:
+                return
+            self._last_trial_state = msg.data
+            state = states[msg.data]
+            if self.sm.state != state:
+                self.sm._log('NAV', f'Планер испытания: {msg.data}')
+                self.sm.state = state
+                if msg.data == 'COMPLETE':
+                    self.sm.mission_end_time = time.time()
+                    self.sm.save_protocol_to_disk()
 
     def publish_mission_status(self) -> None:
         if self.state_pub:

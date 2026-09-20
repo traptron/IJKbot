@@ -50,6 +50,7 @@ class TrialPlanner(Node):
         self.create_subscription(PoseStamped, '/goal_pose', self.on_goal, 10)
         self.create_subscription(Odometry, '/odom', self.on_odom, qos_profile_sensor_data)
         self.create_subscription(Bool, '/emergency_stop', self.on_stop, 10)
+        self.create_subscription(Twist, '/trial/cmd_vel', self.on_velocity, 10)
         self.create_timer(0.05, self.tick)
         self.transition('IDLE')
 
@@ -72,6 +73,9 @@ class TrialPlanner(Node):
             return
         if not self.client.server_is_ready():
             self.get_logger().error('Nav2 /navigate_to_pose пока недоступен; повторите цель')
+            return
+        if self.last_odom is None or time.monotonic() - self.last_odom > 0.5:
+            self.get_logger().error('Цель отклонена: нет свежей колёсной одометрии')
             return
         self.started = time.monotonic()
         self.stationary_since = None
@@ -104,9 +108,9 @@ class TrialPlanner(Node):
             self.fail(str(exc))
 
     def finished(self, future) -> None:
-        self.handle = None
         try:
             result = future.result()
+            self.handle = None
             if self.state not in ('OUTBOUND', 'RETURNING'):
                 return
             if (result.status != GoalStatus.STATUS_SUCCEEDED
@@ -121,6 +125,23 @@ class TrialPlanner(Node):
                 self.stop_velocity()
         except Exception as exc:
             self.fail(str(exc))
+
+    def on_velocity(self, msg: Twist) -> None:
+        """Single motor command publisher: block Nav2 while holding or stopping."""
+        if (self.estopped or self.state not in ('OUTBOUND', 'RETURNING')
+                or self.handle is None):
+            self.stop_velocity()
+            return
+        if self.last_odom is None or time.monotonic() - self.last_odom > 0.5:
+            self.fail('Потеря колёсной одометрии')
+            return
+        if not all(math.isfinite(v) for v in (msg.linear.x, msg.angular.z)):
+            self.fail('Некорректная скорость от Nav2')
+            return
+        command = Twist()
+        command.linear.x = max(-0.25, min(0.25, msg.linear.x))
+        command.angular.z = max(-1.0, min(1.0, msg.angular.z))
+        self.velocity_pub.publish(command)
 
     def on_odom(self, msg: Odometry) -> None:
         now = time.monotonic()
@@ -139,6 +160,9 @@ class TrialPlanner(Node):
         if self.state in ('OUTBOUND', 'HOLDING', 'RETURNING'):
             if now - self.started >= self.timeout:
                 self.fail('Истекло время миссии')
+        if self.state in ('OUTBOUND', 'RETURNING'):
+            if self.last_odom is None or now - self.last_odom > 0.5:
+                self.fail('Потеря колёсной одометрии')
         if self.state == 'HOLDING':
             self.stop_velocity()
             if not self.stationary or self.last_odom is None or now - self.last_odom > 0.5:
@@ -147,7 +171,7 @@ class TrialPlanner(Node):
                 self.stationary_since = now
             elif now - self.stationary_since >= 5.0:
                 self.send(self.home, 'RETURNING')
-        elif self.state in ('STOPPED', 'FAILED'):
+        elif self.state in ('IDLE', 'COMPLETE', 'STOPPED', 'FAILED'):
             self.stop_velocity()
         self.state_pub.publish(String(data=self.state))
 
