@@ -27,6 +27,7 @@
   <exec_depend>nav2_velocity_smoother</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>ijkbot_brain</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>nav2_rviz_plugins</exec_depend>
 
@@ -34,4 +35,3 @@
     <build_type>ament_cmake</build_type>
   </export>
 </package>
-

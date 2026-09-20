@@ -21,6 +21,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'trial_planner = ijkbot_brain.trial_planner:main',
             'llm_client = ijkbot_brain.llm_client:main',
             'mission_sm = ijkbot_brain.mission_sm:main',
             'dashboard_app = ijkbot_brain.dashboard_app:main',
