@@ -819,9 +819,17 @@ class MissionStateMachine:
             if self.spin_timer >= 1.0:
                 self.spin_phase = "CHECK"
                 self.spin_timer = 0.0
+                deg_turned = (self.spin_step + 1) * 30
+                self._log(
+                    "VISION",
+                    f"Ячейка [{self.current_waypoint_idx + 1}/{total_wp}], "
+                    f"шаг {self.spin_step + 1}/12 ({deg_turned}°): остановка 1.0с выдержана. Делаем снимок и проверяем QR..."
+                )
+                self._trigger_photo_snapshot()
 
         elif self.spin_phase == "CHECK":
             self._publish_zero_velocity()
+            self.spin_timer += dt
 
             # В mock-режиме имитируем чтение QR на 4-м шаге первой ячейки
             if self.mock_mode and not self.qr_code_data:
@@ -847,6 +855,10 @@ class MissionStateMachine:
                 self.wait_timer_start = time.time()
                 self._publish_zero_velocity()
                 self._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
+                return
+
+            # Даем ноде QR-детектора 0.5с на обработку снимка перед переходом к следующему повороту
+            if self.spin_timer < 0.5 and not self.mock_mode:
                 return
 
             # QR не обнаружен — переход к следующему шагу осмотра
@@ -987,6 +999,13 @@ class MissionStateMachine:
             except Exception:
                 pass
 
+    def _trigger_photo_snapshot(self) -> None:
+        if self.ros_node and hasattr(self.ros_node, "trigger_photo_snapshot"):
+            try:
+                self.ros_node.trigger_photo_snapshot()
+            except Exception as e:
+                self._log("WARN", f"Ошибка отправки триггера фотосъемки: {e}")
+
     # ------------------------------------------------------------------------
     # Экспорт и сохранение протокола
     # ------------------------------------------------------------------------
@@ -1041,6 +1060,7 @@ class MissionROSNode:
         self.cmd_vel_pub: Optional[Any] = None
         self.goal_pub: Optional[Any] = None
         self.state_pub: Optional[Any] = None
+        self.photo_trigger_pub: Optional[Any] = None
 
         if ROS2_AVAILABLE:
             try:
@@ -1052,6 +1072,7 @@ class MissionROSNode:
                 self.goal_pub = self.node.create_publisher(
                     PoseStamped, self.node.get_parameter('goal_topic').value, 10)
                 self.state_pub = self.node.create_publisher(RosString, "/mission/state", 10)
+                self.photo_trigger_pub = self.node.create_publisher(RosBool, "/vision/take_photo", 10)
 
                 # Подписки на сенсоры и топики
                 self.node.create_subscription(Odometry, "/odom", self._odom_callback, 10)
@@ -1146,6 +1167,12 @@ class MissionROSNode:
             msg.pose.orientation.z = math.sin(yaw / 2.0)
             msg.pose.orientation.w = math.cos(yaw / 2.0)
             self.goal_pub.publish(msg)
+
+    def trigger_photo_snapshot(self) -> None:
+        if self.photo_trigger_pub and self.node:
+            msg = RosBool()
+            msg.data = True
+            self.photo_trigger_pub.publish(msg)
 
     def spin_in_background(self) -> None:
         if self.node:
