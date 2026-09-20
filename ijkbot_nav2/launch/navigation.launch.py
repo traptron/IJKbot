@@ -213,7 +213,8 @@ def generate_launch_description():
         executable='bt_navigator',
         name='bt_navigator',
         output='screen',
-        parameters=[configured_params]
+        parameters=[configured_params],
+        remappings=[('goal_pose', '/nav2_goal')]
     )
 
     nav_lifecycle_manager = Node(

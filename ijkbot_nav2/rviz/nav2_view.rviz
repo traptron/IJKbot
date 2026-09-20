@@ -248,7 +248,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /goal_pose
+        Value: /nav2_goal
   Transformation:
     Current:
       Class: rviz_default_plugins/TF
@@ -270,4 +270,3 @@ Visualization Manager:
       Target Frame: map
       Value: Orbit (rviz_default_plugins)
       Yaw: 0.0
-

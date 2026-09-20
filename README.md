@@ -11,6 +11,25 @@
 Текущий этап — драйвер дифференциального привода: [инструкция и проверки](sts3215_driver/README.md).
 QR-код состояния пострадавшего считывается отдельной нодой на ноутбуке:
 [инструкция QR Reader](ijkbot_vision/README.md).
+LLM получает сетку и разрешённые точки подъезда из
+[arena.json](ijkbot_brain/config/arena.json), публикует `geometry_msgs/PoseStamped`
+в `/nav2_goal`, а Nav2 принимает этот топик как цель. Координаты вне списка в
+`arena.json` не публикуются.
+
+Для проверки цепочки на ноутбуке запусти Nav2 и один интерпретатор команд:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=42
+ros2 launch ijkbot_nav2 navigation.launch.py
+# в другом терминале
+ros2 run ijkbot_brain llm_client
+```
+
+Текст подаётся в `/mission/judge_task`; результатом будет `PoseStamped` в
+`/nav2_goal`. Для объектов без внесённой точки подъезда LLM должна вернуть
+`nav2_goal: null`, и робот останется на месте.
 Геометрия ведущей пары: диаметр шин 75 мм, ширина 25 мм, колея по центрам 225 мм.
 ID левого/правого привода — 1/2. Расстояние между передней и задней осью — 140 мм.
 

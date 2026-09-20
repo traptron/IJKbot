@@ -43,6 +43,7 @@ try:
         LLMClient,
         LandmarkID,
         LANDMARK_DETAILS,
+        target_details,
         CommandInterpretation
     )
 except ImportError:
@@ -50,6 +51,7 @@ except ImportError:
         LLMClient,
         LandmarkID,
         LANDMARK_DETAILS,
+        target_details,
         CommandInterpretation
     )
 
@@ -243,10 +245,25 @@ class MissionStateMachine:
 
             self.previous_state = self.state
             self.state = MissionState.LLM_PARSING
+            self.command_interpretation = None
+            self.current_waypoint = None
+            self.llm_parsed = False
             self._log("LLM", "Запуск инференса языковой модели Qwen 2.5 7B...")
 
         try:
             interp = self.llm_client.interpret(self.current_task_text)
+            if interp.nav2_goal is not None:
+                from ijkbot_brain.llm_client import load_arena, validate_nav2_goal
+                arena = getattr(self.llm_client, 'arena', None) or load_arena()
+                goal = validate_nav2_goal(interp.nav2_goal, interp.target_landmark_id, arena)
+                waypoint = Waypoint(
+                    x=goal['x'], y=goal['y'], yaw=goal['yaw'],
+                    cell=(int(goal['x'] / 0.8), int(goal['y'] / 0.8)),
+                    name=interp.target_landmark_id)
+            elif self.mock_mode:
+                waypoint = LANDMARK_WAYPOINTS.get(interp.target_landmark_id, START_WAYPOINT)
+            else:
+                raise ValueError('Нет проверенной nav2_goal; уточните объект и его координаты в карте')
         except Exception as e:
             with self.lock:
                 self.state = MissionState.PREPARATION
@@ -257,7 +274,7 @@ class MissionStateMachine:
             self.command_interpretation = interp
             self.llm_parsed = True
             lm_id = interp.target_landmark_id
-            lm_info = LANDMARK_DETAILS.get(LandmarkID(lm_id), {})
+            lm_info = target_details(lm_id)
             lm_name = lm_info.get("name_ru", lm_id)
 
             self._log(
@@ -268,7 +285,7 @@ class MissionStateMachine:
             self._log("LLM", f"Обоснование модели: {interp.reasoning}")
 
             # Назначение путевой точки к ориентиру
-            self.current_waypoint = LANDMARK_WAYPOINTS.get(lm_id, START_WAYPOINT)
+            self.current_waypoint = waypoint
             self.state = MissionState.READY_TO_START
             return interp
 
@@ -610,7 +627,9 @@ class MissionROSNode:
                     rclpy.init()
                 self.node = Node("mission_state_machine")
                 self.cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
-                self.goal_pub = self.node.create_publisher(PoseStamped, "/goal_pose", 10)
+                self.node.declare_parameter('goal_topic', '/nav2_goal')
+                self.goal_pub = self.node.create_publisher(
+                    PoseStamped, self.node.get_parameter('goal_topic').value, 10)
                 self.state_pub = self.node.create_publisher(RosString, "/mission/state", 10)
 
                 # Подписки на сенсоры и топики
@@ -981,7 +1000,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
         # 4. Карточка LLM
         if sm.command_interpretation:
             lm_id = sm.command_interpretation.target_landmark_id
-            lm_info = LANDMARK_DETAILS.get(LandmarkID(lm_id), {})
+            lm_info = target_details(lm_id)
             landmark_name_label.text = f"Ориентир: {lm_info.get('name_ru', lm_id)} [{lm_id}]"
             strategy_label.text = f"Тактика: {sm.command_interpretation.search_strategy} (задержка: {sm.command_interpretation.latency_sec:.2f}с)"
             reasoning_label.text = f"Обоснование модели:\n{sm.command_interpretation.reasoning}"

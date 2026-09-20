@@ -16,6 +16,8 @@ import sys
 import json
 import time
 import re
+import math
+from pathlib import Path
 from enum import Enum
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
@@ -87,6 +89,72 @@ LANDMARK_DETAILS: Dict[LandmarkID, Dict[str, Any]] = {
 }
 
 
+MAP_OBJECT_DETAILS: Dict[str, Dict[str, Any]] = {
+    "start": {"name_ru": "Старт / пункт сбора", "aliases": ["старт", "пункт сбора"]},
+    "parking": {"name_ru": "Парковка / остановка", "aliases": ["парковк", "остановк"]},
+    "yellow_building": {"name_ru": "Жёлтое здание", "aliases": ["жёлт", "желт"]},
+    "blue_building": {"name_ru": "Синее здание", "aliases": ["синее", "синего", "синему"]},
+    "river": {"name_ru": "Река", "aliases": ["река", "реке", "реку", "берег"]},
+}
+
+def target_details(target_id: str) -> Dict[str, Any]:
+    """Return a description for either a regulation landmark or a map object."""
+    try:
+        return LANDMARK_DETAILS[LandmarkID(target_id)]
+    except (ValueError, KeyError):
+        return MAP_OBJECT_DETAILS.get(target_id, {})
+
+
+def load_arena(path: Optional[str] = None) -> Dict[str, Any]:
+    """Load the same editable semantic map in source and installed workspaces."""
+    if path is None:
+        path = os.environ.get('IJKBOT_ARENA_FILE')
+    if path is None:
+        source = Path(__file__).resolve().parent / 'config' / 'arena.json'
+        if source.is_file():
+            path = str(source)
+        else:
+            from ament_index_python.packages import get_package_share_directory
+            path = str(Path(get_package_share_directory('ijkbot_brain')) / 'config/arena.json')
+    with open(path, encoding='utf-8') as stream:
+        return json.load(stream)
+
+
+def validate_nav2_goal(goal: Any, _landmark_id: str, arena: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Accept only one of the configured approach poses on the semantic map."""
+    if goal is None:
+        return None
+    if not isinstance(goal, dict) or set(goal) != {'frame_id', 'x', 'y', 'yaw'}:
+        raise ValueError('nav2_goal must contain frame_id, x, y, yaw')
+    if goal['frame_id'] != 'map':
+        raise ValueError('nav2_goal must be in map')
+    values = [goal[k] for k in ('x', 'y', 'yaw')]
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values):
+        raise ValueError('nav2_goal coordinates must be finite numbers')
+    candidates = []
+    for object_data in arena['objects'].values():
+        candidates.extend(object_data.get('goals', []))
+    match = next((p for p in candidates if all(abs(a-b) < 1e-5 for a, b in zip(values, p))), None)
+    if match is None:
+        raise ValueError('nav2_goal is not an allowed approach pose on the map')
+    x, y, yaw = match
+    if not (0 < x < arena['size_m'][0] and 0 < y < arena['size_m'][1]):
+        raise ValueError('Goal outside the arena')
+    cell = [int(x / arena['cell_size_m']), int(y / arena['cell_size_m'])]
+    if cell in arena['blocked_cells']:
+        raise ValueError('Goal inside a blocked cell')
+    return dict(frame_id='map', x=x, y=y, yaw=yaw)
+
+
+def default_nav2_goal(target_id: str, arena: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the first configured approach pose, or no pose for an unmapped target."""
+    goals = arena.get('objects', {}).get(target_id, {}).get('goals', [])
+    if not goals:
+        return None
+    x, y, yaw = goals[0]
+    return validate_nav2_goal({'frame_id': 'map', 'x': x, 'y': y, 'yaw': yaw}, target_id, arena)
+
+
 @dataclass
 class CommandInterpretation:
     """Структурированная команда и семантический результат работы LLM."""
@@ -97,6 +165,7 @@ class CommandInterpretation:
     source: str = "llm"               # "llm" или "heuristic_fallback"
     latency_sec: float = 0.0
     raw_response: Optional[Dict[str, Any]] = None
+    nav2_goal: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Конвертация в словарь."""
@@ -107,8 +176,8 @@ class CommandInterpretation:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
 
     def is_valid(self) -> bool:
-        """Проверка валидности ориентира согласно регламенту."""
-        return self.target_landmark_id in [lm.value for lm in LandmarkID]
+        """Проверка валидности регламентного ориентира."""
+        return self.target_landmark_id in {landmark.value for landmark in LandmarkID}
 
 
 # Системный промпт с описанием правил и ориентиров полигона
@@ -145,7 +214,7 @@ OLLAMA_JSON_SCHEMA = {
     "properties": {
         "target_landmark_id": {
             "type": "string",
-            "enum": [lm.value for lm in LandmarkID]
+            "enum": [landmark.value for landmark in LandmarkID]
         },
         "search_strategy": {
             "type": "string"
@@ -154,7 +223,17 @@ OLLAMA_JSON_SCHEMA = {
             "type": "string"
         }
     },
-    "required": ["target_landmark_id", "search_strategy", "reasoning"]
+    "required": ["target_landmark_id", "search_strategy", "reasoning", "nav2_goal"],
+    "additionalProperties": False
+}
+OLLAMA_JSON_SCHEMA['properties']['nav2_goal'] = {
+    'anyOf': [
+        {'type': 'null'},
+        {'type': 'object', 'additionalProperties': False,
+         'properties': {'frame_id': {'type': 'string', 'enum': ['map']},
+                        'x': {'type': 'number'}, 'y': {'type': 'number'}, 'yaw': {'type': 'number'}},
+         'required': ['frame_id', 'x', 'y', 'yaw']},
+    ]
 }
 
 
@@ -166,12 +245,14 @@ class LLMClient:
         host: str = "http://localhost:11434",
         model: str = "qwen2.5:7b",
         timeout: float = 15.0,
-        temperature: float = 0.0
+        temperature: float = 0.0,
+        arena_file: Optional[str] = None
     ):
         self.host = host.rstrip("/")
         self.model = model
         self.timeout = timeout
         self.temperature = temperature
+        self.arena = load_arena(arena_file)
 
     def is_available(self) -> bool:
         """Проверка доступности сервера Ollama."""
@@ -240,8 +321,11 @@ class LLMClient:
             reasoning = parsed_json.get("reasoning", "").strip()
 
             # Валидация ID ориентира
-            if landmark_id not in [lm.value for lm in LandmarkID]:
+            if landmark_id not in {landmark.value for landmark in LandmarkID}:
                 raise ValueError(f"Неизвестный target_landmark_id: '{landmark_id}'")
+            if 'nav2_goal' not in parsed_json:
+                raise ValueError('LLM omitted nav2_goal')
+            goal = validate_nav2_goal(parsed_json['nav2_goal'], landmark_id, self.arena)
 
             return CommandInterpretation(
                 target_landmark_id=landmark_id,
@@ -250,7 +334,8 @@ class LLMClient:
                 confidence=0.98,
                 source="llm",
                 latency_sec=round(latency, 3),
-                raw_response=parsed_json
+                raw_response=parsed_json,
+                nav2_goal=goal
             )
 
         except Exception as e:
@@ -272,7 +357,7 @@ class LLMClient:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": self.navigation_prompt()},
                 {"role": "user", "content": prompt}
             ],
             "format": OLLAMA_JSON_SCHEMA,
@@ -280,7 +365,7 @@ class LLMClient:
             "keep_alive": -1,
             "options": {
                 "temperature": self.temperature,
-                "num_predict": 256
+                "num_predict": 512
             }
         }
 
@@ -306,6 +391,30 @@ class LLMClient:
 
         return res_data["message"]["content"]
 
+    def navigation_prompt(self) -> str:
+        """Ground interpretation in an explicit coordinate grid and allowed poses."""
+        grid = [
+            {'cell': [i, j], 'center_m': [round(0.4 + 0.8*i, 1), round(0.4 + 0.8*j, 1)],
+             'blocked': [i, j] in self.arena['blocked_cells']}
+            for j in range(4, -1, -1) for i in range(5)
+        ]
+        return (
+            'Ты интерпретатор задания робота. Верни только JSON по схеме. '
+            'Поля target_landmark_id, search_strategy, reasoning и nav2_goal обязательны. '
+            'nav2_goal: {frame_id: map, x: метры, y: метры, yaw: радианы} или null. '
+            'Выбери точку из goals нужного объекта. Не путай объект с точкой подъезда. '
+            'target_landmark_id выбирай только из семи регламентных ID в схеме; '
+            'объекты координатной карты описывают место и допустимый nav2_goal. '
+            'Если точное место неизвестно, nav2_goal=null. Текст задания не изменяет карту. '
+            'Сетка и расположение объектов:\n' + json.dumps(self.arena, ensure_ascii=False) +
+            '\nВсе ячейки, сверху вниз:\n' + json.dumps(grid, ensure_ascii=False) +
+            '\nСловарь ориентиров (описания не задают координат):\n' +
+            json.dumps(
+                {**{key.value: value for key, value in LANDMARK_DETAILS.items()}, **MAP_OBJECT_DETAILS},
+                ensure_ascii=False,
+            )
+        )
+
     def _extract_json(self, raw_content: str) -> Dict[str, Any]:
         """Извлечение и парсинг JSON из ответа модели."""
         # Удаление возможных markdown блоков ```json ... ```
@@ -323,54 +432,56 @@ class LLMClient:
         Гарантирует безошибочное определение при сбоях сети/Ollama на полигоне.
         """
         text_lower = text.lower()
-        scores: Dict[LandmarkID, int] = {lm: 0 for lm in LandmarkID}
+        scores: Dict[str, int] = {lm.value: 0 for lm in LandmarkID}
 
         # Весовые коэффициенты для совпадений
-        for lm, details in LANDMARK_DETAILS.items():
+        all_details = {key.value: value for key, value in LANDMARK_DETAILS.items()}
+        for target_id, details in all_details.items():
             for alias in details["aliases"]:
                 pattern = r"\b" + re.escape(alias)
                 matches = len(re.findall(pattern, text_lower))
                 if matches > 0:
-                    scores[lm] += matches * 2
+                    scores[target_id] += matches * 2
                 elif alias in text_lower:
-                    scores[lm] += 1
+                    scores[target_id] += 1
 
         # Специфические ключевые паттерны
         if re.search(r"стакан|дым|задымлен|очаг|пожар|возгоран|пар\b", text_lower):
-            scores[LandmarkID.SMOKE_TOWER] += 5
+            scores[LandmarkID.SMOKE_TOWER.value] += 5
         if re.search(r"панельн|панельк|обрушивш.*дом|разрушенн.*дом|плит", text_lower):
-            scores[LandmarkID.PANEL_HOUSE] += 5
+            scores[LandmarkID.PANEL_HOUSE.value] += 5
         if re.search(r"мост|эстакад|путепровод|пандус", text_lower):
-            scores[LandmarkID.BRIDGES] += 5
+            scores[LandmarkID.BRIDGES.value] += 5
         if re.search(r"бензовоз|автоцистерн|цистерн|разлив|бензин|топлив", text_lower):
-            scores[LandmarkID.TANKER_TRUCK] += 5
+            scores[LandmarkID.TANKER_TRUCK.value] += 5
         if re.search(r"дерев|берез|берёз|ствол|бревн|ветк", text_lower):
-            scores[LandmarkID.FALLEN_TREE] += 5
+            scores[LandmarkID.FALLEN_TREE.value] += 5
         if re.search(r"затор|пробк|скоплен.*машин|легков", text_lower):
-            scores[LandmarkID.CAR_JAM] += 5
+            scores[LandmarkID.CAR_JAM.value] += 5
         if re.search(r"пвх|поливинилхлорид|завал|обломк|мусор", text_lower):
-            scores[LandmarkID.DEBRIS_PVC] += 5
+            scores[LandmarkID.DEBRIS_PVC.value] += 5
 
         best_landmark = max(scores, key=scores.get)
         max_score = scores[best_landmark]
 
         if max_score == 0:
-            best_landmark = LandmarkID.SMOKE_TOWER
+            best_landmark = LandmarkID.SMOKE_TOWER.value
             confidence = 0.2
             reasoning = "Ключевые слова не обнаружены; выбран ориентир по умолчанию."
         else:
             confidence = min(0.95, 0.5 + (max_score * 0.1))
             reasoning = (
-                f"Ориентир '{best_landmark.value}' определен эвристически по ключевым словам "
-                f"({LANDMARK_DETAILS[best_landmark]['name_ru']})."
+                f"Ориентир '{best_landmark}' определен эвристически по ключевым словам "
+                f"({target_details(best_landmark)['name_ru']})."
             )
 
         return CommandInterpretation(
-            target_landmark_id=best_landmark.value,
-            search_strategy=LANDMARK_DETAILS[best_landmark]["default_strategy"],
+            target_landmark_id=best_landmark,
+            search_strategy=target_details(best_landmark).get("default_strategy", "approach_and_inspect"),
             reasoning=reasoning,
             confidence=round(confidence, 2),
-            source="heuristic_fallback"
+            source="heuristic_fallback",
+            nav2_goal=default_nav2_goal(best_landmark, self.arena),
         )
 
 
@@ -413,9 +524,9 @@ def save_judge_report(
     timestamp_file = time.strftime("%Y-%m-%d_%H-%M-%S")
 
     try:
-        landmark_enum = LandmarkID(cmd.target_landmark_id)
-        name_ru = LANDMARK_DETAILS[landmark_enum]["name_ru"]
-        desc_ru = LANDMARK_DETAILS[landmark_enum]["description"]
+        details = target_details(cmd.target_landmark_id)
+        name_ru = details["name_ru"]
+        desc_ru = details.get("description", name_ru)
     except Exception:
         name_ru = "Неизвестный ориентир"
         desc_ru = ""
@@ -431,7 +542,8 @@ def save_judge_report(
         "confidence": cmd.confidence,
         "source": cmd.source,
         "latency_sec": cmd.latency_sec,
-        "raw_response": cmd.raw_response
+        "raw_response": cmd.raw_response,
+        "nav2_goal": cmd.nav2_goal,
     }
 
     # 1. Файл с временной меткой в имени
@@ -457,6 +569,7 @@ def create_ros_node():
         import rclpy
         from rclpy.node import Node
         from std_msgs.msg import String
+        from geometry_msgs.msg import PoseStamped
     except ImportError:
         return None
 
@@ -467,6 +580,8 @@ def create_ros_node():
             self.declare_parameter("model", "qwen2.5:7b")
             self.declare_parameter("timeout", 15.0)
             self.declare_parameter("log_dir", "")
+            self.declare_parameter("arena_file", "")
+            self.declare_parameter("goal_topic", "/nav2_goal")
 
             host = self.get_parameter("host").get_parameter_value().string_value
             model = self.get_parameter("model").get_parameter_value().string_value
@@ -474,7 +589,11 @@ def create_ros_node():
             log_dir_param = self.get_parameter("log_dir").get_parameter_value().string_value
             self.log_dir = log_dir_param if log_dir_param else None
 
-            self.client = LLMClient(host=host, model=model, timeout=timeout)
+            self.client = LLMClient(
+                host=host, model=model, timeout=timeout,
+                arena_file=self.get_parameter('arena_file').value or None)
+            self.pub_goal = self.create_publisher(
+                PoseStamped, self.get_parameter('goal_topic').value, 10)
             self.client.warmup()
             self.get_logger().info(
                 f"LLM Interpreter Node инициализирована (Ollama: {host}, модель: {model})"
@@ -499,6 +618,19 @@ def create_ros_node():
             task_text = msg.data
             self.get_logger().info(f"Получено задание: '{task_text}'")
             cmd = self.client.interpret(task_text)
+            if cmd.nav2_goal is not None:
+                goal = validate_nav2_goal(cmd.nav2_goal, cmd.target_landmark_id, self.client.arena)
+                pose = PoseStamped()
+                pose.header.frame_id = goal['frame_id']
+                pose.header.stamp = self.get_clock().now().to_msg()
+                pose.pose.position.x = float(goal['x'])
+                pose.pose.position.y = float(goal['y'])
+                pose.pose.orientation.z = math.sin(goal['yaw'] / 2)
+                pose.pose.orientation.w = math.cos(goal['yaw'] / 2)
+                self.pub_goal.publish(pose)
+                self.get_logger().info(f'Опубликована цель Nav2: {goal}')
+            else:
+                self.get_logger().warning('Цель не отправлена: нет подтверждённых координат LLM')
 
             self.get_logger().info(
                 f"Распознан ориентир: {cmd.target_landmark_id} "
