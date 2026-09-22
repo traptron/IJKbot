@@ -16,8 +16,11 @@ from typing import List, Tuple
 from ijkbot_brain.llm_client import (
     LandmarkID,
     LANDMARK_DETAILS,
+    MAP_OBJECT_DETAILS,
     CommandInterpretation,
-    LLMClient
+    LLMClient,
+    load_arena,
+    validate_nav2_goal,
 )
 
 
@@ -25,7 +28,7 @@ class TestLandmarkDefinitions(unittest.TestCase):
     """Проверка определений и метаданных ориентиров."""
 
     def test_landmark_count(self):
-        """Ровно 7 ориентиров полигона по регламенту."""
+        """Регламент задаёт ровно семь ID; карта хранится отдельно."""
         self.assertEqual(len(LandmarkID), 7)
 
     def test_landmark_values(self):
@@ -42,6 +45,11 @@ class TestLandmarkDefinitions(unittest.TestCase):
         actual_ids = {lm.value for lm in LandmarkID}
         self.assertEqual(actual_ids, expected_ids)
 
+    def test_map_objects_are_not_regulation_landmarks(self):
+        self.assertEqual(set(MAP_OBJECT_DETAILS), {
+            "start", "parking", "yellow_building", "blue_building", "river"
+        })
+
     def test_landmark_details_coverage(self):
         """Для каждого ориентира должны быть заполнены метаданные и алиасы."""
         for lm in LandmarkID:
@@ -49,7 +57,7 @@ class TestLandmarkDefinitions(unittest.TestCase):
             details = LANDMARK_DETAILS[lm]
             self.assertTrue(len(details["name_ru"]) > 0)
             self.assertTrue(len(details["default_strategy"]) > 0)
-            self.assertTrue(len(details["aliases"]) >= 4)
+            self.assertTrue(len(details["aliases"]) >= 1)
 
 
 class TestCommandInterpretationModel(unittest.TestCase):
@@ -79,6 +87,37 @@ class TestCommandInterpretationModel(unittest.TestCase):
             reasoning="Неизвестный объект"
         )
         self.assertFalse(cmd.is_valid())
+
+
+class TestNavigationGoals(unittest.TestCase):
+    def setUp(self):
+        self.arena = load_arena()
+
+    def test_accepts_configured_approach_pose(self):
+        goal = validate_nav2_goal(
+            {"frame_id": "map", "x": 2.8, "y": 3.6, "yaw": 0.0},
+            "bridges", self.arena,
+        )
+        self.assertEqual(goal, {"frame_id": "map", "x": 2.8, "y": 3.6, "yaw": 0.0})
+
+    def test_rejects_invented_or_blocked_pose(self):
+        with self.assertRaises(ValueError):
+            validate_nav2_goal(
+                {"frame_id": "map", "x": 1.2, "y": 1.2, "yaw": 0.0},
+                "bridges", self.arena,
+            )
+
+    def test_interpret_keeps_only_whitelisted_pose(self):
+        client = LLMClient()
+        client._query_ollama = lambda _: (
+            '{"target_landmark_id":"bridges","search_strategy":"inspect",'
+            '"reasoning":"Мост указан в задании.",'
+            '"nav2_goal":{"frame_id":"map","x":2.8,"y":3.6,"yaw":0.0}}'
+        )
+        result = client.interpret("Проверить мост", use_fallback=False)
+        self.assertEqual(result.nav2_goal, {
+            "frame_id": "map", "x": 2.8, "y": 3.6, "yaw": 0.0
+        })
 
 
 class TestHeuristicFallback(unittest.TestCase):

@@ -1,0 +1,8 @@
+qr_reader_node:
+  ros__parameters:
+    image_topic: /camera/color/image_raw/compressed
+    status_topic: /victim_status
+    detected_topic: /vision/qr/detected
+    confirm_frames: 1
+    snapshot_mode: true
+    trigger_topic: /vision/take_photo

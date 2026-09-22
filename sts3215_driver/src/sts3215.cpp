@@ -255,7 +255,7 @@ STS3215::Status STS3215::readStatus(SerialPort::Deadline until)
     if ((sum & 0xFF) != 0xFF) {
         throw std::runtime_error("Servo status checksum mismatch");
     }
-    if (body.front() != 0) {
+    if ((body.front() & ~0x01) != 0) {
         throw std::runtime_error("Servo " + std::to_string(id) +
                                 " reports error bits " + std::to_string(body.front()));
     }

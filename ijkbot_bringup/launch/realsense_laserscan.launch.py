@@ -17,8 +17,8 @@ def generate_launch_description():
     # Аргументы запуска
     declare_color_profile = DeclareLaunchArgument(
         'color_profile',
-        default_value='640x480x15',
-        description='Профиль цветной камеры: разрешение и FPS (напр. 640x480x15)'
+        default_value='640x480x5',
+        description='Профиль цветной камеры: разрешение и FPS (напр. 640x480x5 для одиночных фото)'
     )
 
     declare_depth_profile = DeclareLaunchArgument(
@@ -49,9 +49,9 @@ def generate_launch_description():
             'depth_module.depth_profile': depth_profile,
             'enable_color': 'true',
             'enable_depth': 'true',
-            'align_depth.enable': 'true',
+            'align_depth.enable': 'false',   # Отключено: сжирает 100% CPU Pi 4B, для depthimage_to_laserscan не требуется!
             'pointcloud.enable': 'false',   # Отключено для экономии ресурсов CPU Raspberry Pi 4B
-            'enable_sync': 'true',
+            'enable_sync': 'false',          # Отключено: без align_depth аппаратная синхронизация не нужна
         }.items()
     )
 

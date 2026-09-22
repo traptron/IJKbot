@@ -10,6 +10,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', ['config/arena.json']),
+        ('share/' + package_name + '/launch', ['launch/dashboard_qr.launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -20,7 +22,10 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'trial_planner = ijkbot_brain.trial_planner:main',
             'llm_client = ijkbot_brain.llm_client:main',
+            'mission_sm = ijkbot_brain.mission_sm:main',
+            'dashboard_app = ijkbot_brain.dashboard_app:main',
         ],
     },
 )
