@@ -1315,6 +1315,33 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         "bg-slate-700 hover:bg-slate-600 text-xs text-slate-200"
                     )
 
+                    def handle_check_clock():
+                        try:
+                            from scripts.check_clock_sync import check_clock_sync
+                        except ImportError:
+                            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                            if repo_root not in sys.path:
+                                sys.path.insert(0, repo_root)
+                            from scripts.check_clock_sync import check_clock_sync
+
+                        host = sm.system_launcher.ssh_host
+                        res = check_clock_sync(
+                            host=host,
+                            user=sm.system_launcher.ssh_user,
+                            mock=sm.mock_mode,
+                        )
+                        sm._log("NTP", res.message)
+                        ui.notify(
+                            res.message,
+                            type="positive" if res.passed else (
+                                "warning" if res.status == "FAIL" else "negative"
+                            )
+                        )
+
+                    ui.button("Проверка часов", on_click=handle_check_clock, icon="schedule").classes(
+                        "bg-slate-700 hover:bg-indigo-600 text-xs text-slate-200 font-semibold"
+                    )
+
         # 1. ПАНЕЛЬ ВВОДА ЗАДАНИЯ И КНОПКИ УПРАВЛЕНИЯ
         with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
             with ui.row().classes("w-full items-center gap-2 mb-2"):

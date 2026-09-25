@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -17,8 +17,8 @@ def generate_launch_description():
     # Аргументы запуска
     declare_color_profile = DeclareLaunchArgument(
         'color_profile',
-        default_value='640x480x5',
-        description='Профиль цветной камеры: разрешение и FPS (напр. 640x480x5 для одиночных фото)'
+        default_value='640x480x15',
+        description='Профиль цветной камеры: разрешение и FPS (640x480x15)'
     )
 
     declare_depth_profile = DeclareLaunchArgument(
@@ -49,9 +49,9 @@ def generate_launch_description():
             'depth_module.depth_profile': depth_profile,
             'enable_color': 'true',
             'enable_depth': 'true',
-            'align_depth.enable': 'false',   # Отключено: сжирает 100% CPU Pi 4B, для depthimage_to_laserscan не требуется!
-            'pointcloud.enable': 'false',   # Отключено для экономии ресурсов CPU Raspberry Pi 4B
-            'enable_sync': 'false',          # Отключено: без align_depth аппаратная синхронизация не нужна
+            'align_depth.enable': 'false',   # Отключено: экономия CPU Pi 4B
+            'pointcloud.enable': 'false',    # Отключено для экономии ресурсов
+            'enable_sync': 'false',          # Отключено: без align_depth
         }.items()
     )
 
@@ -76,4 +76,3 @@ def generate_launch_description():
         realsense_launch,
         depthimage_to_laserscan_node,
     ])
-
