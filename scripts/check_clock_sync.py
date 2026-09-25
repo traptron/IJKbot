@@ -325,13 +325,13 @@ def main() -> int:
     parser.add_argument(
         '--host',
         type=str,
-        default=os.environ.get('ROBOT_IP', '192.168.1.10'),
+        default=os.environ.get('PI_HOST', os.environ.get('ROBOT_IP', '192.168.1.10')),
         help='IP-адрес Raspberry Pi (по умолчанию 192.168.1.10)',
     )
     parser.add_argument(
         '--user',
         type=str,
-        default=os.environ.get('ROBOT_USER', 'otmorozki'),
+        default=os.environ.get('PI_USER', os.environ.get('ROBOT_USER', 'otmorozki')),
         help='SSH пользователь на роботе (по умолчанию otmorozki)',
     )
     parser.add_argument(
