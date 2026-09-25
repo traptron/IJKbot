@@ -40,6 +40,10 @@ EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -d|--config)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует пути к .rviz файлу${NC}" >&2
+                exit 1
+            fi
             RVIZ_CONFIG="$2"
             shift 2
             ;;
@@ -57,6 +61,10 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         -f|--fixed-frame)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует имени фрейма${NC}" >&2
+                exit 1
+            fi
             EXTRA_ARGS+=("-f" "$2")
             shift 2
             ;;

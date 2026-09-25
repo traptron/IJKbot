@@ -49,6 +49,7 @@
 | [`start_rviz.sh`](file:///home/lev/IJKbot/scripts/start_rviz.sh) | Запуск RViz2 в Pixi с преднастроенным конфигом `nav2_default_view.rviz` | `./scripts/start_rviz.sh` |
 | [`stop_all.sh`](file:///home/lev/IJKbot/scripts/stop_all.sh) | **Штатная и экстренная остановка**: нулевой Twist, завершение удалённых и локальных процессов | `./scripts/stop_all.sh` |
 | [`teleop.sh`](file:///home/lev/IJKbot/scripts/teleop.sh) | Телеуправление с клавиатуры в топик `/cmd_vel_sm` (приоритет 50 в `twist_mux`) | `./scripts/teleop.sh` |
+| [`update_pi.sh`](file:///home/lev/IJKbot/scripts/update_pi.sh) | **Обновление робота**: git fetch/pull ветки `dev`, безопасный stash, компиляция `colcon build` на Pi/локально | `./scripts/update_pi.sh` |
 | [`check_clock_sync.py`](file:///home/lev/IJKbot/scripts/check_clock_sync.py) | Предстартовая проверка рассинхронизации часов Chrony ($|\Delta t| < 5.0\text{ мс}$) | `python3 scripts/check_clock_sync.py` |
 | [`setup_chrony.sh`](file:///home/lev/IJKbot/scripts/setup_chrony.sh) | Первичная настройка Chrony NTP на Ноутбуке и деплой на Pi по SSH | `./scripts/setup_chrony.sh deploy-pi` |
 
@@ -141,7 +142,8 @@
 3. Завершает локальные процессы на Ноутбуке 2 (`rviz2`, `teleop_twist_keyboard`, фоновые скрипты), не убивая вызывающий родительский процесс.
 
 ```bash
-./scripts/stop_all.sh               # Мягкая штатная остановка
+./scripts/stop_all.sh               # Мягкая штатная остановка робота и Ноутбука 2
+./scripts/stop_all.sh --local       # Локальная остановка только на Ноутбуке 2 (без SSH)
 ./scripts/stop_all.sh --force       # Экстренное принудительное завершение (SIGKILL)
 ./scripts/stop_all.sh --caller-pid $$ # Вызов из родительского скрипта с защитой родителя
 ```
@@ -167,6 +169,36 @@
 - `m` / `,` / `.` — Назад-влево / Назад / Назад-вправо
 - `пробел` — Экстренный СТОП
 - Лимит скорости по умолчанию: $0.20\text{ м/с}$ (максимум по регламенту: $0.25\text{ м/с}$).
+
+---
+
+### 3.7. `update_pi.sh` — Обновление репозитория и сборка пакетов
+Утилита автоматизирует процесс синхронизации кодовой базы на бортовом компьютере Raspberry Pi 4B (или локально на Ноутбуке 2) и последующей сборки пакетов ROS 2:
+1. **Синхронизация Git**:
+   - Выполняет `git fetch` и `git pull` целевой ветки (по умолчанию `dev`).
+   - Поддерживает выбор любой ветки через аргумент `--branch <BRANCH>`.
+2. **Безопасная обработка рабочего каталога**:
+   - При наличии незакоммиченных изменений (например, оперативная калибровка на роботе) автоматически сохраняет их в `git stash push` перед обновлением.
+   - После успешного `git pull` автоматически восстанавливает изменения через `git stash pop`.
+   - При необходимости авто-stash можно отключить флагом `--no-stash`.
+3. **Автоматическая сборка ROS 2 (Jazzy)**:
+   - Автоматически находит измененные ROS-пакеты и выполняет инкрементальную сборку: `colcon build --symlink-install --packages-up-to <pkgs>`.
+   - При установленном флаге `--clean` производит полную очистку (`rm -rf build/ install/ log/`) перед сборкой.
+   - Флаг `--no-build` позволяет только обновить репозиторий без компиляции.
+   - Поддержка явного указания пакетов через `--packages <PKGS>`.
+4. **Удобство запуска (удаленно и локально)**:
+   - **Удаленный режим (по умолчанию на ноутбуке)**: подключается по SSH к Raspberry Pi (`otmorozki@192.168.1.10`), проверяет доступность хоста, запускает процедуру обновления и транслирует лог компиляции в терминал оператора.
+   - **Локальный режим**: выполняется напрямую при запуске на Raspberry Pi (автоопределение) или при передаче флага `--local` на Ноутбуке 2.
+
+```bash
+./scripts/update_pi.sh                         # Удаленное обновление робота по SSH (192.168.1.10, ветка dev)
+./scripts/update_pi.sh --host 172.22.35.154   # Обновление через мобильную точку доступа
+./scripts/update_pi.sh --branch main          # Обновление ветки main
+./scripts/update_pi.sh --clean                # Чистая пересборка всех пакетов на роботе
+./scripts/update_pi.sh --no-build             # Только git pull без colcon build
+./scripts/update_pi.sh --packages sts3215_driver # Сборка только конкретного пакета
+./scripts/update_pi.sh --local                # Обновление и сборка локального репозитория
+```
 
 ---
 

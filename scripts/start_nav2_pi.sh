@@ -66,26 +66,56 @@ print_help() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --host)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует IP-адреса${NC}" >&2
+                print_help
+                exit 1
+            fi
             PI_HOST="$2"
             shift 2
             ;;
         --user)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует имени пользователя${NC}" >&2
+                print_help
+                exit 1
+            fi
             PI_USER="$2"
             shift 2
             ;;
         --initial-x)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует значения координаты X (м)${NC}" >&2
+                print_help
+                exit 1
+            fi
             INITIAL_X="$2"
             shift 2
             ;;
         --initial-y)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует значения координаты Y (м)${NC}" >&2
+                print_help
+                exit 1
+            fi
             INITIAL_Y="$2"
             shift 2
             ;;
         --initial-yaw)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует значения угла Yaw (рад)${NC}" >&2
+                print_help
+                exit 1
+            fi
             INITIAL_YAW="$2"
             shift 2
             ;;
         --map)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует пути к файлу карты (.yaml)${NC}" >&2
+                print_help
+                exit 1
+            fi
             MAP_FILE="$2"
             shift 2
             ;;
@@ -98,6 +128,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --ws)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует пути к рабочей директории${NC}" >&2
+                print_help
+                exit 1
+            fi
             REMOTE_WS="$2"
             shift 2
             ;;
@@ -106,6 +141,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --extra)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует дополнительных аргументов${NC}" >&2
+                print_help
+                exit 1
+            fi
             EXTRA_NAV2_ARGS="$2"
             shift 2
             ;;
@@ -137,34 +177,71 @@ echo -e "${CYAN}----------------------------------------------------------------
 if [[ "${RUN_LOCAL}" == "true" ]]; then
     PIXI_MANIFEST="${PIXI_PROJECT_MANIFEST:-/home/lev/ros2_jazzy/pixi.toml}"
     LOCAL_SETUP="${REPO_DIR}/install/setup.bash"
+    if [[ ! -f "${LOCAL_SETUP}" ]]; then
+        echo -e "${RED}[ERROR] Файл окружения ${LOCAL_SETUP} не найден. Соберите пакеты: colcon build${NC}" >&2
+        exit 1
+    fi
+
     echo -e "${GREEN}[OK] Запуск Nav2 локально через Pixi...${NC}"
     export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
     MAP_PARAM=()
     if [[ -n "${MAP_FILE}" ]]; then
         MAP_PARAM+=("map:=${MAP_FILE}")
     fi
-    if [[ -f "${LOCAL_SETUP}" ]]; then
-        exec pixi run bash -c "source '${LOCAL_SETUP}' && exec ros2 launch ijkbot_nav2 navigation.launch.py \
-            initial_x:='${INITIAL_X}' \
-            initial_y:='${INITIAL_Y}' \
-            initial_yaw:='${INITIAL_YAW}' \
-            use_amcl:='${USE_AMCL}' \
-            ${MAP_PARAM[*]} \
-            ${EXTRA_NAV2_ARGS}"
-    else
-        echo -e "${RED}[ERROR] Файл окружения ${LOCAL_SETUP} не найден. Соберите пакеты: colcon build${NC}" >&2
-        exit 1
-    fi
+
+    LOCAL_PID=""
+    cleanup_local() {
+        trap - SIGINT SIGTERM EXIT
+        echo -e "\n${YELLOW}[INFO] Остановка локальных процессов Nav2...${NC}"
+        if [[ -n "${LOCAL_PID}" ]] && kill -0 "${LOCAL_PID}" 2>/dev/null; then
+            kill -INT "${LOCAL_PID}" 2>/dev/null || true
+        fi
+        sleep 0.5
+        pkill -2 -f 'controller_server' 2>/dev/null || true
+        pkill -2 -f 'planner_server' 2>/dev/null || true
+        pkill -2 -f 'bt_navigator' 2>/dev/null || true
+        pkill -2 -f 'twist_mux' 2>/dev/null || true
+        pkill -2 -f 'map_server' 2>/dev/null || true
+        sleep 0.3
+        pkill -9 -f 'controller_server' 2>/dev/null || true
+        pkill -9 -f 'smoother_server' 2>/dev/null || true
+        pkill -9 -f 'planner_server' 2>/dev/null || true
+        pkill -9 -f 'behavior_server' 2>/dev/null || true
+        pkill -9 -f 'bt_navigator' 2>/dev/null || true
+        pkill -9 -f 'static_transform_publisher' 2>/dev/null || true
+        pkill -9 -f 'twist_mux' 2>/dev/null || true
+        pkill -9 -f 'map_server' 2>/dev/null || true
+        pkill -9 -f 'nav2_' 2>/dev/null || true
+        if [[ -n "${LOCAL_PID}" ]] && kill -0 "${LOCAL_PID}" 2>/dev/null; then
+            kill -9 "${LOCAL_PID}" 2>/dev/null || true
+        fi
+        echo -e "${GREEN}[OK] Локальные ноды навигации Nav2 остановлены.${NC}"
+        exit 0
+    }
+    trap cleanup_local SIGINT SIGTERM EXIT
+
+    pixi run bash -c "source '${LOCAL_SETUP}' && ros2 launch ijkbot_nav2 navigation.launch.py \
+        initial_x:='${INITIAL_X}' \
+        initial_y:='${INITIAL_Y}' \
+        initial_yaw:='${INITIAL_YAW}' \
+        use_amcl:='${USE_AMCL}' \
+        ${MAP_PARAM[*]} \
+        ${EXTRA_NAV2_ARGS}" &
+    LOCAL_PID=$!
+    wait "${LOCAL_PID}" || true
+    cleanup_local
+    exit 0
 fi
 
 # 1. Проверка доступности робота по сети
 echo -ne "${BLUE}[1/2] Проверка связи с роботом (${PI_HOST})... ${NC}"
-SSH_PROBE_OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${PI_HOST}" "true" 2>&1 || true)
+SSH_PROBE_OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${PI_HOST}" "true" 2>&1)
+SSH_PROBE_EXIT=$?
 HOST_UNREACHABLE=false
 
-if echo "${SSH_PROBE_OUT}" | grep -qE "timed out|No route to host|Connection refused|Connection timed out during banner exchange"; then
-    HOST_UNREACHABLE=true
-elif ! ping -c 1 -W 1 "${PI_HOST}" &>/dev/null && [[ -n "${SSH_PROBE_OUT}" ]] && ! echo "${SSH_PROBE_OUT}" | grep -qE "Permission denied"; then
+if [[ ${SSH_PROBE_EXIT} -eq 0 ]] || echo "${SSH_PROBE_OUT}" | grep -q "Permission denied"; then
+    HOST_UNREACHABLE=false
+else
     HOST_UNREACHABLE=true
 fi
 

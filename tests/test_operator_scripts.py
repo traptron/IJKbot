@@ -20,6 +20,7 @@ SCRIPTS = [
     'stop_all.sh',
     'teleop.sh',
     'setup_chrony.sh',
+    'update_pi.sh',
 ]
 
 
@@ -46,6 +47,7 @@ def test_script_syntax_with_bash_n(script_name):
     'start_rviz.sh',
     'stop_all.sh',
     'teleop.sh',
+    'update_pi.sh',
 ])
 def test_script_help_flag(script_name):
     """Verify that every script supports -h/--help and prints useful instructions."""
@@ -244,6 +246,196 @@ def test_documentation_files():
     assert "start_robot_pi.sh" in content
     assert "start_nav2_pi.sh" in content
     assert "start_rviz.sh" in content
+    assert "update_pi.sh" in content
     assert "ROS_DOMAIN_ID=42" in content
     assert "192.168.1.10" in content
+
+
+def test_update_pi_help_options():
+    """Verify update_pi.sh lists all required arguments in help."""
+    script_path = os.path.join(SCRIPTS_DIR, 'update_pi.sh')
+    proc = subprocess.run([script_path, '--help'], capture_output=True, text=True, timeout=5)
+    assert proc.returncode == 0
+    output = proc.stdout + proc.stderr
+    assert "--host" in output
+    assert "--user" in output
+    assert "--branch" in output
+    assert "--no-build" in output
+    assert "--clean" in output
+    assert "--local" in output
+
+
+def test_update_pi_unreachable_host_fails():
+    """Verify update_pi.sh fails when host is unreachable."""
+    script_path = os.path.join(SCRIPTS_DIR, 'update_pi.sh')
+    proc = subprocess.run(
+        [script_path, '--host', '192.0.2.1'],
+        capture_output=True,
+        text=True,
+        timeout=15
+    )
+    assert proc.returncode != 0
+    assert "не отвечает" in proc.stdout or "не отвечает" in proc.stderr or "timed out" in proc.stderr
+
+
+def test_update_pi_unknown_arg():
+    """Verify update_pi.sh rejects unknown arguments with code 1."""
+    script_path = os.path.join(SCRIPTS_DIR, 'update_pi.sh')
+    proc = subprocess.run(
+        [script_path, '--invalid-argument'],
+        capture_output=True,
+        text=True,
+        timeout=5
+    )
+    assert proc.returncode == 1
+    assert "Неизвестный аргумент" in proc.stderr or "Неизвестный аргумент" in proc.stdout
+
+
+def test_update_pi_local_stash_and_no_build(tmp_path):
+    """Verify update_pi.sh safely stashes local changes, updates repo, and skips build with --no-build."""
+    repo_dir = tmp_path / "mock_robot_repo"
+    repo_dir.mkdir()
+    subprocess.run(['git', 'init', '-b', 'dev'], cwd=str(repo_dir), check=True, capture_output=True)
+    subprocess.run(['git', 'config', 'user.name', 'Test User'], cwd=str(repo_dir), check=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=str(repo_dir), check=True)
+
+    test_file = repo_dir / "test.txt"
+    test_file.write_text("initial commit\n")
+    subprocess.run(['git', 'add', 'test.txt'], cwd=str(repo_dir), check=True)
+    subprocess.run(['git', 'commit', '-m', 'initial commit'], cwd=str(repo_dir), check=True)
+
+    test_file.write_text("dirty local change\n")
+
+    script_path = os.path.join(SCRIPTS_DIR, 'update_pi.sh')
+    proc = subprocess.run(
+        [script_path, '--local', '--ws', str(repo_dir), '--branch', 'dev', '--no-build'],
+        capture_output=True,
+        text=True,
+        timeout=15
+    )
+    assert proc.returncode == 0
+    output = proc.stdout + proc.stderr
+    assert "Обнаружены незакоммиченные локальные изменения" in output or "stash" in output
+    assert "Сборка пакетов пропущена по флагу --no-build" in output
+    assert "Обновление робота завершено успешно" in output
+    assert test_file.read_text() == "dirty local change\n"
+
+
+def test_update_pi_clean_flag(tmp_path):
+    """Verify update_pi.sh removes build/ install/ log/ when --clean is specified."""
+    repo_dir = tmp_path / "mock_clean_repo"
+    repo_dir.mkdir()
+    subprocess.run(['git', 'init', '-b', 'dev'], cwd=str(repo_dir), check=True, capture_output=True)
+    subprocess.run(['git', 'config', 'user.name', 'Test User'], cwd=str(repo_dir), check=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=str(repo_dir), check=True)
+
+    test_file = repo_dir / "test.txt"
+    test_file.write_text("v1\n")
+    subprocess.run(['git', 'add', 'test.txt'], cwd=str(repo_dir), check=True)
+    subprocess.run(['git', 'commit', '-m', 'v1'], cwd=str(repo_dir), check=True)
+
+    build_dir = repo_dir / "build"
+    install_dir = repo_dir / "install"
+    log_dir = repo_dir / "log"
+    build_dir.mkdir()
+    install_dir.mkdir()
+    log_dir.mkdir()
+    (build_dir / "dummy.o").write_text("dummy")
+
+    script_path = os.path.join(SCRIPTS_DIR, 'update_pi.sh')
+    proc = subprocess.run(
+        [script_path, '--local', '--ws', str(repo_dir), '--clean', '--no-build'],
+        capture_output=True,
+        text=True,
+        timeout=15
+    )
+    assert proc.returncode == 0
+    assert not build_dir.exists()
+    assert not install_dir.exists()
+    assert not log_dir.exists()
+
+
+@pytest.mark.parametrize("script_and_flag", [
+    ('start_all_laptop2.sh', '--host'),
+    ('start_robot_pi.sh', '--host'),
+    ('start_nav2_pi.sh', '--initial-x'),
+    ('start_rviz.sh', '-d'),
+    ('stop_all.sh', '--host'),
+    ('teleop.sh', '--speed'),
+    ('update_pi.sh', '--host'),
+])
+def test_script_missing_argument_value_fails_cleanly(script_and_flag):
+    """Verify that omitting a required option argument exits with code 1 instead of crashing."""
+    script_name, flag = script_and_flag
+    script_path = os.path.join(SCRIPTS_DIR, script_name)
+    proc = subprocess.run([script_path, flag], capture_output=True, text=True, timeout=5)
+    assert proc.returncode != 0
+    output = proc.stdout + proc.stderr
+    assert "требует" in output or "ERROR" in output or "Использование" in output
+
+
+def test_teleop_negative_speed_clamped():
+    """Verify teleop.sh clamps negative speed magnitude > 0.25 to 0.25 m/s."""
+    script_path = os.path.join(SCRIPTS_DIR, 'teleop.sh')
+    try:
+        proc = subprocess.run(
+            [script_path, '--speed', '-0.5'],
+            capture_output=True,
+            text=True,
+            timeout=1
+        )
+        output = proc.stdout + proc.stderr
+    except subprocess.TimeoutExpired as e:
+        output = (e.stdout or b'').decode('utf-8', errors='ignore') + (e.stderr or b'').decode('utf-8', errors='ignore')
+
+    assert "превышает регламентный лимит" in output
+    assert "0.25" in output
+
+
+def test_teleop_invalid_and_empty_speed_fallback():
+    """Verify teleop.sh falls back to default 0.2 m/s when given empty or non-numeric speed."""
+    script_path = os.path.join(SCRIPTS_DIR, 'teleop.sh')
+    for bad_speed in ['', 'invalid_speed', '0.0']:
+        try:
+            proc = subprocess.run(
+                [script_path, '--speed', bad_speed],
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+            output = proc.stdout + proc.stderr
+        except subprocess.TimeoutExpired as e:
+            output = (e.stdout or b'').decode('utf-8', errors='ignore') + (e.stderr or b'').decode('utf-8', errors='ignore')
+
+        assert "Сброс на дефолт: 0.2" in output or "0.2" in output
+
+
+def test_stop_all_local_flag():
+    """Verify stop_all.sh --local executes quickly without attempting SSH connection."""
+    script_path = os.path.join(SCRIPTS_DIR, 'stop_all.sh')
+    proc = subprocess.run(
+        [script_path, '--local', '--no-vel'],
+        capture_output=True,
+        text=True,
+        timeout=5
+    )
+    assert proc.returncode == 0
+    assert "Локальный режим (--local)" in proc.stdout
+    assert "ВСЕ СИСТЕМЫ УСПЕШНО ОСТАНОВЛЕНЫ" in proc.stdout
+
+
+def test_start_robot_pi_invalid_hostname_fails():
+    """Verify start_robot_pi.sh detects invalid hostname without hanging."""
+    script_path = os.path.join(SCRIPTS_DIR, 'start_robot_pi.sh')
+    proc = subprocess.run(
+        [script_path, '--host', 'non_existent_robot_hostname_xyz'],
+        capture_output=True,
+        text=True,
+        timeout=10
+    )
+    assert proc.returncode != 0
+    output = proc.stdout + proc.stderr
+    assert "не отвечает" in output or "FAIL" in output
+
+
 

@@ -51,14 +51,29 @@ TURN="${DEFAULT_TURN}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --speed)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует числового аргумента (м/с)${NC}" >&2
+                print_help
+                exit 1
+            fi
             SPEED="$2"
             shift 2
             ;;
         --turn)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует числового аргумента (рад/с)${NC}" >&2
+                print_help
+                exit 1
+            fi
             TURN="$2"
             shift 2
             ;;
         --topic)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует аргумента (имя топика)${NC}" >&2
+                print_help
+                exit 1
+            fi
             TARGET_TOPIC="$2"
             shift 2
             ;;
@@ -74,14 +89,45 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ -z "${TARGET_TOPIC}" ]]; then
+    echo -e "${RED}[ERROR] Целевой топик не может быть пустым!${NC}" >&2
+    exit 1
+fi
+
 echo -e "${CYAN}${BOLD}================================================================${NC}"
 echo -e "${CYAN}${BOLD}         IJKbot — Ручное телеуправление с клавиатуры             ${NC}"
 echo -e "${CYAN}${BOLD}================================================================${NC}"
-# Проверка лимита скорости по регламенту (V_max <= 0.25 м/с)
-if awk "BEGIN {exit !(${SPEED} > 0.25)}"; then
+
+# Проверка и валидация скорости
+if [[ -z "${SPEED}" ]] || ! echo "${SPEED}" | grep -qE '^-?[0-9]+(\.[0-9]+)?$'; then
+    echo -e "${YELLOW}[WARN] Некорректное значение скорости ('${SPEED}'). Сброс на дефолт: ${DEFAULT_SPEED} м/с.${NC}"
+    SPEED="${DEFAULT_SPEED}"
+fi
+
+# Проверка лимита скорости по регламенту (0 < |V| <= 0.25 м/с)
+SPEED_ABS=$(awk -v v="${SPEED}" 'BEGIN {print (v < 0 ? -v : v)}')
+if awk -v v="${SPEED_ABS}" 'BEGIN {exit !(v > 0.25)}'; then
     echo -e "${YELLOW}[WARN] Заданная скорость ${SPEED} м/с превышает регламентный лимит соревнований (V_max <= 0.25 м/с)!${NC}"
     echo -e "${YELLOW}[WARN] Скорость автоматически снижена до безопасного максимума: 0.25 м/с.${NC}"
     SPEED="0.25"
+elif awk -v v="${SPEED_ABS}" 'BEGIN {exit !(v <= 0.0)}'; then
+    echo -e "${YELLOW}[WARN] Скорость ${SPEED} м/с неположительная. Сброс на дефолт: ${DEFAULT_SPEED} м/с.${NC}"
+    SPEED="${DEFAULT_SPEED}"
+else
+    SPEED="${SPEED_ABS}"
+fi
+
+# Проверка и валидация угловой скорости
+if [[ -z "${TURN}" ]] || ! echo "${TURN}" | grep -qE '^-?[0-9]+(\.[0-9]+)?$'; then
+    echo -e "${YELLOW}[WARN] Некорректное значение угловой скорости ('${TURN}'). Сброс на дефолт: ${DEFAULT_TURN} рад/с.${NC}"
+    TURN="${DEFAULT_TURN}"
+else
+    TURN_ABS=$(awk -v v="${TURN}" 'BEGIN {print (v < 0 ? -v : v)}')
+    if awk -v v="${TURN_ABS}" 'BEGIN {exit !(v <= 0.0)}'; then
+        TURN="${DEFAULT_TURN}"
+    else
+        TURN="${TURN_ABS}"
+    fi
 fi
 
 echo -e "${BLUE}ROS_DOMAIN_ID:${NC}     ${BOLD}${ROS_DOMAIN_ID}${NC}"

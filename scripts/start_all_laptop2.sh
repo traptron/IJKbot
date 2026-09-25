@@ -93,10 +93,20 @@ print_help() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --host)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует IP-адреса${NC}" >&2
+                print_help
+                exit 1
+            fi
             PI_HOST="$2"
             shift 2
             ;;
         --user)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует имени пользователя${NC}" >&2
+                print_help
+                exit 1
+            fi
             PI_USER="$2"
             shift 2
             ;;
@@ -113,6 +123,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --mode)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует указания режима ('bg', 'tabs', 'windows', 'tmux')${NC}" >&2
+                print_help
+                exit 1
+            fi
             LAUNCH_MODE="$2"
             shift 2
             ;;
@@ -129,22 +144,47 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --threshold-ms)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует значения в мс${NC}" >&2
+                print_help
+                exit 1
+            fi
             THRESHOLD_MS="$2"
             shift 2
             ;;
         --initial-x)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует значения X (м)${NC}" >&2
+                print_help
+                exit 1
+            fi
             INITIAL_X="$2"
             shift 2
             ;;
         --initial-y)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует значения Y (м)${NC}" >&2
+                print_help
+                exit 1
+            fi
             INITIAL_Y="$2"
             shift 2
             ;;
         --initial-yaw)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует значения Yaw (рад)${NC}" >&2
+                print_help
+                exit 1
+            fi
             INITIAL_YAW="$2"
             shift 2
             ;;
         --map)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует пути к файлу карты (.yaml)${NC}" >&2
+                print_help
+                exit 1
+            fi
             MAP_FILE="$2"
             shift 2
             ;;
@@ -174,6 +214,8 @@ echo -e "${BLUE}Режим запуска:${NC}     ${BOLD}${LAUNCH_MODE}${NC} (
 echo -e "${BLUE}Запуск RViz2:${NC}      ${START_RVIZ}"
 echo -e "${CYAN}----------------------------------------------------------------${NC}"
 
+WATCHDOG_PID=""
+
 # Функция гарантированной остановки при завершении
 cleanup_all() {
     if [[ "${CLEANUP_DONE}" == "true" ]]; then
@@ -182,14 +224,23 @@ cleanup_all() {
     CLEANUP_DONE=true
     echo -e "\n${RED}${BOLD}[STOP] Получен сигнал завершения. Остановка всех систем IJKbot...${NC}"
 
+    # Остановка фонового watchdog
+    if [[ -n "${WATCHDOG_PID}" ]] && kill -0 "${WATCHDOG_PID}" 2>/dev/null; then
+        kill -9 "${WATCHDOG_PID}" 2>/dev/null || true
+    fi
+
     # Остановка локального RViz, если был запущен в фоне
     if [[ -n "${RVIZ_PID}" ]] && kill -0 "${RVIZ_PID}" 2>/dev/null; then
         kill -INT "${RVIZ_PID}" 2>/dev/null || true
     fi
 
     # Вызов штатного стоп-скрипта (передаем caller-pid, чтобы стоп-скрипт не убил нас)
+    STOP_OPTS=(--host "${PI_HOST}" --user "${PI_USER}" --caller-pid $$)
+    if [[ "${RUN_LOCAL}" == "true" ]]; then
+        STOP_OPTS+=(--local)
+    fi
     if [[ -f "${SCRIPT_DIR}/stop_all.sh" ]]; then
-        "${SCRIPT_DIR}/stop_all.sh" --host "${PI_HOST}" --user "${PI_USER}" --caller-pid $$ || true
+        "${SCRIPT_DIR}/stop_all.sh" "${STOP_OPTS[@]}" || true
     fi
 
     # Завершение фоновых процессов
@@ -211,13 +262,12 @@ echo -e "${BLUE}${BOLD}[ШАГ 1/5] Проверка сетевого подкл
 check_host_reachability() {
     local target="$1"
     local probe
-    probe=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${target}" "true" 2>&1 || true)
-    if echo "${probe}" | grep -qE "timed out|No route to host|Connection refused|Connection timed out during banner exchange"; then
-        return 1
-    elif ! ping -c 1 -W 1 "${target}" &>/dev/null && [[ -n "${probe}" ]] && ! echo "${probe}" | grep -qE "Permission denied"; then
-        return 1
+    probe=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${target}" "true" 2>&1)
+    local probe_exit=$?
+    if [[ ${probe_exit} -eq 0 ]] || echo "${probe}" | grep -q "Permission denied"; then
+        return 0
     fi
-    return 0
+    return 1
 }
 
 if [[ "${RUN_LOCAL}" == "true" ]]; then
@@ -269,13 +319,17 @@ else
         echo -e "${RED}[FAIL] Ошибка синхронизации времени с Raspberry Pi!${NC}"
         echo -e "${YELLOW}Регламент соревнований требует |Δt| < 5.0 мс для корректной работы TF-дерева и Nav2.${NC}"
         echo -e "${YELLOW}Для настройки выполните: ./scripts/setup_chrony.sh deploy-pi${NC}"
-        echo -e "Хотите продолжить запуск несмотря на рассинхронизацию? [y/N]: "
-        read -r -t 10 response || response="N"
-        if [[ ! "${response}" =~ ^[yYдД]$ ]]; then
-            echo -e "${RED}[ABORT] Запуск отменен оператором из-за рассинхронизации часов.${NC}"
-            exit 1
+        if [[ "${FORCE_START}" == "true" ]]; then
+            echo -e "${YELLOW}[WARN] Флаг --force активен: продолжение запуска вопреки рассинхронизации часов.${NC}"
+        else
+            echo -e "Хотите продолжить запуск несмотря на рассинхронизацию? [y/N]: "
+            read -r -t 10 response || response="N"
+            if [[ ! "${response}" =~ ^[yYдД]$ ]]; then
+                echo -e "${RED}[ABORT] Запуск отменен оператором из-за рассинхронизации часов.${NC}"
+                exit 1
+            fi
+            echo -e "${YELLOW}[WARN] Продолжение запуска с риском рассинхронизации TF!${NC}"
         fi
-        echo -e "${YELLOW}[WARN] Продолжение запуска с риском рассинхронизации TF!${NC}"
     fi
 fi
 
@@ -452,7 +506,30 @@ else
         bg)
             echo -e "${GREEN}${BOLD}Запуск RViz2 в основном окне...${NC}"
             echo -e "${YELLOW}Закрытие окна RViz2 или Ctrl+C штатно остановит все системы робота.${NC}"
+            # Фоновый watchdog для мониторинга liveness процессов robot и nav2 во время работы RViz2
+            (
+                while kill -0 $$ 2>/dev/null; do
+                    if [[ -n "${ROBOT_PID}" ]] && ! kill -0 "${ROBOT_PID}" 2>/dev/null; then
+                        echo -e "\n${RED}[ERROR] Процесс robot.launch.py неожиданно завершился!${NC}" >&2
+                        tail -n 10 "${ROBOT_LOG}" >&2 || true
+                        kill -INT $$ 2>/dev/null || true
+                        break
+                    fi
+                    if [[ -n "${NAV2_PID}" ]] && ! kill -0 "${NAV2_PID}" 2>/dev/null; then
+                        echo -e "\n${RED}[ERROR] Процесс navigation.launch.py неожиданно завершился!${NC}" >&2
+                        tail -n 10 "${NAV2_LOG}" >&2 || true
+                        kill -INT $$ 2>/dev/null || true
+                        break
+                    fi
+                    sleep 2
+                done
+            ) &
+            WATCHDOG_PID=$!
             "${START_RVIZ_CMD}" || true
+            if [[ -n "${WATCHDOG_PID}" ]] && kill -0 "${WATCHDOG_PID}" 2>/dev/null; then
+                kill -9 "${WATCHDOG_PID}" 2>/dev/null || true
+                WATCHDOG_PID=""
+            fi
             ;;
     esac
 fi
