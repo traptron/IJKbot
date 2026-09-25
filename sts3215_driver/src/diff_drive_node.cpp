@@ -17,7 +17,7 @@ DiffDriveNode::DiffDriveNode(const rclcpp::NodeOptions& options)
     mock_ = parameter("mock_hardware", true);
     const auto device = parameter("serial_port", std::string("/dev/ttyUSB0"));
     const auto baudrate = parameter("baudrate", 1000000);
-    const auto timeout_ms = parameter("serial_timeout_ms", 8);
+    const auto timeout_ms = parameter("serial_timeout_ms", 30);
     const auto left_id = parameter("left_wheel_id", 1);
     const auto right_id = parameter("right_wheel_id", 2);
     directions_ = {parameter("left_wheel_direction", -1), parameter("right_wheel_direction", 1)};
@@ -44,7 +44,7 @@ DiffDriveNode::DiffDriveNode(const rclcpp::NodeOptions& options)
         wheel_diameter_ < 0.001 || wheel_diameter_ > 1.0 ||
         separation_ < 0.001 || separation_ > 2.0 || angular_limit_ > 2.0 ||
         linear_limit_ > 0.25 || command_timeout_ > 0.2 || baudrate != 1000000 ||
-        timeout_ms < 1 || timeout_ms > 25 || odom_frame_.empty() || base_frame_.empty() ||
+        timeout_ms < 1 || timeout_ms > 100 || odom_frame_.empty() || base_frame_.empty() ||
         odom_frame_ == base_frame_ || odom_frame_.front() == '/' || base_frame_.front() == '/') {
         throw std::invalid_argument("Invalid drive parameters: check IDs, directions, frames and safety limits");
     }
@@ -158,6 +158,7 @@ void DiffDriveNode::tick()
     const double safe_dt = std::clamp(dt, 0.001, 0.2);
 
     // 1. Опрос энкодеров и расчет одометрии
+    bool tick_had_error = false;
     if (mock_) {
         odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
     } else {
@@ -182,11 +183,44 @@ void DiffDriveNode::tick()
             feedback_ = feedback;
             last_feedback_ = sample_time;
         } catch (const std::exception& error) {
-            // При задержке или таймауте UART мягко экстраполируем одометрию без падения в fault
-            // Прежняя экстраполяция повторно учитывала путь при восстановлении энкодеров.
-            // Без достоверной обратной связи останавливаем привод и сохраняем последнюю позу.
-            latchFault(std::string("Feedback failed: ") + error.what());
-            return;
+            tick_had_error = true;
+            try {
+                if (serial_) {
+                    serial_->discardInput();
+                }
+            } catch (const std::exception& flush_error) {
+                RCLCPP_WARN_THROTTLE(
+                    get_logger(), *get_clock(), 1000,
+                    "Failed to discard UART input: %s", flush_error.what());
+            }
+            ++error_streak_;
+            if (error_streak_ >= kMaxErrorStreak) {
+                latchFault(std::string("UART feedback failed after ") +
+                           std::to_string(error_streak_) + " retries: " + error.what());
+                return;
+            }
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 1000,
+                "UART dropped feedback packet (%zu/%zu): %s",
+                error_streak_, kMaxErrorStreak, error.what());
+
+            // Кратковременная экстраполяция одометрии по предыдущей скорости, чтобы не рвать TF
+            const double left_dist = applied_[0] * safe_dt;
+            const double right_dist = applied_[1] * safe_dt;
+            odometry_.update(left_dist, right_dist, separation_, safe_dt);
+
+            // Продвигаем позицию энкодеров на экстраполированное смещение,
+            // чтобы при следующем успешном чтении не было двойного учета пути
+            for (std::size_t i = 0; i < 2; ++i) {
+                const int delta_ticks = static_cast<int>(std::lround(
+                    (i == 0 ? left_dist : right_dist) / (metres_per_tick_ * directions_[i])));
+                int new_pos = (static_cast<int>(feedback_[i].position) + delta_ticks) % 4096;
+                if (new_pos < 0) {
+                    new_pos += 4096;
+                }
+                feedback_[i].position = static_cast<uint16_t>(new_pos);
+            }
+            last_feedback_ = Clock::now();
         }
     }
 
@@ -208,11 +242,33 @@ void DiffDriveNode::tick()
             }
             servo_->syncWriteSpeeds(ids_, raw);
         } catch (const std::exception& error) {
-            // Игнорируем редкие единичные помехи отправки
-            // Ошибку отправки нельзя скрывать: команда остановки могла не дойти.
-            latchFault(std::string("Speed command failed: ") + error.what());
-            return;
+            try {
+                if (serial_) {
+                    serial_->discardInput();
+                }
+            } catch (const std::exception& flush_error) {
+                RCLCPP_WARN_THROTTLE(
+                    get_logger(), *get_clock(), 1000,
+                    "Failed to discard UART input: %s", flush_error.what());
+            }
+            if (!tick_had_error) {
+                tick_had_error = true;
+                ++error_streak_;
+            }
+            if (error_streak_ >= kMaxErrorStreak) {
+                latchFault(std::string("Speed command failed after ") +
+                           std::to_string(error_streak_) + " retries: " + error.what());
+                return;
+            }
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 1000,
+                "UART dropped speed command packet (%zu/%zu): %s",
+                error_streak_, kMaxErrorStreak, error.what());
         }
+    }
+
+    if (!mock_ && !tick_had_error) {
+        error_streak_ = 0;
     }
 
     publishOdometry();

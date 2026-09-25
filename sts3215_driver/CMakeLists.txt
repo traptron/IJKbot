@@ -90,6 +90,16 @@ if(BUILD_TESTING)
     target_include_directories(test_drive_math PRIVATE include)
     ament_add_gtest(test_protocol tests/test_protocol.cpp)
     target_link_libraries(test_protocol sts3215_hardware util)
+    ament_add_gtest(test_diff_drive tests/test_diff_drive.cpp)
+    target_link_libraries(test_diff_drive sts3215_drive sts3215_hardware util)
+    ament_target_dependencies(test_diff_drive
+        rclcpp
+        geometry_msgs
+        nav_msgs
+        diagnostic_msgs
+        rcl_interfaces
+        tf2_ros
+    )
     ament_add_pytest_test(test_driver_integration tests/test_driver_integration.py
         TIMEOUT 45
         ENV "DRIVER_EXECUTABLE=$<TARGET_FILE:diff_drive_node>"
