@@ -10,11 +10,14 @@ from ijkbot_vision.qr_reader_node import QrReaderNode
 
 
 def harness():
-    return SimpleNamespace(
+    node = SimpleNamespace(
         _confirmation=QrConfirmation(3), _last_frame=0.0,
         _last_publication=0.0, _last_stamp=None, _last_logged_text=None,
         _status_publisher=Mock(), _detected_publisher=Mock(), get_logger=Mock(),
+        _latest_image_msg=None, _snapshot_mode=False,
     )
+    node._process_image = QrReaderNode._process_image.__get__(node)
+    return node
 
 
 def frame(node, stamp, now, result):

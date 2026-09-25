@@ -836,7 +836,6 @@ def save_judge_report(
 def create_ros_node():
     """Создает ROS 2 ноду для обработки текстовых заданий."""
     try:
-        import rclpy
         from rclpy.node import Node
         from std_msgs.msg import String
         from geometry_msgs.msg import PoseStamped

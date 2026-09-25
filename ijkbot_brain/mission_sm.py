@@ -44,7 +44,6 @@ try:
     from ijkbot_brain.llm_client import (
         LLMClient,
         LandmarkID,
-        LANDMARK_DETAILS,
         target_details,
         CommandInterpretation
     )
@@ -52,7 +51,6 @@ except ImportError:
     from llm_client import (
         LLMClient,
         LandmarkID,
-        LANDMARK_DETAILS,
         target_details,
         CommandInterpretation
     )
@@ -60,7 +58,7 @@ except ImportError:
 # NiceGUI
 NICEGUI_AVAILABLE = False
 try:
-    from nicegui import ui, app
+    from nicegui import ui
     NICEGUI_AVAILABLE = True
 except ImportError:
     pass
