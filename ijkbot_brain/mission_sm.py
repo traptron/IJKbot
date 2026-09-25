@@ -32,7 +32,7 @@ ROS2_AVAILABLE = False
 try:
     import rclpy
     from rclpy.node import Node
-    from geometry_msgs.msg import Twist, PoseStamped
+    from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped
     from nav_msgs.msg import Odometry
     from std_msgs.msg import String as RosString, Bool as RosBool
     ROS2_AVAILABLE = True
@@ -376,6 +376,7 @@ class MissionStateMachine:
         self.robot_yaw: float = 0.0
         self.path_history: List[Tuple[float, float]] = [(0.4, 0.4)]
         self.current_waypoint: Optional[Waypoint] = None
+        self.inspection_waypoints: List[Waypoint] = []
 
         # Очередь целевых ячеек поиска (до 4 точек по регламенту)
         self.waypoints_queue: List[Waypoint] = []
@@ -493,6 +494,18 @@ class MissionStateMachine:
                 interp = self.llm_client.interpret(self.current_task_text, on_token=_token_handler)
             except TypeError:
                 interp = self.llm_client.interpret(self.current_task_text)
+            if getattr(interp, 'nav2_goals', None):
+                self.inspection_waypoints = [
+                    Waypoint(
+                        x=g['x'], y=g['y'], yaw=g['yaw'],
+                        cell=(int(g['x'] / 0.8), int(g['y'] / 0.8)),
+                        name=f"{interp.target_landmark_id}_pt_{i+1}"
+                    )
+                    for i, g in enumerate(interp.nav2_goals)
+                ]
+            else:
+                self.inspection_waypoints = []
+
             if interp.nav2_goal is not None:
                 from ijkbot_brain.llm_client import load_arena, validate_nav2_goal
                 arena = getattr(self.llm_client, 'arena', None) or load_arena()
@@ -539,13 +552,19 @@ class MissionStateMachine:
                 f"Целевой ориентир: «{lm_name}» [{lm_id}], тактика: {interp.search_strategy}"
             )
             self._log("LLM", f"Обоснование модели: {interp.reasoning}")
-            if interp.nav2_goal:
+            if getattr(interp, 'nav2_goals', None) and len(interp.nav2_goals) > 1:
+                self._log("LLM", f"Сформировано {len(interp.nav2_goals)} точек осмотра ориентира (nav2_goals):")
+                for i, g in enumerate(interp.nav2_goals, 1):
+                    yaw_deg = int(math.degrees(g['yaw'])) % 360
+                    self._log("LLM", f"  Точка {i}: X={g['x']:.2f}м, Y={g['y']:.2f}м, Yaw={yaw_deg}°")
+            elif interp.nav2_goal:
                 self._log("LLM", f"Сформирован nav2_goal: X={interp.nav2_goal['x']:.2f}м, Y={interp.nav2_goal['y']:.2f}м, Yaw={interp.nav2_goal['yaw']:.2f}")
 
             # Формирование очереди целевых ячеек поиска (до 4 точек по регламенту)
             self.waypoints_queue = []
-            if getattr(interp, "target_waypoints", None):
-                for i, wp_dict in enumerate(interp.target_waypoints[:4]):
+            pts_src = getattr(interp, "nav2_goals", None) or getattr(interp, "target_waypoints", None) or []
+            if pts_src:
+                for i, wp_dict in enumerate(pts_src[:4]):
                     wx = float(wp_dict.get("x", 0.4))
                     wy = float(wp_dict.get("y", 0.4))
                     wyaw = float(wp_dict.get("yaw", 0.0))
@@ -563,6 +582,8 @@ class MissionStateMachine:
 
             if not self.waypoints_queue:
                 self.waypoints_queue = [waypoint]
+
+            self.inspection_waypoints = list(self.waypoints_queue)
 
             self.current_waypoint_idx = 0
             self.current_waypoint = self.waypoints_queue[0]
@@ -1076,6 +1097,7 @@ class MissionROSNode:
 
                 # Подписки на сенсоры и топики
                 self.node.create_subscription(Odometry, "/odom", self._odom_callback, 10)
+                self.node.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_callback, 10)
                 self.node.create_subscription(RosString, "/victim_status", self._qr_callback, 10)
                 self.node.create_subscription(RosBool, "/victim_detected", self._victim_detected_callback, 10)
                 self.node.create_subscription(RosBool, "/vision/qr/detected", self._qr_detected_callback, 10)
@@ -1087,7 +1109,7 @@ class MissionROSNode:
             except Exception as e:
                 print(f"[ROS2] Ошибка запуска ROS 2 ноды: {e}")
 
-    def _odom_callback(self, msg: Any) -> None:
+    def _amcl_callback(self, msg: Any) -> None:
         with self.sm.lock:
             if not self.sm.mock_mode:
                 self.sm.robot_x = msg.pose.pose.position.x
@@ -1096,6 +1118,19 @@ class MissionROSNode:
                 siny_cosp = 2 * (q.w * q.z + q.x * q.y)
                 cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
                 self.sm.robot_yaw = math.atan2(siny_cosp, cosy_cosp)
+                self.sm.path_history.append((self.sm.robot_x, self.sm.robot_y))
+
+    def _odom_callback(self, msg: Any) -> None:
+        with self.sm.lock:
+            if not self.sm.mock_mode:
+                # Если AMCL уже обновил координаты на карте, не перезаписываем относительным одомом
+                if not self.sm.path_history:
+                    self.sm.robot_x = msg.pose.pose.position.x
+                    self.sm.robot_y = msg.pose.pose.position.y
+                    q = msg.pose.pose.orientation
+                    siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+                    cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+                    self.sm.robot_yaw = math.atan2(siny_cosp, cosy_cosp)
                 self.sm.path_history.append((self.sm.robot_x, self.sm.robot_y))
 
     def _victim_detected_callback(self, msg: Any) -> None:
@@ -1800,9 +1835,18 @@ def build_judge_dashboard(sm: MissionStateMachine):
             strategy_label.text = f"Тактика: {sm.command_interpretation.search_strategy} (задержка: {sm.command_interpretation.latency_sec:.2f}с | {sm.command_interpretation.token_count} токенов)"
             reasoning_label.text = f"{sm.command_interpretation.reasoning}"
 
-            # Данные nav2_goal из JSON
+            # Данные nav2_goals / nav2_goal из JSON
+            goals = getattr(sm.command_interpretation, 'nav2_goals', None) or []
             goal = sm.command_interpretation.nav2_goal
-            if goal:
+            if goals and len(goals) > 1:
+                lines = []
+                for i, g in enumerate(goals, 1):
+                    yd = int(math.degrees(g.get('yaw', 0.0))) % 360
+                    lines.append(f"#{i}: [{g.get('x',0.0):.2f}, {g.get('y',0.0):.2f}] {yd}°")
+                nav2_goal_coords_label.text = "  •  ".join(lines)
+                nav2_goal_status.text = f"{len(goals)} ТОЧКИ"
+                nav2_goal_status.classes(replace="text-xs bg-purple-700 text-purple-100 font-bold")
+            elif goal:
                 yaw_deg = int(math.degrees(goal.get('yaw', 0.0))) % 360
                 nav2_goal_coords_label.text = f"frame_id: {goal.get('frame_id','map')} | X: {goal.get('x',0.0):.2f} м | Y: {goal.get('y',0.0):.2f} м | Yaw: {yaw_deg}°"
                 nav2_goal_status.text = "АКТИВНА"
@@ -1912,21 +1956,36 @@ def main(args=None):
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Хост веб-сервера")
     parser.add_argument("--mock", action="store_true", default=True, help="Запуск в режиме симуляции (по умолчанию True)")
     parser.add_argument("--no-mock", dest="mock", action="store_false", help="Запуск с реальным ROS 2 железом")
-    parser.add_argument("--llm-host", type=str, default=os.environ.get("OLLAMA_HOST", "http://192.168.1.20:11434"), help="URL хоста Ollama (например http://192.168.1.20:11434)")
+    parser.add_argument("--llm-host", type=str, default=os.environ.get("OLLAMA_HOST", "http://localhost:11434"), help="URL хоста Ollama (по умолчанию http://localhost:11434)")
     parser.add_argument("--llm-model", type=str, default=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"), help="Имя модели Ollama")
     parser.add_argument("--headless", action="store_true", help="Запуск без Web GUI (только ROS 2)")
 
     clean_args = []
-    if args is None:
-        args = sys.argv[1:]
-    skip_next = False
-    for a in args:
-        if skip_next:
-            skip_next = False
-            continue
+    raw_args = list(args if args is not None else sys.argv[1:])
+    i = 0
+    while i < len(raw_args):
+        a = raw_args[i]
         if a.startswith("--ros-args") or a.startswith("-r"):
+            i += 1
+            continue
+        if a == "--mock" and i + 1 < len(raw_args) and raw_args[i + 1].lower() in {"false", "0", "no"}:
+            clean_args.append("--no-mock")
+            i += 2
+            continue
+        if a == "--mock" and i + 1 < len(raw_args) and raw_args[i + 1].lower() in {"true", "1", "yes"}:
+            clean_args.append("--mock")
+            i += 2
+            continue
+        if a.lower() in {"--mock=false", "--mock=0", "--mock=no"}:
+            clean_args.append("--no-mock")
+            i += 1
+            continue
+        if a.lower() in {"--mock=true", "--mock=1", "--mock=yes"}:
+            clean_args.append("--mock")
+            i += 1
             continue
         clean_args.append(a)
+        i += 1
 
     parsed_args, _ = parser.parse_known_args(clean_args)
 

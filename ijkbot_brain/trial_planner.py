@@ -8,7 +8,19 @@ import rclpy
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-from nav2_msgs.action import NavigateToPose
+try:
+    from nav2_msgs.action import NavigateToPose
+except ImportError:
+    class NavigateToPose:
+        """Fallback mock action class if nav2_msgs is not installed."""
+        class Goal:
+            pass
+        class Result:
+            pass
+        class Feedback:
+            pass
+        class Impl:
+            pass
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data

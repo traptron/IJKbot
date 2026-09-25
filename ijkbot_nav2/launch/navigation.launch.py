@@ -7,8 +7,20 @@ from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVar
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, PushRosNamespace
+from launch.substitution import Substitution
 from launch_ros.descriptions import ParameterFile
-from nav2_common.launch import RewrittenYaml
+
+try:
+    from nav2_common.launch import RewrittenYaml
+except ImportError:
+    class RewrittenYaml(Substitution):
+        def __init__(self, source_file, param_rewrites=None, value_rewrites=None, convert_types=True):
+            super().__init__()
+            self.source_file = source_file
+        def perform(self, context):
+            if hasattr(self.source_file, 'perform'):
+                return self.source_file.perform(context)
+            return str(self.source_file)
 
 
 def generate_launch_description():

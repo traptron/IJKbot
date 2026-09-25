@@ -25,6 +25,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetE
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -99,11 +100,36 @@ def generate_launch_description():
         description='Автоматический перевод lifecycle нод в состояние Active'
     )
 
+    declare_llm_host = DeclareLaunchArgument(
+        'llm_host',
+        default_value='http://localhost:11434',
+        description='Адрес сервера Ollama LLM (например, http://192.168.1.20:11434)'
+    )
+
+    declare_enable_brain = DeclareLaunchArgument(
+        'enable_brain',
+        default_value='true',
+        description='Запускать ли Mission State Machine и Web Dashboard (ijkbot_brain)'
+    )
+
+    declare_enable_nav = DeclareLaunchArgument(
+        'enable_nav',
+        default_value='false',
+        description='Запускать ли стек навигации Nav2 локально (по умолчанию false, т.к. Nav2 работает на роботе)'
+    )
+
+    declare_enable_robot = DeclareLaunchArgument(
+        'enable_robot',
+        default_value='false',
+        description='Запускать ли базовые системы робота локально (по умолчанию false для ноутбука)'
+    )
+
     # 1. Запуск базовых систем робота (Robot State Publisher, RealSense /scan, STS3215 Driver)
     robot_bringup_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_bringup, 'launch', 'robot.launch.py')
         ),
+        condition=IfCondition(LaunchConfiguration('enable_robot')),
         launch_arguments={
             'enable_camera': LaunchConfiguration('enable_camera'),
             'enable_motors': LaunchConfiguration('enable_motors'),
@@ -116,6 +142,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_nav2, 'launch', 'navigation.launch.py')
         ),
+        condition=IfCondition(LaunchConfiguration('enable_nav')),
         launch_arguments={
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'autostart': LaunchConfiguration('autostart'),
@@ -128,7 +155,20 @@ def generate_launch_description():
         }.items()
     )
 
-    # 3. Запуск распознавания QR-кодов (ноутбук)
+    # 3. Бортовой модуль управления миссией и веб-панель (опционально)
+    brain_node = Node(
+        package='ijkbot_brain',
+        executable='dashboard_app',
+        name='mission_state_machine',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_brain')),
+        arguments=['--host', '0.0.0.0', '--port', '8080', '--llm-host', LaunchConfiguration('llm_host')],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }]
+    )
+
+    # 4. Запуск распознавания QR-кодов (ноутбук)
     qr_reader_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_vision, 'launch', 'qr_reader.launch.py')
@@ -149,10 +189,15 @@ def generate_launch_description():
         declare_map,
         declare_use_sim_time,
         declare_autostart,
+        declare_llm_host,
+        declare_enable_brain,
+        declare_enable_nav,
+        declare_enable_robot,
 
         # Включение подсистем
         robot_bringup_launch,
         navigation_launch,
+        brain_node,
         qr_reader_launch,
     ])
 
