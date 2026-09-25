@@ -761,6 +761,157 @@ class TestMissionStateMachine(unittest.TestCase):
                 ros_node.node.destroy_node()
 
 
+    def test_system_launcher_safe_launch_guard_d25(self):
+        """Проверка D25: защита от ошибочного локального запуска на ноутбуке без /dev/ttyUSB0."""
+        from ijkbot_brain.mission_sm import SystemLauncher
+
+        launcher = SystemLauncher()
+
+        # 1. Попытка локального запуска на ноутбуке без mock_hardware и без SSH -> блокировка
+        safe, reason = launcher.check_safe_to_launch(mock_hardware=False, use_ssh=False)
+        self.assertFalse(safe)
+        self.assertIn("/dev/ttyUSB0", reason)
+        self.assertIn("SSH", reason)
+
+        # Вызов start с небезопасными параметрами не должен порождать процесс
+        ok, msg = launcher.start(mock_hardware=False, use_ssh=False)
+        self.assertFalse(ok)
+        self.assertIn("/dev/ttyUSB0", msg)
+        self.assertFalse(launcher.is_alive())
+        self.assertTrue(any("[WARN]" in line and "/dev/ttyUSB0" in line for line in launcher.log_lines))
+
+        # 2. Режим симуляции (mock_hardware=True) разрешён
+        safe_mock, _ = launcher.check_safe_to_launch(mock_hardware=True, use_ssh=False)
+        self.assertTrue(safe_mock)
+
+        # 3. Режим SSH (use_ssh=True) разрешён
+        safe_ssh, _ = launcher.check_safe_to_launch(mock_hardware=False, use_ssh=True)
+        self.assertTrue(safe_ssh)
+
+        # 4. Проверка интеграции со State Machine при mock_mode=False
+        sm_real = MissionStateMachine(mock_mode=False)
+        self.assertFalse(sm_real.mock_mode)
+        safe_sm, reason_sm = sm_real.system_launcher.check_safe_to_launch(
+            mock_hardware=sm_real.mock_mode,
+            use_ssh=False
+        )
+        self.assertFalse(safe_sm)
+        self.assertIn("/dev/ttyUSB0", reason_sm)
+
+    def test_approach_waypoints_exclude_start_coordinates_d18(self):
+        """Проверка D18: отсутствие паразитных координат старта [0.4, 0.4] в точках поиска."""
+        from ijkbot_brain.llm_client import (
+            LANDMARK_CANDIDATE_WAYPOINTS,
+            LandmarkID,
+            get_target_waypoints,
+            load_arena
+        )
+
+        arena = load_arena()
+
+        # 1. Объект parking в конфигурации арены не должен вести в стартовую ячейку [0.4, 0.4]
+        parking_goals = arena.get("objects", {}).get("parking", {}).get("goals", [])
+        for g in parking_goals:
+            self.assertFalse(
+                abs(g[0] - 0.4) < 1e-3 and abs(g[1] - 0.4) < 1e-3,
+                f"Объект parking содержит координаты старта [0.4, 0.4]: {g}"
+            )
+
+        # 2. Все ориентиры в LANDMARK_CANDIDATE_WAYPOINTS не должны содержать [0.4, 0.4]
+        for landmark, candidates in LANDMARK_CANDIDATE_WAYPOINTS.items():
+            for pt in candidates:
+                self.assertFalse(
+                    abs(pt[0] - 0.4) < 1e-3 and abs(pt[1] - 0.4) < 1e-3,
+                    f"Ориентир {landmark} содержит паразитные координаты старта [0.4, 0.4]: {pt}"
+                )
+
+        # 3. get_target_waypoints для всех ориентиров не возвращает [0.4, 0.4]
+        for lid in LandmarkID:
+            wps = get_target_waypoints(lid.value, arena)
+            for wp in wps:
+                self.assertFalse(
+                    abs(wp["x"] - 0.4) < 1e-3 and abs(wp["y"] - 0.4) < 1e-3,
+                    f"get_target_waypoints({lid.value}) вернул точку старта: {wp}"
+                )
+
+    def test_polygon_map_raster_and_thresholds_d15(self):
+        """Проверка D15: разделение зон в растре карты polygon_empty_4x4 и пороги Nav2."""
+        import yaml
+
+        repo_root = Path(__file__).resolve().parent.parent
+        yaml_path = repo_root / "ijkbot_nav2" / "maps" / "polygon_empty_4x4.yaml"
+        pgm_path = repo_root / "ijkbot_nav2" / "maps" / "polygon_empty_4x4.pgm"
+
+        self.assertTrue(yaml_path.exists(), f"Файл {yaml_path} не найден")
+        self.assertTrue(pgm_path.exists(), f"Файл {pgm_path} не найден")
+
+        with open(yaml_path) as f:
+            cfg = yaml.safe_load(f)
+
+        free_thresh = cfg.get("free_thresh")
+        occ_thresh = cfg.get("occupied_thresh")
+
+        self.assertAlmostEqual(free_thresh, 0.15, places=3, msg="free_thresh должен быть 0.15")
+        self.assertAlmostEqual(occ_thresh, 0.65, places=3, msg="occupied_thresh должен быть 0.65")
+
+        with open(pgm_path) as f:
+            lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+
+        tokens = [int(t) for line in lines[3:] for t in line.split()]
+        self.assertEqual(len(tokens), 10000)
+        grid = [tokens[i * 100:(i + 1) * 100] for i in range(100)]
+
+        def get_prob(v: int) -> float:
+            return (255.0 - v) / 255.0
+
+        # Внутреннее пространство полигона (rows 10..89, cols 10..89, кроме препятствий) должно быть 254 (p < 0.15)
+        for r in range(10, 90):
+            for c in range(10, 90):
+                val = grid[r][c]
+                if val != 0:
+                    self.assertEqual(val, 254, f"Пиксель ({r},{c}) внутри полигона должен быть 254 (free), получен {val}")
+                    self.assertLess(get_prob(val), free_thresh)
+
+        # Стены периметра (rows 9, 90 и cols 9, 90) должны быть 0 (p > 0.65)
+        for c in range(9, 91):
+            self.assertEqual(grid[9][c], 0)
+            self.assertEqual(grid[90][c], 0)
+            self.assertGreater(get_prob(0), occ_thresh)
+        for r in range(9, 91):
+            self.assertEqual(grid[r][9], 0)
+            self.assertEqual(grid[r][90], 0)
+            self.assertGreater(get_prob(0), occ_thresh)
+
+        # Внешняя область за стенами должна быть 205 (free_thresh <= p <= occupied_thresh -> unknown)
+        p_205 = get_prob(205)
+        self.assertGreaterEqual(p_205, free_thresh)
+        self.assertLessEqual(p_205, occ_thresh)
+        for r in range(100):
+            for c in range(100):
+                if r < 9 or r > 90 or c < 9 or c > 90:
+                    self.assertEqual(grid[r][c], 205)
+
+    def test_cleanup_parasitic_python_files_d16(self):
+        """Проверка D16: очистка паразитных файлов и симлинков mission_sm.python."""
+        repo_root = Path(__file__).resolve().parent.parent
+        brain_dir = repo_root / "ijkbot_brain"
+        bad_file = brain_dir / "mission_sm.python"
+        bad_symlink = brain_dir / "ijkbot_brain" / "mission_sm.python"
+
+        self.assertFalse(bad_file.exists() or bad_file.is_symlink(), f"Файл {bad_file} не должен существовать")
+        self.assertFalse(bad_symlink.exists() or bad_symlink.is_symlink(), f"Симлинк {bad_symlink} не должен существовать")
+
+        # Никаких файлов с расширением .python не должно быть во всем пакете
+        stray_python_files = list(brain_dir.glob("**/*.python"))
+        self.assertEqual(stray_python_files, [], f"Найдены паразитные .python файлы: {stray_python_files}")
+
+        # Все существующие симлинки в подпакете ijkbot_brain должны указывать на существующие файлы
+        subpkg_symlinks = [p for p in (brain_dir / "ijkbot_brain").iterdir() if p.is_symlink()]
+        self.assertGreater(len(subpkg_symlinks), 0, "Подпакет ijkbot_brain должен содержать рабочие симлинки")
+        for sym in subpkg_symlinks:
+            self.assertTrue(sym.resolve().exists(), f"Битая символическая ссылка: {sym} -> {sym.resolve()}")
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -225,7 +225,7 @@ LANDMARK_CANDIDATE_WAYPOINTS: Dict[str, List[List[float]]] = {
     LandmarkID.FALLEN_TREE.value: [
         [1.2, 0.4, 1.570796],
         [2.0, 0.4, 3.141593],
-        [0.4, 0.4, 0.0],
+        [0.4, 2.0, 0.0],
         [2.0, 1.2, -1.570796],
     ],
     LandmarkID.CAR_JAM.value: [
@@ -236,7 +236,7 @@ LANDMARK_CANDIDATE_WAYPOINTS: Dict[str, List[List[float]]] = {
     ],
     LandmarkID.DEBRIS_PVC.value: [
         [0.4, 1.2, 0.0],
-        [0.4, 0.4, 1.570796],
+        [2.0, 0.4, 1.570796],
         [0.4, 2.0, -1.570796],
         [2.0, 1.2, 3.141593],
     ],
@@ -619,11 +619,6 @@ class LLMClient:
 
     def navigation_prompt(self) -> str:
         """Ground interpretation in an explicit coordinate grid and allowed poses."""
-        grid = [
-            {'cell': [i, j], 'center_m': [round(0.4 + 0.8*i, 1), round(0.4 + 0.8*j, 1)],
-             'blocked': [i, j] in self.arena['blocked_cells']}
-            for j in range(4, -1, -1) for i in range(5)
-        ]
         return (
             'Ты бортовой аналитический модуль мобильного робота IJKbot на полигоне соревнований Кубок РТК «Эвакуация».\n'
             'Определи целевой ориентир по тексту задания. Верни только JSON по схеме.\n\n'

@@ -289,11 +289,32 @@ class SystemLauncher:
             self.process = None
         return False
 
+    @staticmethod
+    def check_safe_to_launch(mock_hardware: bool, use_ssh: bool) -> Tuple[bool, str]:
+        """Защита от ошибочного локального запуска на ноутбуке (D25).
+
+        Если режим не симуляция (mock_hardware == False) и SSH не включен (use_ssh == False),
+        блокировать локальный запуск драйвера моторов на ноутбуке (где нет /dev/ttyUSB0),
+        требуя включения SSH или раздельного запуска.
+        """
+        if not mock_hardware and not use_ssh:
+            return False, (
+                "Локальный запуск реального стека на ноутбуке заблокирован (отсутствует /dev/ttyUSB0). "
+                "Включите переключатель SSH для запуска на роботе (192.168.1.10) или запустите стек на роботе раздельно."
+            )
+        return True, ""
+
     def start(self, mock_hardware: bool = False, use_ssh: bool = False,
               initial_x: float = 0.4, initial_y: float = 0.4, initial_yaw: float = 0.0) -> Tuple[bool, str]:
         if self.is_alive():
             assert self.process
             return True, f"Система уже работает (PID {self.process.pid})"
+
+        safe, reason = self.check_safe_to_launch(mock_hardware=mock_hardware, use_ssh=use_ssh)
+        if not safe:
+            with self.lock:
+                self.log_lines.append(f"[WARN] {reason}")
+            return False, reason
 
         mock_str = "true" if mock_hardware else "false"
 
@@ -1592,6 +1613,15 @@ def build_judge_dashboard(sm: MissionStateMachine):
                     ssh_switch = ui.switch("Запуск по SSH на робота (192.168.1.10)", value=False).classes("text-xs text-slate-300")
 
                     def handle_launch_system():
+                        safe, reason = sm.system_launcher.check_safe_to_launch(
+                            mock_hardware=sm.mock_mode,
+                            use_ssh=ssh_switch.value
+                        )
+                        if not safe:
+                            sm._log("WARN", reason)
+                            ui.notify(reason, type="warning")
+                            return
+
                         ok, msg = sm.system_launcher.start(
                             mock_hardware=sm.mock_mode,
                             use_ssh=ssh_switch.value
@@ -1764,12 +1794,25 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
                         # Шаг 2: System Launch (если ещё не запущен)
                         if not sm.system_launcher.is_alive():
+                            safe, reason = sm.system_launcher.check_safe_to_launch(
+                                mock_hardware=sm.mock_mode,
+                                use_ssh=ssh_switch.value
+                            )
+                            if not safe:
+                                sm._log("WARN", f"Автозапуск стека отклонён: {reason}")
+                                ui.notify(f"2/3 {reason}", type="warning")
+                                return
+
                             ok, msg = sm.system_launcher.start(
                                 mock_hardware=sm.mock_mode,
                                 use_ssh=ssh_switch.value
                             )
+                            if not ok:
+                                sm._log("WARN", f"Автозапуск стека отклонён: {msg}")
+                                ui.notify(f"2/3 {msg}", type="warning")
+                                return
                             sm._log("SYS", f"Автозапуск стека: {msg}")
-                            ui.notify(f"2/3 {msg}", type="info" if ok else "warning")
+                            ui.notify(f"2/3 {msg}", type="info")
 
                         # Шаг 3: Старт миссии
                         sm.start_mission()
