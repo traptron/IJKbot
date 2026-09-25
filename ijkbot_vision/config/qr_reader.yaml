@@ -3,6 +3,11 @@ qr_reader_node:
     image_topic: /camera/color/image_raw/compressed
     status_topic: /victim_status
     detected_topic: /vision/qr/detected
+    qr_image_topic: /vision/qr/image/compressed
+    mission_state_topic: /mission/state
     confirm_frames: 1
-    snapshot_mode: true
+    snapshot_mode: false
+    state_filter_enabled: true
     trigger_topic: /vision/take_photo
+    save_snapshot: true
+    log_dir: log

@@ -94,6 +94,25 @@ class TestMissionStateMachine(unittest.TestCase):
         self.sm.reset_mission()
         self.assertIsNone(self.sm.latest_qr_text)
 
+    def test_qr_image_callback_stores_bytes_and_b64(self):
+        import base64
+        from types import SimpleNamespace
+        from ijkbot_brain.mission_sm import MissionROSNode
+        wrapper = SimpleNamespace(sm=self.sm)
+        dummy_jpeg = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00'
+        message = SimpleNamespace(data=dummy_jpeg)
+        MissionROSNode._qr_image_callback(wrapper, message)
+        self.assertEqual(self.sm.latest_qr_image_bytes, dummy_jpeg)
+        expected_b64 = base64.b64encode(dummy_jpeg).decode('ascii')
+        self.assertEqual(self.sm.latest_qr_image_b64, expected_b64)
+        # Empty message data should be ignored
+        MissionROSNode._qr_image_callback(wrapper, SimpleNamespace(data=b''))
+        self.assertEqual(self.sm.latest_qr_image_bytes, dummy_jpeg)
+        # Reset clears image
+        self.sm.reset_mission()
+        self.assertIsNone(self.sm.latest_qr_image_bytes)
+        self.assertIsNone(self.sm.latest_qr_image_b64)
+
 
     def setUp(self):
         self.mock_llm = DummyLLMClient("smoke_tower")

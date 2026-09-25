@@ -19,6 +19,7 @@ import time
 import math
 import json
 import signal
+import base64
 import subprocess
 import threading
 from pathlib import Path
@@ -34,6 +35,7 @@ try:
     from rclpy.node import Node
     from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped
     from nav_msgs.msg import Odometry
+    from sensor_msgs.msg import CompressedImage
     from std_msgs.msg import String as RosString, Bool as RosBool
     ROS2_AVAILABLE = True
 except ImportError:
@@ -437,6 +439,8 @@ class MissionStateMachine:
         self.qr_code_data: Optional[str] = None
         self.latest_qr_text: Optional[str] = None
         self.latest_qr_received_at: Optional[str] = None
+        self.latest_qr_image_bytes: Optional[bytes] = None
+        self.latest_qr_image_b64: Optional[str] = None
 
         # Состояние стриминга токенов LLM
         self.streaming_tokens: str = ""
@@ -769,6 +773,8 @@ class MissionStateMachine:
             self.qr_code_data = None
             self.latest_qr_text = None
             self.latest_qr_received_at = None
+            self.latest_qr_image_bytes = None
+            self.latest_qr_image_b64 = None
             self._publish_zero_velocity()
             self._log("SYS", "Сброс миссии выполнен. Все состояния и координаты возвращены в исходное положение.")
 
@@ -1138,6 +1144,7 @@ class MissionStateMachine:
                 "qr_code_data": self.qr_code_data,
                 "latest_qr_text": self.latest_qr_text,
                 "latest_qr_received_at": self.latest_qr_received_at,
+                "has_qr_snapshot": self.latest_qr_image_bytes is not None,
                 "chronology": [asdict(l) for l in self.logs]
             }
 
@@ -1219,6 +1226,7 @@ class MissionROSNode:
                 self.node.create_subscription(Odometry, "/odom", self._odom_callback, 10)
                 self.node.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_callback, 10)
                 self.node.create_subscription(RosString, "/victim_status", self._qr_callback, 10)
+                self.node.create_subscription(CompressedImage, "/vision/qr/image/compressed", self._qr_image_callback, 10)
                 self.node.create_subscription(RosBool, "/victim_detected", self._victim_detected_callback, 10)
                 self.node.create_subscription(RosBool, "/vision/qr/detected", self._qr_detected_callback, 10)
                 self.node.create_subscription(RosString, "/mission/judge_task", self._judge_task_callback, 10)
@@ -1337,10 +1345,22 @@ class MissionROSNode:
                     self.sm.qr_scanned = True
                     self.sm._log("QR", f"Получены данные QR-кода из топика /victim_status:\n{msg.data.strip()}")
                     self.sm.state = MissionState.WAIT_5_SECONDS
-                    self.cancel_nav_goal()
+                    if hasattr(self, 'cancel_nav_goal'):
+                        self.cancel_nav_goal()
                     self.sm.wait_timer_start = time.time()
                     self.sm._publish_zero_velocity()
                     self.sm._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
+
+    def _qr_image_callback(self, msg: Any) -> None:
+        try:
+            data = bytes(msg.data)
+            if not data:
+                return
+            with self.sm.lock:
+                self.sm.latest_qr_image_bytes = data
+                self.sm.latest_qr_image_b64 = base64.b64encode(data).decode('ascii')
+        except Exception as e:
+            self.sm._log("WARN", f"Ошибка обработки снимка QR: {e}")
 
     def _estop_callback(self, msg: Any) -> None:
         if msg.data:
@@ -1900,6 +1920,10 @@ def build_judge_dashboard(sm: MissionStateMachine):
                     qr_text_label = ui.label("Ожидание считывания кода при приближении к человеку...").classes(
                         "text-xs font-mono text-slate-300 whitespace-pre-line bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/50 w-full"
                     )
+                    qr_image_preview = ui.image().classes(
+                        "w-full max-h-48 object-contain rounded-lg border border-slate-700 mt-2 bg-slate-950"
+                    )
+                    qr_image_preview.visible = False
 
         # 3. НИЖНИЙ БЛОК: ПРОТОКОЛ И ХРОНОЛОГИЯ СОБЫТИЙ (ВО ВСЮ ШИРИНУ)
         with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
@@ -2231,6 +2255,32 @@ def build_judge_dashboard(sm: MissionStateMachine):
             qr_status_badge.text = "QR не считан"
             qr_status_badge.classes(replace="bg-gray-600 text-white text-xs w-fit mb-2")
             qr_text_label.text = "Ожидание подтверждённого QR-кода с камеры..."
+
+        if sm.latest_qr_image_b64:
+            src = f"data:image/jpeg;base64,{sm.latest_qr_image_b64}"
+            if getattr(qr_image_preview, 'source', None) != src:
+                if hasattr(qr_image_preview, 'set_source'):
+                    qr_image_preview.set_source(src)
+                else:
+                    qr_image_preview.source = src
+            qr_image_preview.visible = True
+        elif sm.latest_qr_image_bytes:
+            b64_data = base64.b64encode(sm.latest_qr_image_bytes).decode('ascii')
+            sm.latest_qr_image_b64 = b64_data
+            src = f"data:image/jpeg;base64,{b64_data}"
+            if getattr(qr_image_preview, 'source', None) != src:
+                if hasattr(qr_image_preview, 'set_source'):
+                    qr_image_preview.set_source(src)
+                else:
+                    qr_image_preview.source = src
+            qr_image_preview.visible = True
+        else:
+            if getattr(qr_image_preview, 'source', None):
+                if hasattr(qr_image_preview, 'set_source'):
+                    qr_image_preview.set_source('')
+                else:
+                    qr_image_preview.source = ''
+            qr_image_preview.visible = False
 
         # 6. Добавление новых строк в судейский лог
         current_len = len(sm.logs)
