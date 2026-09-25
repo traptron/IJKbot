@@ -19,6 +19,7 @@
   <exec_depend>sts3215_driver</exec_depend>
   <exec_depend>ijkbot_description</exec_depend>
   <exec_depend>ijkbot_nav2</exec_depend>
+  <exec_depend>twist_mux</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -24,6 +24,8 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_vision = get_package_share_directory('ijkbot_vision')
 
+    pkg_nav2 = get_package_share_directory('ijkbot_nav2')
+
     declare_llm_host = DeclareLaunchArgument(
         'llm_host',
         default_value='http://localhost:11434',
@@ -54,6 +56,18 @@ def generate_launch_description():
         description='Запускать ли детекцию QR-кодов (ijkbot_vision)'
     )
 
+    declare_enable_twist_mux = DeclareLaunchArgument(
+        'enable_twist_mux',
+        default_value='false',
+        description='Запускать ли twist_mux в laptop.launch.py (по умолчанию false, если запущен в navigation.launch.py)'
+    )
+
+    declare_twist_mux_config = DeclareLaunchArgument(
+        'twist_mux_config',
+        default_value=os.path.join(pkg_nav2, 'config', 'twist_mux.yaml'),
+        description='Полный путь к конфигурационному файлу twist_mux.yaml'
+    )
+
     # 1. Нода управления миссией и Web Dashboard
     dashboard_node = Node(
         package='ijkbot_brain',
@@ -76,6 +90,17 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_vision'))
     )
 
+    # 3. Нода арбитража скоростей twist_mux (опционально)
+    twist_mux_node = Node(
+        package='twist_mux',
+        executable='twist_mux',
+        name='twist_mux',
+        output='screen',
+        parameters=[LaunchConfiguration('twist_mux_config')],
+        remappings=[('cmd_vel_out', '/cmd_vel')],
+        condition=IfCondition(LaunchConfiguration('enable_twist_mux'))
+    )
+
     return LaunchDescription([
         SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1'),
         declare_llm_host,
@@ -83,7 +108,10 @@ def generate_launch_description():
         declare_host,
         declare_mock,
         declare_enable_vision,
+        declare_enable_twist_mux,
+        declare_twist_mux_config,
 
         dashboard_node,
         qr_reader_launch,
+        twist_mux_node,
     ])
