@@ -53,7 +53,7 @@
 | **Межосевое расстояние $B$** | $140\text{ мм}$ ($0.140\text{ м}$) | Расстояние от ведущей оси до оси задних кастеров |
 | **Опоры шасси** | 2× задних пассивных кастера | Обеспечивают устойчивость дифференциальной платформы |
 | **Приводы** | 2× Feetech STS3215 | ID 1 — Левый, ID 2 — Правый, шина UART 1 000 000 бод |
-| **Преобразователь UART** | Waveshare USB-to-UART | Фиксированный порт `/dev/ttyUSB0` (драйвер `cp210x` / `ch341`) |
+| **Преобразователь UART** | Waveshare USB-to-UART | Фиксированный порт `/dev/ttySTS` (драйвер `cp210x` / `ch341`) |
 | **Сенсор технического зрения** | Intel RealSense D435 | Высота оптического центра $157.5\text{ мм}$, наклон $0.0^\circ$, USB 3.0 |
 | **Бортовой аккумулятор** | 4S LiPo 14.8В 5000 мАч | Раздельное питание логики и силовой шины сервоприводов |
 | **Лимиты скорости** | $V_{max} = 0.25\text{ м/с}$, $\omega_{max} = 1.0\text{ рад/с}$ | Программно зафиксированы в `nav2_params.yaml` и `params.yaml` |
@@ -69,7 +69,7 @@ flowchart LR
     subgraph Robot["Робот: Raspberry Pi 4B (192.168.1.10)"]
         Sensors["Intel RealSense D435<br/>(USB 3.0)"]
         DriverNode["driver::diff_drive_node<br/>(C++17)"]
-        Servos["2× Feetech STS3215<br/>(/dev/ttyUSB0, 1M baud)"]
+        Servos["2× Feetech STS3215<br/>(/dev/ttySTS, 1M baud)"]
         Nav2Stack["nav2 (Controller + Planner)"]
         Sensors -->|RGB/Depth| Nav2Stack
         DriverNode -->|RS-485/UART| Servos
@@ -270,7 +270,7 @@ colcon build --symlink-install --packages-up-to bringup
 source install/setup.bash
 ```
 
-`robot.launch.py` запускает A2M8 на `/scan` (115200 бод, режим `Sensitivity`); скан RealSense публикуется отдельно в `/depth/scan`. Порт по умолчанию `/dev/ttyUSB1`, так как `/dev/ttyUSB0` зарезервирован за UART приводов. При необходимости задайте стабильный порт устройства:
+`robot.launch.py` запускает A2M8 (115200 бод, режим `Standard`); исходный скан доступен в `/scan_raw`, очищенный от отражений колёс — в `/scan`. Для установленного лидара включено отражение лево/право (`inverted: true`), а поворот крепления на 180° задан в TF `lidar_link`. Стандартный пакет `ros-jazzy-laser-filters` удаляет точки только внутри двух объёмов колёс в `base_footprint`; размеры с запасом 5 мм заданы в `src/bringup/config/lidar_self_filter.yaml`. Скан RealSense публикуется отдельно в `/depth/scan`. Порт по умолчанию `/dev/ttyUSB0`, так как `/dev/ttySTS` зарезервирован за UART приводов. При необходимости задайте стабильный порт устройства:
 ```bash
 ros2 launch bringup robot.launch.py lidar_serial_port:=/dev/serial/by-id/<rplidar-device>
 ```
@@ -281,8 +281,8 @@ ros2 launch bringup mapping.launch.py lidar_serial_port:=/dev/serial/by-id/<rpli
 ```
 `slam_toolbox` использует `/scan`, `odom`, `base_footprint` и публикует карту в `map`. Не запускайте одновременно этот режим и статический `map→odom` из Nav2.
 
-### Проблема 1: Ошибка доступа к порту `/dev/ttyUSB0`
-- **Симптом**: Драйвер падает с `Permission denied` или `Cannot open /dev/ttyUSB0`.
+### Проблема 1: Ошибка доступа к порту `/dev/ttySTS`
+- **Симптом**: Драйвер падает с `Permission denied` или `Cannot open /dev/ttySTS`.
 - **Решение**: Убедитесь, что пользователь входит в группу `dialout`, и примените udev-правило:
   ```bash
   sudo usermod -aG dialout $USER

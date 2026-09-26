@@ -1,0 +1,29 @@
+scan_to_scan_filter_chain:
+  ros__parameters:
+    # Wheel centres: x=0, y=+/-0.1125 m in base_footprint.
+    # Radius 0.0375 m, width 0.025 m; each bound includes 5 mm tolerance.
+    # Filter only measured endpoints inside the wheels, not whole angular sectors.
+    filter1:
+      name: left_wheel
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: base_footprint
+        min_x: -0.0425
+        max_x: 0.0425
+        min_y: 0.095
+        max_y: 0.130
+        min_z: -0.005
+        max_z: 0.080
+        invert: false
+    filter2:
+      name: right_wheel
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: base_footprint
+        min_x: -0.0425
+        max_x: 0.0425
+        min_y: -0.130
+        max_y: -0.095
+        min_z: -0.005
+        max_z: 0.080
+        invert: false

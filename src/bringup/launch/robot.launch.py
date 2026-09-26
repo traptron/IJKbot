@@ -37,8 +37,8 @@ def generate_launch_description():
 
     declare_lidar_serial_port = DeclareLaunchArgument(
         'lidar_serial_port',
-        default_value='/dev/ttyUSB1',
-        description='Последовательный порт RPLIDAR; /dev/ttyUSB0 зарезервирован за приводами'
+        default_value='/dev/ttyUSB0',
+        description='Последовательный порт RPLIDAR; приводы используют /dev/ttySTS'
     )
 
     declare_lidar_serial_baudrate = DeclareLaunchArgument(
@@ -131,10 +131,21 @@ def generate_launch_description():
             'serial_port': lidar_serial_port,
             'serial_baudrate': lidar_serial_baudrate,
             'frame_id': 'lidar_link',
-            'inverted': False,
+            # Mirror left/right for the installed lidar; mounting yaw stays in TF.
+            'inverted': True,
             'angle_compensate': True,
-            'scan_mode': 'Sensitivity',
+            'scan_mode': 'Standard',
         }],
+        remappings=[('scan', '/scan_raw')],
+        condition=IfCondition(enable_lidar)
+    )
+
+    lidar_self_filter = Node(
+        package='laser_filters',
+        executable='scan_to_scan_filter_chain',
+        output='screen',
+        parameters=[os.path.join(pkg_bringup, 'config', 'lidar_self_filter.yaml')],
+        remappings=[('scan', '/scan_raw'), ('scan_filtered', '/scan')],
         condition=IfCondition(enable_lidar)
     )
 
@@ -153,4 +164,5 @@ def generate_launch_description():
         realsense_laserscan_launch,
         motor_driver_node,
         rplidar_node,
+        lidar_self_filter,
     ])
