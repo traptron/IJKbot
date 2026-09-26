@@ -19,6 +19,7 @@ import time
 import math
 import json
 import signal
+import base64
 import subprocess
 import threading
 from pathlib import Path
@@ -34,17 +35,60 @@ try:
     from rclpy.node import Node
     from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped
     from nav_msgs.msg import Odometry
+    from sensor_msgs.msg import CompressedImage
     from std_msgs.msg import String as RosString, Bool as RosBool
     ROS2_AVAILABLE = True
 except ImportError:
     pass
+
+# TF2 импорты
+TF2_AVAILABLE = False
+try:
+    from tf2_ros import Buffer, TransformListener
+    TF2_AVAILABLE = True
+except ImportError:
+    pass
+
+# Nav2 Action импорты
+NAV2_ACTION_AVAILABLE = False
+try:
+    from nav2_msgs.action import NavigateToPose
+    NAV2_ACTION_AVAILABLE = True
+except ImportError:
+    class NavigateToPose:
+        """Fallback mock action class if nav2_msgs is not installed."""
+        class Goal:
+            pass
+        class Result:
+            pass
+        class Feedback:
+            pass
+        class Impl:
+            pass
+
+try:
+    from action_msgs.msg import GoalStatus
+except ImportError:
+    class GoalStatus:
+        STATUS_UNKNOWN = 0
+        STATUS_ACCEPTED = 1
+        STATUS_EXECUTING = 2
+        STATUS_CANCELING = 3
+        STATUS_SUCCEEDED = 4
+        STATUS_CANCELED = 5
+        STATUS_ABORTED = 6
+
+try:
+    from rclpy.action import ActionClient
+except ImportError:
+    ActionClient = None
+
 
 # Локальный LLM клиент
 try:
     from ijkbot_brain.llm_client import (
         LLMClient,
         LandmarkID,
-        LANDMARK_DETAILS,
         target_details,
         CommandInterpretation
     )
@@ -52,7 +96,6 @@ except ImportError:
     from llm_client import (
         LLMClient,
         LandmarkID,
-        LANDMARK_DETAILS,
         target_details,
         CommandInterpretation
     )
@@ -60,7 +103,7 @@ except ImportError:
 # NiceGUI
 NICEGUI_AVAILABLE = False
 try:
-    from nicegui import ui, app
+    from nicegui import ui
     NICEGUI_AVAILABLE = True
 except ImportError:
     pass
@@ -246,11 +289,32 @@ class SystemLauncher:
             self.process = None
         return False
 
+    @staticmethod
+    def check_safe_to_launch(mock_hardware: bool, use_ssh: bool) -> Tuple[bool, str]:
+        """Защита от ошибочного локального запуска на ноутбуке (D25).
+
+        Если режим не симуляция (mock_hardware == False) и SSH не включен (use_ssh == False),
+        блокировать локальный запуск драйвера моторов на ноутбуке (где нет /dev/ttyUSB0),
+        требуя включения SSH или раздельного запуска.
+        """
+        if not mock_hardware and not use_ssh:
+            return False, (
+                "Локальный запуск реального стека на ноутбуке заблокирован (отсутствует /dev/ttyUSB0). "
+                "Включите переключатель SSH для запуска на роботе (192.168.1.10) или запустите стек на роботе раздельно."
+            )
+        return True, ""
+
     def start(self, mock_hardware: bool = False, use_ssh: bool = False,
               initial_x: float = 0.4, initial_y: float = 0.4, initial_yaw: float = 0.0) -> Tuple[bool, str]:
         if self.is_alive():
             assert self.process
             return True, f"Система уже работает (PID {self.process.pid})"
+
+        safe, reason = self.check_safe_to_launch(mock_hardware=mock_hardware, use_ssh=use_ssh)
+        if not safe:
+            with self.lock:
+                self.log_lines.append(f"[WARN] {reason}")
+            return False, reason
 
         mock_str = "true" if mock_hardware else "false"
 
@@ -371,6 +435,9 @@ class MissionStateMachine:
         self.wait_duration_required: float = 5.0
 
         # Навигация и координаты робота (в системе map)
+        self.initial_x: float = 0.4
+        self.initial_y: float = 0.4
+        self.initial_yaw: float = 0.0
         self.robot_x: float = 0.4
         self.robot_y: float = 0.4
         self.robot_yaw: float = 0.0
@@ -393,6 +460,8 @@ class MissionStateMachine:
         self.qr_code_data: Optional[str] = None
         self.latest_qr_text: Optional[str] = None
         self.latest_qr_received_at: Optional[str] = None
+        self.latest_qr_image_bytes: Optional[bytes] = None
+        self.latest_qr_image_b64: Optional[str] = None
 
         # Состояние стриминга токенов LLM
         self.streaming_tokens: str = ""
@@ -644,12 +713,24 @@ class MissionStateMachine:
             # Публикация цели Nav2 в ROS 2
             self._publish_goal_pose(self.current_waypoint)
 
+    def _cancel_nav_goal(self) -> None:
+        """Явная отмена активной цели Nav2 при смене состояний миссии."""
+        if self.ros_node and hasattr(self.ros_node, "cancel_nav_goal"):
+            try:
+                self.ros_node.cancel_nav_goal()
+            except Exception as e:
+                self._log("WARN", f"Ошибка при отмене цели Nav2: {e}")
+
     def trigger_emergency_stop(self) -> None:
         """Аварийная остановка робота (E-STOP)."""
         with self.lock:
             self.previous_state = self.state
             self.state = MissionState.EMERGENCY_STOP
-            self._publish_zero_velocity()
+            self._cancel_nav_goal()
+            if self.ros_node and hasattr(self.ros_node, "send_emergency_stop"):
+                self.ros_node.send_emergency_stop()
+            else:
+                self._publish_zero_velocity()
             self._log("EMERGENCY", "ВНИМАНИЕ: АКТИВИРОВАН E-STOP! Движение мгновенно остановлено.")
 
     def reset_emergency_stop(self) -> None:
@@ -658,6 +739,12 @@ class MissionStateMachine:
             if self.state == MissionState.EMERGENCY_STOP:
                 self.state = self.previous_state or MissionState.PREPARATION
                 self._log("SYS", f"E-STOP сброшен. Возврат в состояние: {self.state}")
+                if self.state in [
+                    MissionState.NAVIGATING_TO_LANDMARK,
+                    MissionState.APPROACHING_VICTIM,
+                    MissionState.RETURNING_HOME
+                ] and self.current_waypoint:
+                    self._publish_goal_pose(self.current_waypoint)
 
     def toggle_pause(self) -> None:
         """Пауза / возобновление миссии."""
@@ -665,15 +752,23 @@ class MissionStateMachine:
             if self.state == MissionState.PAUSED:
                 self.state = self.previous_state or MissionState.READY_TO_START
                 self._log("STATE", f"Миссия возобновлена. Состояние: {self.state}")
+                if self.state in [
+                    MissionState.NAVIGATING_TO_LANDMARK,
+                    MissionState.APPROACHING_VICTIM,
+                    MissionState.RETURNING_HOME
+                ] and self.current_waypoint:
+                    self._publish_goal_pose(self.current_waypoint)
             elif self.state not in [MissionState.PREPARATION, MissionState.MISSION_COMPLETE, MissionState.EMERGENCY_STOP]:
                 self.previous_state = self.state
                 self.state = MissionState.PAUSED
+                self._cancel_nav_goal()
                 self._publish_zero_velocity()
                 self._log("STATE", "Миссия приостановлена (ПАУЗА)")
 
     def reset_mission(self) -> None:
         """Полный сброс автомата миссии к исходному состоянию."""
         with self.lock:
+            self._cancel_nav_goal()
             self.state = MissionState.PREPARATION
             self.previous_state = MissionState.PREPARATION
             self.llm_parsed = False
@@ -684,10 +779,10 @@ class MissionStateMachine:
             self.mission_end_time = None
             self.wait_timer_start = None
             self.command_interpretation = None
-            self.robot_x = 0.4
-            self.robot_y = 0.4
-            self.robot_yaw = 0.0
-            self.path_history = [(0.4, 0.4)]
+            self.robot_x = self.initial_x
+            self.robot_y = self.initial_y
+            self.robot_yaw = self.initial_yaw
+            self.path_history = [(self.initial_x, self.initial_y)]
             self.current_waypoint = None
             self.waypoints_queue = []
             self.current_waypoint_idx = 0
@@ -699,6 +794,8 @@ class MissionStateMachine:
             self.qr_code_data = None
             self.latest_qr_text = None
             self.latest_qr_received_at = None
+            self.latest_qr_image_bytes = None
+            self.latest_qr_image_b64 = None
             self._publish_zero_velocity()
             self._log("SYS", "Сброс миссии выполнен. Все состояния и координаты возвращены в исходное положение.")
 
@@ -707,6 +804,10 @@ class MissionStateMachine:
     # ------------------------------------------------------------------------
     def step(self, dt: float = 0.1) -> None:
         with self.lock:
+            # Обновление координат через TF2 map -> base_footprint в реальном режиме
+            if not self.mock_mode and self.ros_node and hasattr(self.ros_node, "update_pose_from_tf"):
+                self.ros_node.update_pose_from_tf()
+
             # 0. Проверка лимита времени (5 минут = 300 сек). При t >= 250 сек (< 50 сек до конца) — автовозврат на базу
             elapsed = self.get_elapsed_mission_sec()
             if elapsed >= 250.0 and self.state not in [
@@ -718,6 +819,7 @@ class MissionStateMachine:
                 MissionState.PAUSED,
             ]:
                 self._log("WARN", f"ТАЙМАУТ МИССИИ ({elapsed:.1f}с / 300с)! До конца осталось менее 50с. Экстренный возврат на базу [0.4, 0.4]!")
+                self._cancel_nav_goal()
                 self.current_waypoint = START_WAYPOINT
                 self.state = MissionState.RETURNING_HOME
                 self._publish_goal_pose(START_WAYPOINT)
@@ -740,6 +842,7 @@ class MissionStateMachine:
                         f"Начало кругового сканирования (12 шагов по 30° с паузой 1.0с)..."
                     )
                     self.state = MissionState.SEARCHING_VICTIM
+                    self._cancel_nav_goal()
                     self.spin_step = 0
                     self.spin_phase = "ROTATE"
                     self.spin_timer = 0.0
@@ -753,6 +856,7 @@ class MissionStateMachine:
                 if self._check_reached_waypoint(self.current_waypoint):
                     self._log("NAV", "Робот прибыл в ячейку к пострадавшему. Начало регламентного 5-секундного удержания...")
                     self.state = MissionState.WAIT_5_SECONDS
+                    self._cancel_nav_goal()
                     self.wait_timer_start = time.time()
                     self._publish_zero_velocity()
 
@@ -767,6 +871,7 @@ class MissionStateMachine:
                         self._publish_goal_pose(START_WAYPOINT)
 
             elif self.state == MissionState.READING_QR:
+                self._cancel_nav_goal()
                 self._handle_qr_reading(dt)
 
             elif self.state == MissionState.RETURNING_HOME:
@@ -944,6 +1049,7 @@ class MissionStateMachine:
         """Фиксация успешной эвакуации и завершения миссии."""
         self.evacuated_home = True
         self.state = MissionState.MISSION_COMPLETE
+        self._cancel_nav_goal()
         self.mission_end_time = time.time()
         self._publish_zero_velocity()
 
@@ -1001,7 +1107,15 @@ class MissionStateMachine:
         yaw_diff = abs((wp.yaw - self.robot_yaw + math.pi) % (2 * math.pi) - math.pi)
         tol_dist = 0.08 if self.mock_mode else 0.18
         tol_yaw = 0.25 if self.mock_mode else 0.35
-        return dist < tol_dist and yaw_diff < tol_yaw
+
+        # Проверка завершения цели через ActionClient Nav2
+        action_succeeded = False
+        if not self.mock_mode and self.ros_node and getattr(self.ros_node, "goal_status", None) == GoalStatus.STATUS_SUCCEEDED:
+            if dist < tol_dist * 2.5:
+                action_succeeded = True
+            self.ros_node.goal_status = None
+
+        return (dist < tol_dist and yaw_diff < tol_yaw) or action_succeeded
 
     # ------------------------------------------------------------------------
     # ROS 2 интеграция (публикация команд и целей)
@@ -1016,7 +1130,10 @@ class MissionStateMachine:
     def _publish_zero_velocity(self) -> None:
         if self.ros_node and ROS2_AVAILABLE:
             try:
-                self.ros_node.send_cmd_vel(0.0, 0.0)
+                if self.state == MissionState.EMERGENCY_STOP and hasattr(self.ros_node, "send_emergency_stop"):
+                    self.ros_node.send_emergency_stop()
+                elif hasattr(self.ros_node, "send_cmd_vel"):
+                    self.ros_node.send_cmd_vel(0.0, 0.0)
             except Exception:
                 pass
 
@@ -1048,6 +1165,7 @@ class MissionStateMachine:
                 "qr_code_data": self.qr_code_data,
                 "latest_qr_text": self.latest_qr_text,
                 "latest_qr_received_at": self.latest_qr_received_at,
+                "has_qr_snapshot": self.latest_qr_image_bytes is not None,
                 "chronology": [asdict(l) for l in self.logs]
             }
 
@@ -1079,16 +1197,46 @@ class MissionROSNode:
         self.sm = sm
         self.node: Optional[Any] = None
         self.cmd_vel_pub: Optional[Any] = None
+        self.cmd_vel_sm_pub: Optional[Any] = None
+        self.cmd_vel_emergency_pub: Optional[Any] = None
         self.goal_pub: Optional[Any] = None
+        self.nav_action_client: Optional[Any] = None
+        self.current_goal_handle: Optional[Any] = None
+        self.goal_status: Optional[Any] = None
+        self.tf_buffer: Optional[Any] = None
+        self.tf_listener: Optional[Any] = None
         self.state_pub: Optional[Any] = None
         self.photo_trigger_pub: Optional[Any] = None
+
+        self._nav_goal_seq: int = 0
+        self._nav_goal_pending: bool = False
 
         if ROS2_AVAILABLE:
             try:
                 if not rclpy.ok():
                     rclpy.init()
                 self.node = Node("mission_state_machine")
-                self.cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
+
+                # Публикаторы скоростей для twist_mux (/cmd_vel_sm, /cmd_vel_emergency)
+                self.cmd_vel_sm_pub = self.node.create_publisher(Twist, "/cmd_vel_sm", 10)
+                self.cmd_vel_emergency_pub = self.node.create_publisher(Twist, "/cmd_vel_emergency", 10)
+                self.cmd_vel_pub = self.cmd_vel_sm_pub
+
+                # TF2 буфер и слушатель для отслеживания трансформа map -> base_footprint
+                if TF2_AVAILABLE:
+                    self.tf_buffer = Buffer()
+                    self.tf_listener = TransformListener(self.tf_buffer, self.node)
+
+                # Nav2 ActionClient для NavigateToPose
+                if ActionClient is not None and NAV2_ACTION_AVAILABLE:
+                    try:
+                        self.nav_action_client = ActionClient(self.node, NavigateToPose, '/navigate_to_pose')
+                    except Exception as e:
+                        self.nav_action_client = None
+                        self.sm._log("WARN", f"Не удалось инициализировать ActionClient NavigateToPose: {e}")
+                else:
+                    self.nav_action_client = None
+
                 self.node.declare_parameter('goal_topic', '/goal_pose')
                 self.goal_pub = self.node.create_publisher(
                     PoseStamped, self.node.get_parameter('goal_topic').value, 10)
@@ -1099,6 +1247,7 @@ class MissionROSNode:
                 self.node.create_subscription(Odometry, "/odom", self._odom_callback, 10)
                 self.node.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_callback, 10)
                 self.node.create_subscription(RosString, "/victim_status", self._qr_callback, 10)
+                self.node.create_subscription(CompressedImage, "/vision/qr/image/compressed", self._qr_image_callback, 10)
                 self.node.create_subscription(RosBool, "/victim_detected", self._victim_detected_callback, 10)
                 self.node.create_subscription(RosBool, "/vision/qr/detected", self._qr_detected_callback, 10)
                 self.node.create_subscription(RosString, "/mission/judge_task", self._judge_task_callback, 10)
@@ -1109,28 +1258,75 @@ class MissionROSNode:
             except Exception as e:
                 print(f"[ROS2] Ошибка запуска ROS 2 ноды: {e}")
 
+    def update_pose_from_tf(self) -> bool:
+        """Определение позы робота на карте через TF2 lookup_transform('map', 'base_footprint')."""
+        if not ROS2_AVAILABLE or not self.node or self.tf_buffer is None:
+            return False
+        try:
+            t = self.tf_buffer.lookup_transform(
+                'map',
+                'base_footprint',
+                rclpy.time.Time()
+            )
+            with self.sm.lock:
+                self.sm.robot_x = t.transform.translation.x
+                self.sm.robot_y = t.transform.translation.y
+                q = t.transform.rotation
+                siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+                cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+                self.sm.robot_yaw = math.atan2(siny_cosp, cosy_cosp)
+                if not self.sm.path_history or math.hypot(
+                    self.sm.robot_x - self.sm.path_history[-1][0],
+                    self.sm.robot_y - self.sm.path_history[-1][1]
+                ) > 0.05:
+                    self.sm.path_history.append((self.sm.robot_x, self.sm.robot_y))
+            return True
+        except Exception:
+            return False
+
     def _amcl_callback(self, msg: Any) -> None:
         with self.sm.lock:
             if not self.sm.mock_mode:
                 self.sm.robot_x = msg.pose.pose.position.x
                 self.sm.robot_y = msg.pose.pose.position.y
                 q = msg.pose.pose.orientation
-                siny_cosp = 2 * (q.w * q.z + q.x * q.y)
-                cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+                siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+                cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
                 self.sm.robot_yaw = math.atan2(siny_cosp, cosy_cosp)
-                self.sm.path_history.append((self.sm.robot_x, self.sm.robot_y))
+                if not self.sm.path_history or math.hypot(
+                    self.sm.robot_x - self.sm.path_history[-1][0],
+                    self.sm.robot_y - self.sm.path_history[-1][1]
+                ) > 0.05:
+                    self.sm.path_history.append((self.sm.robot_x, self.sm.robot_y))
 
     def _odom_callback(self, msg: Any) -> None:
         with self.sm.lock:
-            if not self.sm.mock_mode:
-                # Если AMCL уже обновил координаты на карте, не перезаписываем относительным одомом
-                if not self.sm.path_history:
-                    self.sm.robot_x = msg.pose.pose.position.x
-                    self.sm.robot_y = msg.pose.pose.position.y
-                    q = msg.pose.pose.orientation
-                    siny_cosp = 2 * (q.w * q.z + q.x * q.y)
-                    cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
-                    self.sm.robot_yaw = math.atan2(siny_cosp, cosy_cosp)
+            if self.sm.mock_mode:
+                return
+
+        # Попытка получить координаты из TF2 map -> base_footprint
+        if self.update_pose_from_tf():
+            return
+
+        # Fallback при отсутствии TF2: учет смещения стартовой точки на карте и начального угла
+        with self.sm.lock:
+            init_x = getattr(self.sm, 'initial_x', 0.4)
+            init_y = getattr(self.sm, 'initial_y', 0.4)
+            init_yaw = getattr(self.sm, 'initial_yaw', 0.0)
+            cos_y = math.cos(init_yaw)
+            sin_y = math.sin(init_yaw)
+            ox = msg.pose.pose.position.x
+            oy = msg.pose.pose.position.y
+            self.sm.robot_x = init_x + ox * cos_y - oy * sin_y
+            self.sm.robot_y = init_y + ox * sin_y + oy * cos_y
+            q = msg.pose.pose.orientation
+            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            self.sm.robot_yaw = math.atan2(siny_cosp, cosy_cosp) + init_yaw
+            if not self.sm.path_history or math.hypot(
+                self.sm.robot_x - self.sm.path_history[-1][0],
+                self.sm.robot_y - self.sm.path_history[-1][1]
+            ) > 0.05:
                 self.sm.path_history.append((self.sm.robot_x, self.sm.robot_y))
 
     def _victim_detected_callback(self, msg: Any) -> None:
@@ -1170,12 +1366,26 @@ class MissionROSNode:
                     self.sm.qr_scanned = True
                     self.sm._log("QR", f"Получены данные QR-кода из топика /victim_status:\n{msg.data.strip()}")
                     self.sm.state = MissionState.WAIT_5_SECONDS
+                    if hasattr(self, 'cancel_nav_goal'):
+                        self.cancel_nav_goal()
                     self.sm.wait_timer_start = time.time()
                     self.sm._publish_zero_velocity()
                     self.sm._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
 
+    def _qr_image_callback(self, msg: Any) -> None:
+        try:
+            data = bytes(msg.data)
+            if not data:
+                return
+            with self.sm.lock:
+                self.sm.latest_qr_image_bytes = data
+                self.sm.latest_qr_image_b64 = base64.b64encode(data).decode('ascii')
+        except Exception as e:
+            self.sm._log("WARN", f"Ошибка обработки снимка QR: {e}")
+
     def _estop_callback(self, msg: Any) -> None:
         if msg.data:
+            self.send_emergency_stop()
             self.sm.trigger_emergency_stop()
 
     def publish_mission_status(self) -> None:
@@ -1185,23 +1395,144 @@ class MissionROSNode:
             self.state_pub.publish(s_msg)
 
     def send_cmd_vel(self, linear_x: float, angular_z: float) -> None:
-        if self.cmd_vel_pub:
+        if abs(linear_x) > 1e-4 or abs(angular_z) > 1e-4:
+            if self.current_goal_handle is not None or getattr(self, '_nav_goal_pending', False):
+                self.cancel_nav_goal()
+        target_pub = self.cmd_vel_sm_pub or self.cmd_vel_pub
+        if target_pub:
             msg = Twist()
             msg.linear.x = float(linear_x)
             msg.angular.z = float(angular_z)
-            self.cmd_vel_pub.publish(msg)
+            target_pub.publish(msg)
+
+    def send_emergency_stop(self) -> None:
+        """Отправка нулевой скорости в топик /cmd_vel_emergency (приоритет 100 в twist_mux)."""
+        self.cancel_nav_goal()
+        if self.cmd_vel_emergency_pub:
+            msg = Twist()
+            msg.linear.x = 0.0
+            msg.angular.z = 0.0
+            self.cmd_vel_emergency_pub.publish(msg)
 
     def send_nav_goal(self, x: float, y: float, yaw: float) -> None:
-        if self.goal_pub and self.node:
-            msg = PoseStamped()
-            msg.header.frame_id = "map"
-            msg.header.stamp = self.node.get_clock().now().to_msg()
-            msg.pose.position.x = float(x)
-            msg.pose.position.y = float(y)
-            msg.pose.position.z = 0.0
-            msg.pose.orientation.z = math.sin(yaw / 2.0)
-            msg.pose.orientation.w = math.cos(yaw / 2.0)
-            self.goal_pub.publish(msg)
+        """Отправка цели в Nav2 через ActionClient NavigateToPose или fallback в топик /goal_pose."""
+        with self.sm.lock:
+            self.cancel_nav_goal()
+            self.goal_status = None
+            self._nav_goal_seq = getattr(self, '_nav_goal_seq', 0) + 1
+            seq = self._nav_goal_seq
+
+            use_action = False
+            if self.nav_action_client and self.node:
+                is_ready = True
+                if hasattr(self.nav_action_client, 'server_is_ready'):
+                    try:
+                        is_ready = self.nav_action_client.server_is_ready()
+                        if not is_ready and hasattr(self.nav_action_client, 'wait_for_server'):
+                            is_ready = self.nav_action_client.wait_for_server(timeout_sec=0.2)
+                    except Exception:
+                        is_ready = False
+                if is_ready:
+                    use_action = True
+
+            if use_action:
+                goal_msg = NavigateToPose.Goal()
+                goal_msg.pose = PoseStamped()
+                goal_msg.pose.header.frame_id = "map"
+                goal_msg.pose.header.stamp = self.node.get_clock().now().to_msg()
+                goal_msg.pose.pose.position.x = float(x)
+                goal_msg.pose.pose.position.y = float(y)
+                goal_msg.pose.pose.position.z = 0.0
+                goal_msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
+                goal_msg.pose.pose.orientation.w = math.cos(yaw / 2.0)
+
+                self._nav_goal_pending = True
+                try:
+                    future = self.nav_action_client.send_goal_async(goal_msg)
+                    future.add_done_callback(lambda f, s=seq: self._goal_response_callback(f, s))
+                except Exception as e:
+                    self._nav_goal_pending = False
+                    self.sm._log("WARN", f"Ошибка отправки цели в ActionClient NavigateToPose: {e}")
+                    use_action = False
+
+            if not use_action and self.goal_pub and self.node:
+                msg = PoseStamped()
+                msg.header.frame_id = "map"
+                msg.header.stamp = self.node.get_clock().now().to_msg()
+                msg.pose.position.x = float(x)
+                msg.pose.position.y = float(y)
+                msg.pose.position.z = 0.0
+                msg.pose.orientation.z = math.sin(yaw / 2.0)
+                msg.pose.orientation.w = math.cos(yaw / 2.0)
+                self.goal_pub.publish(msg)
+
+    def _goal_response_callback(self, future: Any, seq: Optional[int] = None) -> None:
+        with self.sm.lock:
+            if seq is None:
+                seq = getattr(self, '_nav_goal_seq', 0)
+            try:
+                goal_handle = future.result()
+                if not goal_handle.accepted:
+                    self.sm._log("WARN", "Nav2 ActionServer отклонил цель /navigate_to_pose")
+                    if seq == getattr(self, '_nav_goal_seq', 0):
+                        self._nav_goal_pending = False
+                    return
+
+                # Проверяем, не была ли цель отменена или заменена пока ожидался ответ
+                is_stale = (
+                    seq != getattr(self, '_nav_goal_seq', 0)
+                    or not getattr(self, '_nav_goal_pending', False)
+                    or self.sm.state not in [
+                        MissionState.NAVIGATING_TO_LANDMARK,
+                        MissionState.APPROACHING_VICTIM,
+                        MissionState.RETURNING_HOME
+                    ]
+                )
+                if is_stale:
+                    self.sm._log("NAV", f"Отмена запоздалой цели Nav2 (seq={seq}, состояние={self.sm.state})")
+                    try:
+                        goal_handle.cancel_goal_async()
+                    except Exception as ce:
+                        self.sm._log("WARN", f"Ошибка отмены запоздалой цели Nav2: {ce}")
+                    return
+
+                self.current_goal_handle = goal_handle
+                self._nav_goal_pending = False
+                self.sm._log("NAV", "Цель /navigate_to_pose успешно принята Nav2")
+
+                result_future = goal_handle.get_result_async()
+                result_future.add_done_callback(lambda f, s=seq: self._goal_result_callback(f, s))
+            except Exception as e:
+                self.sm._log("WARN", f"Ошибка получения ответа ActionServer: {e}")
+
+    def _goal_result_callback(self, future: Any, seq: Optional[int] = None) -> None:
+        with self.sm.lock:
+            if seq is None:
+                seq = getattr(self, '_nav_goal_seq', 0)
+            try:
+                result = future.result()
+                if seq != getattr(self, '_nav_goal_seq', 0):
+                    return
+                self.goal_status = getattr(result, "status", None)
+                self.current_goal_handle = None
+                self._nav_goal_pending = False
+                self.sm._log("NAV", f"Действие Nav2 NavigateToPose завершено со статусом {self.goal_status}")
+            except Exception as e:
+                self.sm._log("WARN", f"Ошибка получения результата Nav2 Action: {e}")
+
+    def cancel_nav_goal(self) -> None:
+        """Явная отмена активной цели Nav2 через cancel_goal_async()."""
+        with self.sm.lock:
+            self._nav_goal_seq = getattr(self, '_nav_goal_seq', 0) + 1
+            self._nav_goal_pending = False
+            if self.current_goal_handle is not None:
+                try:
+                    self.sm._log("NAV", "Отмена активной цели Nav2 через cancel_goal_async()...")
+                    self.current_goal_handle.cancel_goal_async()
+                except Exception as e:
+                    self.sm._log("WARN", f"Ошибка отмены цели Nav2: {e}")
+                finally:
+                    self.current_goal_handle = None
 
     def trigger_photo_snapshot(self) -> None:
         if self.photo_trigger_pub and self.node:
@@ -1282,6 +1613,15 @@ def build_judge_dashboard(sm: MissionStateMachine):
                     ssh_switch = ui.switch("Запуск по SSH на робота (192.168.1.10)", value=False).classes("text-xs text-slate-300")
 
                     def handle_launch_system():
+                        safe, reason = sm.system_launcher.check_safe_to_launch(
+                            mock_hardware=sm.mock_mode,
+                            use_ssh=ssh_switch.value
+                        )
+                        if not safe:
+                            sm._log("WARN", reason)
+                            ui.notify(reason, type="warning")
+                            return
+
                         ok, msg = sm.system_launcher.start(
                             mock_hardware=sm.mock_mode,
                             use_ssh=ssh_switch.value
@@ -1315,6 +1655,33 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
                     ui.button("Логи стека", on_click=open_launch_log, icon="terminal").classes(
                         "bg-slate-700 hover:bg-slate-600 text-xs text-slate-200"
+                    )
+
+                    def handle_check_clock():
+                        try:
+                            from scripts.check_clock_sync import check_clock_sync
+                        except ImportError:
+                            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                            if repo_root not in sys.path:
+                                sys.path.insert(0, repo_root)
+                            from scripts.check_clock_sync import check_clock_sync
+
+                        host = sm.system_launcher.ssh_host
+                        res = check_clock_sync(
+                            host=host,
+                            user=sm.system_launcher.ssh_user,
+                            mock=sm.mock_mode,
+                        )
+                        sm._log("NTP", res.message)
+                        ui.notify(
+                            res.message,
+                            type="positive" if res.passed else (
+                                "warning" if res.status == "FAIL" else "negative"
+                            )
+                        )
+
+                    ui.button("Проверка часов", on_click=handle_check_clock, icon="schedule").classes(
+                        "bg-slate-700 hover:bg-indigo-600 text-xs text-slate-200 font-semibold"
                     )
 
         # 1. ПАНЕЛЬ ВВОДА ЗАДАНИЯ И КНОПКИ УПРАВЛЕНИЯ
@@ -1427,12 +1794,25 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
                         # Шаг 2: System Launch (если ещё не запущен)
                         if not sm.system_launcher.is_alive():
+                            safe, reason = sm.system_launcher.check_safe_to_launch(
+                                mock_hardware=sm.mock_mode,
+                                use_ssh=ssh_switch.value
+                            )
+                            if not safe:
+                                sm._log("WARN", f"Автозапуск стека отклонён: {reason}")
+                                ui.notify(f"2/3 {reason}", type="warning")
+                                return
+
                             ok, msg = sm.system_launcher.start(
                                 mock_hardware=sm.mock_mode,
                                 use_ssh=ssh_switch.value
                             )
+                            if not ok:
+                                sm._log("WARN", f"Автозапуск стека отклонён: {msg}")
+                                ui.notify(f"2/3 {msg}", type="warning")
+                                return
                             sm._log("SYS", f"Автозапуск стека: {msg}")
-                            ui.notify(f"2/3 {msg}", type="info" if ok else "warning")
+                            ui.notify(f"2/3 {msg}", type="info")
 
                         # Шаг 3: Старт миссии
                         sm.start_mission()
@@ -1583,6 +1963,10 @@ def build_judge_dashboard(sm: MissionStateMachine):
                     qr_text_label = ui.label("Ожидание считывания кода при приближении к человеку...").classes(
                         "text-xs font-mono text-slate-300 whitespace-pre-line bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/50 w-full"
                     )
+                    qr_image_preview = ui.image().classes(
+                        "w-full max-h-48 object-contain rounded-lg border border-slate-700 mt-2 bg-slate-950"
+                    )
+                    qr_image_preview.visible = False
 
         # 3. НИЖНИЙ БЛОК: ПРОТОКОЛ И ХРОНОЛОГИЯ СОБЫТИЙ (ВО ВСЮ ШИРИНУ)
         with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
@@ -1914,6 +2298,32 @@ def build_judge_dashboard(sm: MissionStateMachine):
             qr_status_badge.text = "QR не считан"
             qr_status_badge.classes(replace="bg-gray-600 text-white text-xs w-fit mb-2")
             qr_text_label.text = "Ожидание подтверждённого QR-кода с камеры..."
+
+        if sm.latest_qr_image_b64:
+            src = f"data:image/jpeg;base64,{sm.latest_qr_image_b64}"
+            if getattr(qr_image_preview, 'source', None) != src:
+                if hasattr(qr_image_preview, 'set_source'):
+                    qr_image_preview.set_source(src)
+                else:
+                    qr_image_preview.source = src
+            qr_image_preview.visible = True
+        elif sm.latest_qr_image_bytes:
+            b64_data = base64.b64encode(sm.latest_qr_image_bytes).decode('ascii')
+            sm.latest_qr_image_b64 = b64_data
+            src = f"data:image/jpeg;base64,{b64_data}"
+            if getattr(qr_image_preview, 'source', None) != src:
+                if hasattr(qr_image_preview, 'set_source'):
+                    qr_image_preview.set_source(src)
+                else:
+                    qr_image_preview.source = src
+            qr_image_preview.visible = True
+        else:
+            if getattr(qr_image_preview, 'source', None):
+                if hasattr(qr_image_preview, 'set_source'):
+                    qr_image_preview.set_source('')
+                else:
+                    qr_image_preview.source = ''
+            qr_image_preview.visible = False
 
         # 6. Добавление новых строк в судейский лог
         current_len = len(sm.logs)

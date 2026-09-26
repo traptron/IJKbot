@@ -11,7 +11,6 @@ test_llm.py — Набор модульных и интеграционных т
 """
 
 import unittest
-import time
 from typing import List, Tuple
 from ijkbot_brain.llm_client import (
     LandmarkID,

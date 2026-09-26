@@ -6,7 +6,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node, PushRosNamespace
+from launch_ros.actions import Node
 from launch.substitution import Substitution
 from launch_ros.descriptions import ParameterFile
 
@@ -144,7 +144,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'autostart': autostart,
             'node_names': ['map_server'],
-            'bond_timeout': 0.0
+            'bond_timeout': 10.0
         }],
         condition=UnlessCondition(use_amcl)
     )
@@ -168,7 +168,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'autostart': autostart,
             'node_names': ['map_server', 'amcl'],
-            'bond_timeout': 0.0
+            'bond_timeout': 10.0
         }],
         condition=IfCondition(use_amcl)
     )
@@ -191,7 +191,7 @@ def generate_launch_description():
         name='controller_server',
         output='screen',
         parameters=[configured_params],
-        remappings=[('cmd_vel', 'cmd_vel_nav')]
+        remappings=[('cmd_vel', 'cmd_vel_raw')]
     )
 
     smoother_node = Node(
@@ -201,8 +201,8 @@ def generate_launch_description():
         output='screen',
         parameters=[configured_params],
         remappings=[
-            ('cmd_vel', 'cmd_vel_nav'),
-            ('cmd_vel_smoothed', 'cmd_vel')
+            ('cmd_vel', 'cmd_vel_raw'),
+            ('cmd_vel_smoothed', 'cmd_vel_nav')
         ]
     )
 
@@ -219,7 +219,8 @@ def generate_launch_description():
         executable='behavior_server',
         name='behavior_server',
         output='screen',
-        parameters=[configured_params]
+        parameters=[configured_params],
+        remappings=[('cmd_vel', 'cmd_vel_raw')]
     )
 
     bt_navigator_node = Node(
@@ -246,8 +247,30 @@ def generate_launch_description():
                 'behavior_server',
                 'bt_navigator'
             ],
-            'bond_timeout': 0.0
+            'bond_timeout': 10.0
         }]
+    )
+
+    declare_twist_mux_config = DeclareLaunchArgument(
+        'twist_mux_config',
+        default_value=os.path.join(pkg_nav2, 'config', 'twist_mux.yaml'),
+        description='Полный путь к конфигурационному файлу twist_mux.yaml'
+    )
+
+    declare_use_twist_mux = DeclareLaunchArgument(
+        'use_twist_mux',
+        default_value='true',
+        description='Запускать ли twist_mux для арбитража /cmd_vel'
+    )
+
+    twist_mux_node = Node(
+        package='twist_mux',
+        executable='twist_mux',
+        name='twist_mux',
+        output='screen',
+        parameters=[LaunchConfiguration('twist_mux_config')],
+        remappings=[('cmd_vel_out', '/cmd_vel')],
+        condition=IfCondition(LaunchConfiguration('use_twist_mux'))
     )
 
     return LaunchDescription([
@@ -262,6 +285,8 @@ def generate_launch_description():
         declare_initial_x,
         declare_initial_y,
         declare_initial_yaw,
+        declare_twist_mux_config,
+        declare_use_twist_mux,
 
         # Локализация (чисто одометрия + static TF по умолчанию, либо AMCL)
         localization_group,
@@ -272,6 +297,9 @@ def generate_launch_description():
         planner_node,
         behavior_server_node,
         bt_navigator_node,
-        nav_lifecycle_manager
+        nav_lifecycle_manager,
+
+        # Арбитраж скоростей (/cmd_vel)
+        twist_mux_node
     ])
 

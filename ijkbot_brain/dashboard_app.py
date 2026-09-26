@@ -11,7 +11,6 @@ dashboard_app.py — Отдельный модуль запуска судейс
 - Судейскую лог-панель с миллисекундными временными метками и экспортом протокола
 """
 
-import sys
 try:
     from ijkbot_brain.mission_sm import main as sm_main
 except ImportError:

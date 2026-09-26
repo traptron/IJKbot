@@ -140,6 +140,7 @@ def test_missing_uart_keeps_node_alive_and_motion_locked(driver):
 @pytest.mark.parametrize("parameter", [
     "max_linear_velocity:=0.3", "wheel_separation:=0.0",
     "left_wheel_id:=2", "cmd_vel_timeout:=0.3",
+    "serial_timeout_ms:=0", "serial_timeout_ms:=101",
 ])
 def test_unsafe_parameters_are_rejected(parameter):
     with tempfile.TemporaryDirectory(prefix="ijkbot_ros_") as logs:

@@ -18,9 +18,18 @@
 class DiffDriveNode : public rclcpp::Node
 {
 public:
+    static constexpr std::size_t kMaxErrorStreak = 5;
+
     explicit DiffDriveNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
     ~DiffDriveNode() override;
     void stopHardware() noexcept;
+
+    bool isFault() const noexcept { return fault_; }
+    const std::string& faultReason() const noexcept { return fault_reason_; }
+    std::size_t errorStreak() const noexcept { return error_streak_; }
+    const ijkbot::Odometry& odometry() const noexcept { return odometry_; }
+    void tickForTest() { tick(); }
+    void setCommandForTest(const geometry_msgs::msg::Twist& message) { command(message); }
 
 private:
     using Clock = std::chrono::steady_clock;
@@ -35,7 +44,6 @@ private:
     bool have_command_{false};
     bool watchdog_active_{false};
     std::size_t error_streak_{0};
-    static constexpr std::size_t kMaxErrorStreak = 5;
     std::string fault_reason_;
     std::string odom_frame_;
     std::string base_frame_;
