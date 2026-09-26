@@ -30,8 +30,8 @@ export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
 PIXI_MANIFEST="${PIXI_PROJECT_MANIFEST:-/home/lev/ros2_jazzy/pixi.toml}"
-DEFAULT_RVIZ_CONFIG="${REPO_DIR}/ijkbot_nav2/rviz/nav2_default_view.rviz"
-FALLBACK_RVIZ_CONFIG="${REPO_DIR}/ijkbot_nav2/rviz/nav2_view.rviz"
+DEFAULT_RVIZ_CONFIG="${REPO_DIR}/src/nav2/rviz/nav2_default_view.rviz"
+FALLBACK_RVIZ_CONFIG="${REPO_DIR}/src/nav2/rviz/nav2_view.rviz"
 
 RVIZ_CONFIG="${DEFAULT_RVIZ_CONFIG}"
 EXTRA_ARGS=()
@@ -40,6 +40,10 @@ EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -d|--config)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует пути к .rviz файлу${NC}" >&2
+                exit 1
+            fi
             RVIZ_CONFIG="$2"
             shift 2
             ;;
@@ -57,6 +61,10 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         -f|--fixed-frame)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует имени фрейма${NC}" >&2
+                exit 1
+            fi
             EXTRA_ARGS+=("-f" "$2")
             shift 2
             ;;

@@ -55,10 +55,20 @@ print_help() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --host)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует IP-адреса${NC}" >&2
+                print_help
+                exit 1
+            fi
             PI_HOST="$2"
             shift 2
             ;;
         --user)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует имени пользователя${NC}" >&2
+                print_help
+                exit 1
+            fi
             PI_USER="$2"
             shift 2
             ;;
@@ -71,6 +81,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --ws)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует пути к рабочей директории${NC}" >&2
+                print_help
+                exit 1
+            fi
             REMOTE_WS="$2"
             shift 2
             ;;
@@ -79,6 +94,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --extra)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует дополнительных аргументов${NC}" >&2
+                print_help
+                exit 1
+            fi
             EXTRA_LAUNCH_ARGS="$2"
             shift 2
             ;;
@@ -107,26 +127,56 @@ echo -e "${CYAN}----------------------------------------------------------------
 if [[ "${RUN_LOCAL}" == "true" ]]; then
     PIXI_MANIFEST="${PIXI_PROJECT_MANIFEST:-/home/lev/ros2_jazzy/pixi.toml}"
     LOCAL_SETUP="${REPO_DIR}/install/setup.bash"
-    echo -e "${GREEN}[OK] Запуск robot.launch.py локально через Pixi (mock_hardware:=${MOCK_HARDWARE})...${NC}"
-    export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
-    if [[ -f "${LOCAL_SETUP}" ]]; then
-        exec pixi run bash -c "source '${LOCAL_SETUP}' && exec ros2 launch ijkbot_bringup robot.launch.py \
-            mock_hardware:='${MOCK_HARDWARE}' \
-            ${EXTRA_LAUNCH_ARGS}"
-    else
+    if [[ ! -f "${LOCAL_SETUP}" ]]; then
         echo -e "${RED}[ERROR] Файл окружения ${LOCAL_SETUP} не найден. Соберите пакеты: colcon build${NC}" >&2
         exit 1
     fi
+
+    echo -e "${GREEN}[OK] Запуск robot.launch.py локально через Pixi (mock_hardware:=${MOCK_HARDWARE})...${NC}"
+    export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
+
+    LOCAL_PID=""
+    cleanup_local() {
+        trap - SIGINT SIGTERM EXIT
+        echo -e "\n${YELLOW}[INFO] Остановка локальных процессов robot.launch.py...${NC}"
+        if [[ -n "${LOCAL_PID}" ]] && kill -0 "${LOCAL_PID}" 2>/dev/null; then
+            kill -INT "${LOCAL_PID}" 2>/dev/null || true
+        fi
+        sleep 0.5
+        pkill -2 -f 'diff_drive_node' 2>/dev/null || true
+        pkill -2 -f 'realsense2_camera_node' 2>/dev/null || true
+        pkill -2 -f 'robot_state_publisher' 2>/dev/null || true
+        sleep 0.3
+        pkill -9 -f 'diff_drive_node' 2>/dev/null || true
+        pkill -9 -f 'realsense2_camera_node' 2>/dev/null || true
+        pkill -9 -f 'depthimage_to_laserscan' 2>/dev/null || true
+        pkill -9 -f 'robot_state_publisher' 2>/dev/null || true
+        if [[ -n "${LOCAL_PID}" ]] && kill -0 "${LOCAL_PID}" 2>/dev/null; then
+            kill -9 "${LOCAL_PID}" 2>/dev/null || true
+        fi
+        echo -e "${GREEN}[OK] Локальные процессы базового стека остановлены.${NC}"
+        exit 0
+    }
+    trap cleanup_local SIGINT SIGTERM EXIT
+
+    pixi run bash -c "source '${LOCAL_SETUP}' && ros2 launch bringup robot.launch.py \
+        mock_hardware:='${MOCK_HARDWARE}' \
+        ${EXTRA_LAUNCH_ARGS}" &
+    LOCAL_PID=$!
+    wait "${LOCAL_PID}" || true
+    cleanup_local
+    exit 0
 fi
 
 # 1. Проверка доступности робота по сети
 echo -ne "${BLUE}[1/2] Проверка связи с роботом (${PI_HOST})... ${NC}"
-SSH_PROBE_OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${PI_HOST}" "true" 2>&1 || true)
+SSH_PROBE_OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${PI_HOST}" "true" 2>&1)
+SSH_PROBE_EXIT=$?
 HOST_UNREACHABLE=false
 
-if echo "${SSH_PROBE_OUT}" | grep -qE "timed out|No route to host|Connection refused|Connection timed out during banner exchange"; then
-    HOST_UNREACHABLE=true
-elif ! ping -c 1 -W 1 "${PI_HOST}" &>/dev/null && [[ -n "${SSH_PROBE_OUT}" ]] && ! echo "${SSH_PROBE_OUT}" | grep -qE "Permission denied"; then
+if [[ ${SSH_PROBE_EXIT} -eq 0 ]] || echo "${SSH_PROBE_OUT}" | grep -q "Permission denied"; then
+    HOST_UNREACHABLE=false
+else
     HOST_UNREACHABLE=true
 fi
 
@@ -159,7 +209,7 @@ REMOTE_SETUP="
 
 REMOTE_CMD="${REMOTE_SETUP}
     echo '[REMOTE] Запуск robot.launch.py (mock_hardware:=${MOCK_HARDWARE})...';
-    exec ros2 launch ijkbot_bringup robot.launch.py mock_hardware:=${MOCK_HARDWARE} ${EXTRA_LAUNCH_ARGS}
+    exec ros2 launch bringup robot.launch.py mock_hardware:=${MOCK_HARDWARE} ${EXTRA_LAUNCH_ARGS}
 "
 
 CLEANUP_CALLED=false
