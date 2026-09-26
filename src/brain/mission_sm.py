@@ -277,7 +277,7 @@ class SystemLauncher:
         self.is_running: bool = False
         self.log_lines: List[str] = []
         self.lock = threading.Lock()
-        self.ssh_host: str = "192.168.1.10"
+        self.ssh_host: str = os.environ.get("ROBOT_IP", os.environ.get("PI_HOST", "172.22.35.154"))
         self.ssh_user: str = "otmorozki"
 
     def is_alive(self) -> bool:
@@ -300,7 +300,7 @@ class SystemLauncher:
         if not mock_hardware and not use_ssh:
             return False, (
                 "Локальный запуск реального стека на ноутбуке заблокирован (отсутствует /dev/ttyUSB0). "
-                "Включите переключатель SSH для запуска на роботе (192.168.1.10) или запустите стек на роботе раздельно."
+                "Включите переключатель SSH для запуска на роботе (172.22.35.154) или запустите стек на роботе раздельно."
             )
         return True, ""
 
@@ -1610,7 +1610,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                     launch_status_badge = ui.badge("ОСТАНОВЛЕН", color="gray-600").classes("px-3 py-1 text-xs font-bold rounded uppercase")
 
                 with ui.row().classes("items-center gap-3"):
-                    ssh_switch = ui.switch("Запуск по SSH на робота (192.168.1.10)", value=False).classes("text-xs text-slate-300")
+                    ssh_switch = ui.switch(f"Запуск по SSH на робота ({sm.system_launcher.ssh_host})", value=False).classes("text-xs text-slate-300")
 
                     def handle_launch_system():
                         safe, reason = sm.system_launcher.check_safe_to_launch(

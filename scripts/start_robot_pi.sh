@@ -24,7 +24,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
-PI_HOST="${PI_HOST:-${ROBOT_IP:-192.168.1.10}}"
+PI_HOST="${PI_HOST:-${ROBOT_IP:-172.22.35.154}}"
 PI_USER="${PI_USER:-${ROBOT_USER:-otmorozki}}"
 REMOTE_WS="/home/${PI_USER}/IJKbot"
 MOCK_HARDWARE="false"
@@ -47,7 +47,7 @@ print_help() {
     echo "  -h, --help           Показать эту справку"
     echo ""
     echo "Переменные окружения:"
-    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: 192.168.1.10)"
+    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: 172.22.35.154)"
     echo "  PI_USER / ROBOT_USER SSH-пользователь (дефолт: otmorozki)"
     echo "  ROS_DOMAIN_ID        ID ROS-домена (дефолт: 42)"
 }
@@ -184,9 +184,9 @@ if [[ "${HOST_UNREACHABLE}" == "true" ]]; then
     echo -e "${RED}[FAIL] Робот ${PI_HOST} не отвечает по сети (SSH/Ping недоступен)!${NC}"
     if [[ "${FORCE_START}" != "true" ]]; then
         echo -e "${YELLOW}Подсказка:${NC}"
-        echo -e "  - Проверьте подключение к Wi-Fi роутеру соревнований (5 ГГц)."
-        echo -e "  - Проверьте IP: возможно робот на мобильной точке (172.22.35.154)?"
-        echo -e "  - Для запуска с альтернативным IP используйте: $0 --host 172.22.35.154"
+        echo -e "  - Проверьте подключение к точке доступа Wi-Fi (сети телефона 172.22.35.0/24)."
+        echo -e "  - Проверьте IP: возможно робот на арене соревнований (192.168.1.10)?"
+        echo -e "  - Для запуска с альтернативным IP используйте: $0 --host 192.168.1.10"
         echo -e "  - Для локального прогона без робота используйте: $0 --mock --local"
         echo -e "  - Для принудительного продолжения используйте флаг --force"
         exit 1

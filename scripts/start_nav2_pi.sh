@@ -25,7 +25,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
-PI_HOST="${PI_HOST:-${ROBOT_IP:-192.168.1.10}}"
+PI_HOST="${PI_HOST:-${ROBOT_IP:-172.22.35.154}}"
 PI_USER="${PI_USER:-${ROBOT_USER:-otmorozki}}"
 REMOTE_WS="/home/${PI_USER}/IJKbot"
 FORCE_START="false"
@@ -58,7 +58,7 @@ print_help() {
     echo "  -h, --help           Показать эту справку"
     echo ""
     echo "Переменные окружения:"
-    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: 192.168.1.10)"
+    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: 172.22.35.154)"
     echo "  PI_USER / ROBOT_USER SSH-пользователь (дефолт: otmorozki)"
     echo "  ROS_DOMAIN_ID        ID ROS-домена (дефолт: 42)"
 }
