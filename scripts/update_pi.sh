@@ -25,7 +25,15 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
-PI_HOST="${PI_HOST:-${ROBOT_IP:-192.168.1.10}}"
+PRIMARY_HOST="172.22.35.154"
+DEFAULT_BACKUP="192.168.1.10"
+PI_HOST="${PI_HOST:-${ROBOT_IP:-${PRIMARY_HOST}}}"
+if [[ "${PI_HOST}" == "${DEFAULT_BACKUP}" ]]; then
+    BACKUP_HOST="${PRIMARY_HOST}"
+else
+    BACKUP_HOST="${DEFAULT_BACKUP}"
+fi
+HOST_SPECIFIED="false"
 PI_USER="${PI_USER:-${ROBOT_USER:-otmorozki}}"
 BRANCH="dev"
 REMOTE_WS="/home/${PI_USER}/IJKbot"
@@ -59,7 +67,7 @@ print_help() {
     echo "  -h, --help           Показать эту справку"
     echo ""
     echo "Переменные окружения:"
-    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: 192.168.1.10)"
+    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: ${PRIMARY_HOST})"
     echo "  PI_USER / ROBOT_USER SSH-пользователь (дефолт: otmorozki)"
     echo "  ROS_DOMAIN_ID        ID ROS-домена (дефолт: 42)"
 }
@@ -73,6 +81,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             PI_HOST="$2"
+            HOST_SPECIFIED="true"
             shift 2
             ;;
         --user)
@@ -434,16 +443,29 @@ HOST_UNREACHABLE=false
 if [[ ${SSH_PROBE_EXIT} -eq 0 ]] || echo "${SSH_PROBE_OUT}" | grep -q "Permission denied"; then
     HOST_UNREACHABLE=false
 else
-    HOST_UNREACHABLE=true
+    # Если хост не был задан явно через --host, пробуем резервный
+    if [[ "${HOST_SPECIFIED}" != "true" && -n "${BACKUP_HOST:-}" && "${PI_HOST}" != "${BACKUP_HOST}" ]]; then
+        SSH_PROBE_BACKUP=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${BACKUP_HOST}" "true" 2>&1)
+        SSH_BACKUP_EXIT=$?
+        if [[ ${SSH_BACKUP_EXIT} -eq 0 ]] || echo "${SSH_PROBE_BACKUP}" | grep -q "Permission denied"; then
+            echo -e "${YELLOW}[WARN] Хост ${PI_HOST} не отвечает. Автоматическое переключение на ${BACKUP_HOST}...${NC}"
+            PI_HOST="${BACKUP_HOST}"
+            HOST_UNREACHABLE=false
+        else
+            HOST_UNREACHABLE=true
+        fi
+    else
+        HOST_UNREACHABLE=true
+    fi
 fi
 
 if [[ "${HOST_UNREACHABLE}" == "true" ]]; then
     echo -e "${RED}[FAIL] Робот ${PI_HOST} не отвечает по сети (SSH/Ping недоступен)!${NC}" >&2
     if [[ "${FORCE_START}" != "true" ]]; then
         echo -e "${YELLOW}Подсказка:${NC}" >&2
-        echo -e "  - Проверьте подключение к Wi-Fi роутеру соревнований (5 ГГц)." >&2
-        echo -e "  - Проверьте IP: возможно робот на мобильной точке (172.22.35.154)?" >&2
-        echo -e "  - Для запуска с альтернативным IP используйте: $0 --host 172.22.35.154" >&2
+        echo -e "  - Проверьте подключение к точке доступа Wi-Fi (сети телефона 172.22.35.0/24)." >&2
+        echo -e "  - Проверьте IP: возможно робот на арене соревнований (192.168.1.10)?" >&2
+        echo -e "  - Для запуска с альтернативным IP используйте: $0 --host 192.168.1.10" >&2
         echo -e "  - Для локального прогона без робота используйте: $0 --local" >&2
         echo -e "  - Для принудительного продолжения используйте флаг --force" >&2
         exit 1

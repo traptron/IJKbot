@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_CONF="${SCRIPT_DIR}/chrony/chrony_server.conf"
 CLIENT_CONF="${SCRIPT_DIR}/chrony/chrony_client.conf"
 
-PI_HOST="${ROBOT_IP:-192.168.1.10}"
+PI_HOST="${ROBOT_IP:-172.22.35.154}"
 PI_USER="${ROBOT_USER:-otmorozki}"
 
 print_usage() {

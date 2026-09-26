@@ -35,8 +35,15 @@ export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
 # Параметры по умолчанию
-PI_HOST="${PI_HOST:-${ROBOT_IP:-192.168.1.10}}"
-BACKUP_HOST="172.22.35.154"
+PRIMARY_HOST="172.22.35.154"
+DEFAULT_BACKUP="192.168.1.10"
+PI_HOST="${PI_HOST:-${ROBOT_IP:-${PRIMARY_HOST}}}"
+if [[ "${PI_HOST}" == "${DEFAULT_BACKUP}" ]]; then
+    BACKUP_HOST="${PRIMARY_HOST}"
+else
+    BACKUP_HOST="${DEFAULT_BACKUP}"
+fi
+HOST_SPECIFIED="false"
 PI_USER="${PI_USER:-${ROBOT_USER:-otmorozki}}"
 MOCK_HARDWARE="false"
 RUN_LOCAL="false"
@@ -79,12 +86,12 @@ print_help() {
     echo "  -h, --help           Показать эту справку"
     echo ""
     echo "Переменные окружения:"
-    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: 192.168.1.10)"
+    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: ${PRIMARY_HOST})"
     echo "  PI_USER / ROBOT_USER SSH-пользователь (дефолт: otmorozki)"
     echo "  ROS_DOMAIN_ID        ID ROS-домена (дефолт: 42)"
     echo ""
     echo "Примеры:"
-    echo "  $0                   Обычный соревновательный запуск (Wi-Fi 192.168.1.10)"
+    echo "  $0                   Обычный запуск на мобильной точке (Wi-Fi ${PRIMARY_HOST})"
     echo "  $0 --mock --local    Полностью автономный тестовый прогон на ноутбуке без робота"
     echo "  $0 --mode tabs       Запуск компонентов в отдельных вкладках терминала"
 }
@@ -99,6 +106,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             PI_HOST="$2"
+            HOST_SPECIFIED="true"
             shift 2
             ;;
         --user)
@@ -284,8 +292,8 @@ else
         echo -e "${GREEN}[OK] Робот ${PI_HOST} доступен.${NC}"
     else
         echo -e "${YELLOW}[WARN] Хост ${PI_HOST} не отвечает по сети.${NC}"
-        # Проверяем резервный IP (мобильная точка)
-        if [[ "${PI_HOST}" != "${BACKUP_HOST}" ]] && check_host_reachability "${BACKUP_HOST}"; then
+        # Проверяем резервный IP
+        if [[ "${HOST_SPECIFIED}" != "true" && "${PI_HOST}" != "${BACKUP_HOST}" ]] && check_host_reachability "${BACKUP_HOST}"; then
             echo -e "${GREEN}[INFO] Резервный хост ${BACKUP_HOST} доступен! Переключение на ${BACKUP_HOST}...${NC}"
             PI_HOST="${BACKUP_HOST}"
         else
