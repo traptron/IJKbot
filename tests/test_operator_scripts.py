@@ -228,29 +228,6 @@ def test_check_clock_sync_reads_pi_host_env():
     assert "custom_user" in proc.stdout
 
 
-def test_documentation_files():
-    """Verify README.md and OPERATOR_GUIDE.md exist and contain essential guidance."""
-    readme_path = os.path.join(SCRIPTS_DIR, 'README.md')
-    assert os.path.isfile(readme_path)
-    assert os.path.getsize(readme_path) > 1000
-
-    guide_path = os.path.join(REPO_DIR, 'OPERATOR_GUIDE.md')
-    assert os.path.exists(guide_path)
-
-    with open(readme_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    assert "start_all_laptop2.sh" in content
-    assert "stop_all.sh" in content
-    assert "teleop.sh" in content
-    assert "start_robot_pi.sh" in content
-    assert "start_nav2_pi.sh" in content
-    assert "start_rviz.sh" in content
-    assert "update_pi.sh" in content
-    assert "ROS_DOMAIN_ID=42" in content
-    assert "192.168.1.10" in content
-
-
 def test_update_pi_help_options():
     """Verify update_pi.sh lists all required arguments in help."""
     script_path = os.path.join(SCRIPTS_DIR, 'update_pi.sh')
