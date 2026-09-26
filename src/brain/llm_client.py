@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-llm_client.py — Модуль взаимодействия с локальной LLM (Qwen 2.5 7B через Ollama)
+llm_client.py — Модуль взаимодействия с локальной LLM (Qwen 3.5 9B через Ollama)
 для мобильного робота IJKbot (Хакатон «Эвакуация», Кубок РТК Высшая Лига).
 
 Реализует:
@@ -401,7 +401,7 @@ class LLMClient:
         if not host.startswith("http://") and not host.startswith("https://"):
             host = f"http://{host}"
         self.host = host.rstrip("/")
-        self.model = model or os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+        self.model = model or os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
         self.timeout = timeout
         self.temperature = temperature
         self.arena = load_arena(arena_file)
@@ -841,7 +841,7 @@ def create_ros_node():
         def __init__(self):
             super().__init__("llm_interpreter_node")
             self.declare_parameter("host", os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
-            self.declare_parameter("model", os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"))
+            self.declare_parameter("model", os.environ.get("OLLAMA_MODEL", "qwen3.5:9b"))
             self.declare_parameter("timeout", 15.0)
             self.declare_parameter("log_dir", "")
             self.declare_parameter("arena_file", "")
@@ -924,7 +924,7 @@ def main():
         client = LLMClient()
         print(f"=== IJKbot LLM Interpreter CLI ===")
         print(f"Входное задание: {prompt_text}")
-        print("Обработка через Ollama (qwen2.5:7b)...")
+        print(f"Обработка через Ollama ({client.model})...")
         result = client.interpret(prompt_text)
         print("\n--- Результат распознавания ---")
         print(result.to_json(indent=2))

@@ -9,7 +9,7 @@
 #
 # Последовательность запуска:
 # 1. Проверка окружения ROS 2 Jazzy (Pixi или нативный ROS 2) и собранных пакетов.
-# 2. Проверка доступности сервера Ollama LLM и наличия целевой модели (Qwen 2.5 7B).
+# 2. Проверка доступности сервера Ollama LLM и наличия целевой модели (Qwen 3.5 9B).
 # 3. Проверка доступности сетевого порта Web Dashboard (по умолчанию: 8080).
 # 4. Запуск laptop.launch.py (NiceGUI Dashboard + QR reader + LLM State Machine).
 # 5. Автоматическое открытие интерфейса в веб-браузере (http://localhost:8080).
@@ -36,7 +36,7 @@ export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
 # Параметры по умолчанию
 LLM_HOST="${LLM_HOST:-http://localhost:11434}"
-LLM_MODEL="${LLM_MODEL:-qwen2.5:7b-instruct-q4_K_M}"
+LLM_MODEL="${LLM_MODEL:-qwen3.5:9b}"
 PORT="${PORT:-8080}"
 HOST="${HOST:-0.0.0.0}"
 MOCK="false"
@@ -63,7 +63,7 @@ print_help() {
     echo ""
     echo "Переменные окружения:"
     echo "  LLM_HOST             Адрес сервиса Ollama (дефолт: http://localhost:11434)"
-    echo "  LLM_MODEL            Имя модели Ollama (дефолт: qwen2.5:7b-instruct-q4_K_M)"
+    echo "  LLM_MODEL            Имя модели Ollama (дефолт: qwen3.5:9b)"
     echo "  ROS_DOMAIN_ID        ID ROS-домена (дефолт: 42)"
     echo ""
     echo "Примеры:"

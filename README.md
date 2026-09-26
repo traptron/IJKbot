@@ -80,7 +80,7 @@ flowchart LR
     end
 
     subgraph Laptop["Ноутбук оператора (192.168.1.20)"]
-        Ollama["Ollama: qwen2.5:7b-instruct-q4_K_M<br/>(GPU RTX 5060)"]
+        Ollama["Ollama: qwen3.5:9b<br/>(GPU RTX 5060)"]
         VisionNode["vision::qr_reader_node<br/>(WeChatQRCode)"]
         BrainNode["brain::mission_sm & NiceGUI<br/>(Web Dashboard :8080)"]
         RViz["RViz2 Navigation View"]
@@ -93,7 +93,7 @@ flowchart LR
 ```
 
 - **Raspberry Pi 4B (Борт, IP `192.168.1.10`)**: Ubuntu 24.04.5 LTS, нативный ROS 2 Jazzy. Выполняет низкоуровневое управление моторами, фильтрацию одометрии, генерацию виртуального лидара (`depthimage_to_laserscan`) и локальный расчет траекторий Nav2.
-- **Ноутбук (Внебортовой GPU-сервер, IP `192.168.1.20`)**: NVIDIA GeForce RTX 5060 (8 ГБ VRAM), Ollama с моделью `qwen2.5:7b-instruct-q4_K_M`, нейросетевой декодер `WeChatQRCode`, веб-интерфейс оператора NiceGUI (порт 8080).
+- **Ноутбук (Внебортовой GPU-сервер, IP `192.168.1.20`)**: NVIDIA GeForce RTX 5060 (8 ГБ VRAM), Ollama с моделью `qwen3.5:9b`, нейросетевой декодер `WeChatQRCode`, веб-интерфейс оператора NiceGUI (порт 8080).
 - **Синхронизация времени**: Демон `chrony` синхронизирует часы ноутбука и Pi 4B с точностью $|\Delta t| < 5.0$ мс (предотвращает ошибки `extrapolation into the future` в TF2).
 - **Трафик по радиоканалу**: Передача сырых `sensor_msgs/Image` и `PointCloud2` запрещена. Используется исключительно JPEG-сжатие `image_transport/compressed` ($640\times 480$, 15 FPS).
 
@@ -197,7 +197,7 @@ stateDiagram-v2
      ```bash
      ./scripts/start_all_laptop1.sh
      ```
-     Скрипт проверяет сервер Ollama, модель Qwen 2.5, порт 8080, запускает `laptop.launch.py` и автоматически открывает браузер.
+     Скрипт проверяет сервер Ollama, модель Qwen 3.5, порт 8080, запускает `laptop.launch.py` и автоматически открывает браузер.
    - **Ноутбук 2 (Операторская станция, робот и навигация)**:
      ```bash
      ./scripts/start_all_laptop2.sh
@@ -288,7 +288,7 @@ stateDiagram-v2
 - **Решение**: Проверьте статус сервиса Ollama и наличие модели:
   ```bash
   curl http://localhost:11434/api/tags
-  ollama run qwen2.5:7b-instruct-q4_K_M "Hello"
+  ollama run qwen3.5:9b "Hello"
   ```
 
 ---

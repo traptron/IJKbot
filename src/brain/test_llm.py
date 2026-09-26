@@ -6,7 +6,7 @@ test_llm.py — Набор модульных и интеграционных т
 1. Корректность перечисления и метаданных ориентиров (7 допустимых ID).
 2. Валидацию Pydantic/dataclass структуры CommandInterpretation.
 3. 100% точность детерминированного эвристического fallback-парсера по ключевым словам.
-4. Интеграцию с локальной Ollama (Qwen 2.5 7B) на реальных судейских формулировках.
+4. Интеграцию с локальной Ollama (Qwen 3.5 9B) на реальных судейских формулировках.
 5. Соблюдение ограничения по формату вывода (Strict JSON Mode).
 """
 
@@ -157,7 +157,7 @@ class TestHeuristicFallback(unittest.TestCase):
 
 
 class TestOllamaLiveIntegration(unittest.TestCase):
-    """Интеграционные тесты с реальной моделью Ollama Qwen 2.5 7B."""
+    """Интеграционные тесты с реальной моделью Ollama Qwen 3.5 9B."""
 
     @classmethod
     def setUpClass(cls):

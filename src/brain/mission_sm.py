@@ -4,7 +4,7 @@ mission_sm.py — Главный модуль координации мисси�
 для мобильного робота IJKbot (Хакатон «Эвакуация», Кубок РТК Высшая Лига).
 
 Объединяет все подсистемы робота в единый процесс:
-1. LLM интерпретатор судейских заданий (Qwen 2.5 7B через Ollama)
+1. LLM интерпретатор судейских заданий (Qwen 3.5 9B через Ollama)
 2. Навигация Nav2 / одометрия к ориентирам полигона
 3. Компьютерное зрение: детекция пострадавшего человека
 4. Удержание робота в ячейке не менее 5 секунд по регламенту
@@ -530,7 +530,7 @@ class MissionStateMachine:
 
     def parse_task_with_llm(self, on_token: Optional[Callable[[str], None]] = None) -> CommandInterpretation:
         """
-        Запуск анализа задания моделью Qwen 2.5 7B.
+        Запуск анализа задания моделью Qwen 3.5 9B.
         """
         with self.lock:
             if not self.current_task_text:
@@ -541,8 +541,8 @@ class MissionStateMachine:
             self.command_interpretation = None
             self.llm_parsed = False
             self.is_streaming = True
-            self.streaming_tokens = "Инициализация Qwen 2.5 7B и получение токенов...\n"
-            self._log("LLM", "Запуск инференса языковой модели Qwen 2.5 7B...")
+            self.streaming_tokens = "Инициализация Qwen 3.5 9B и получение токенов...\n"
+            self._log("LLM", "Запуск инференса языковой модели Qwen 3.5 9B...")
 
         first_token = [True]
         def _token_handler(token: str):
@@ -1707,7 +1707,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                             return
                         sm.set_task_description(text)
                         llm_parse_btn.props("loading")
-                        sm.streaming_tokens = "Инициализация Qwen 2.5 7B и получение токенов...\n"
+                        sm.streaming_tokens = "Инициализация Qwen 3.5 9B и получение токенов...\n"
                         first_chunk = [True]
 
                         def on_token_cb(token: str):
@@ -1866,7 +1866,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                     with ui.row().classes("w-full justify-between items-center mb-1"):
                         with ui.row().classes("items-center gap-2"):
                             ui.icon("psychology", size="1.4rem").classes("text-blue-400")
-                            ui.label("Результат анализа LLM (Qwen 2.5 7B)").classes("text-base font-semibold text-slate-100")
+                            ui.label("Результат анализа LLM (Qwen 3.5 9B)").classes("text-base font-semibold text-slate-100")
                         llm_tokens_badge = ui.badge("0 токенов", color="slate-700").classes("text-xs font-mono px-2 py-0.5 rounded")
 
                     # 0. Настройки подключения к Ollama (на другом ПК / ноутбуке)
@@ -1881,12 +1881,12 @@ def build_judge_dashboard(sm: MissionStateMachine):
                             llm_model_input = ui.input(
                                 label="Модель",
                                 value=sm.llm_client.model,
-                                placeholder="qwen2.5:7b"
+                                placeholder="qwen3.5:9b"
                             ).props("dense").classes("text-xs w-32 font-mono")
 
                         def check_llm_connection():
                             h = llm_host_input.value or "http://localhost:11434"
-                            m = llm_model_input.value or "qwen2.5:7b"
+                            m = llm_model_input.value or "qwen3.5:9b"
                             ok = sm.set_llm_config(h, m)
                             if ok:
                                 llm_conn_badge.text = "СВЯЗЬ: OK"
@@ -1937,7 +1937,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                             with ui.row().classes("items-center gap-1.5"):
                                 ui.icon("terminal", size="1.1rem").classes("text-emerald-400")
                                 ui.label("Все сгенерированные токены от LLM (JSON):").classes("text-xs font-bold text-emerald-400")
-                            ui.label("Qwen 2.5 7B [Raw Tokens]").classes("text-[10px] font-mono text-slate-500")
+                            ui.label("Qwen 3.5 9B [Raw Tokens]").classes("text-[10px] font-mono text-slate-500")
 
                         tokens_display = ui.code("Ожидание запуска генерации...", language="json").classes(
                             "w-full max-h-48 overflow-y-auto font-mono text-xs bg-slate-950 p-2 rounded-lg border border-slate-800 text-emerald-300 select-all"
@@ -2367,7 +2367,7 @@ def main(args=None):
     parser.add_argument("--mock", action="store_true", default=True, help="Запуск в режиме симуляции (по умолчанию True)")
     parser.add_argument("--no-mock", dest="mock", action="store_false", help="Запуск с реальным ROS 2 железом")
     parser.add_argument("--llm-host", type=str, default=os.environ.get("OLLAMA_HOST", "http://localhost:11434"), help="URL хоста Ollama (по умолчанию http://localhost:11434)")
-    parser.add_argument("--llm-model", type=str, default=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"), help="Имя модели Ollama")
+    parser.add_argument("--llm-model", type=str, default=os.environ.get("OLLAMA_MODEL", "qwen3.5:9b"), help="Имя модели Ollama")
     parser.add_argument("--headless", action="store_true", help="Запуск без Web GUI (только ROS 2)")
 
     clean_args = []

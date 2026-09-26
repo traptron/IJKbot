@@ -36,7 +36,7 @@
 
 ### 2.2. Внебортовой вычислитель (Ноутбук):
 - **GPU**: NVIDIA GeForce RTX 5060 (8 ГБ VRAM).
-- **Стек**: Ollama (модель `qwen2.5:7b-instruct-q4_K_M`), PyTorch / TensorRT, YOLO-World, OpenCV, PyZBar, NiceGUI.
+- **Стек**: Ollama (модель `qwen3.5:9b`), PyTorch / TensorRT, YOLO-World, OpenCV, PyZBar, NiceGUI.
 
 ### 2.3. Сеть и связь:
 - **Роутер**: Выделенный 5 ГГц Wi-Fi роутер, статические IP (Pi: `192.168.1.10`, Ноутбук: `192.168.1.20`).
@@ -91,7 +91,7 @@
   - Не удалять существующие комментарии, docstrings и лицензии.
   - Использовать понятные имена топиков и сервисов в snake_case.
 
-### 4.3. Работа с LLM (Ollama & Qwen 2.5):
+### 4.3. Работа с LLM (Ollama & Qwen 3.5):
 - Все запросы к LLM должны использовать **Structured Outputs / JSON Mode**.
 - Ответ LLM должен быть строго ограничен Pydantic-схемой с полями `target_landmark_id`, `search_strategy`, `reasoning`.
 - Никакого свободного неструктурированного текста на выходе модели, так как результат демонстрируется судьям и передается в автомат состояний.
