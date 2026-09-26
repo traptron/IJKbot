@@ -91,7 +91,7 @@ LANDMARK_DETAILS: Dict[LandmarkID, Dict[str, Any]] = {
 
 MAP_OBJECT_DETAILS: Dict[str, Dict[str, Any]] = {
     "start": {"name_ru": "Старт / пункт сбора", "aliases": ["старт", "пункт сбора"]},
-    "parking": {"name_ru": "Парковка / остановка", "aliases": ["парковк", "остановк"]},
+    "parking": {"name_ru": "Парковка / остановка / обломки жёлтого здания", "aliases": ["парковк", "остановк", "обломки жёлтого здания"]},
     "yellow_building": {"name_ru": "Жёлтое здание", "aliases": ["жёлт", "желт"]},
     "blue_building": {"name_ru": "Синее здание", "aliases": ["синее", "синего", "синему"]},
     "river": {"name_ru": "Река", "aliases": ["река", "реке", "реку", "берег"]},
@@ -119,7 +119,7 @@ STATIC_TARGET_IDS = ["yellow_building", "parking", "blue_building", "river", "br
 STATIC_PATTERNS = {
     "blue_building": r"\b(?:(?:син\w*|голуб\w*)\s+(?:здани\w*|дом\w*)|(?:здани\w*|дом\w*)\s+(?:син\w*|голуб\w*))\b",
     "yellow_building": r"\b(?:желт\w*\s+(?:здани\w*|дом\w*)|(?:здани\w*|дом\w*)\s+желт\w*)\b",
-    "parking": r"\b(?:останов\w*|парков\w*)\b",
+    "parking": r"\b(?:останов\w*|парков\w*|обломк\w*\s+желт\w*\s+здани\w*)\b",
     "river": r"\b(?:рек(?:а|и|е|у|ой|ою)|речк\w*)\b",
     "bridges": r"\b(?:мост(?:а|у|ом|е|ы|ов|ам|ами|ах|овой|ового|овым|овые|овых)?|эстакад\w*|путепровод\w*)\b",
 }
@@ -128,7 +128,10 @@ STATIC_PATTERNS = {
 def static_mentions(text: str) -> List[str]:
     """Explicit map anchors; colors must describe a house/building, not a car."""
     normalized = text.lower().replace('ё', 'е')
-    return [key for key, pattern in STATIC_PATTERNS.items() if re.search(pattern, normalized)]
+    mentions = [key for key, pattern in STATIC_PATTERNS.items() if re.search(pattern, normalized)]
+    if re.search(r"\bобломк\w*\s+желт\w*\s+здани\w*\b", normalized):
+        mentions = [key for key in mentions if key != "yellow_building"]
+    return mentions
 
 
 def target_details(target_id: str) -> Dict[str, Any]:
@@ -325,7 +328,7 @@ class CommandInterpretation:
 
 
 # Системный промпт с описанием правил и ориентиров полигона
-SYSTEM_PROMPT = 'Определи СТАТИЧНЫЙ ориентир района поиска пострадавшего. Верни JSON по схеме.\nДопустимы только: yellow_building — жёлтый дом/здание; parking — остановка/парковка; blue_building — синий или голубой дом/здание; river — река/берег реки; bridges — мост/эстакада/путепровод.\nБензовоз, упавшее дерево, автомобили и обломки НЕ являются главным ориентиром. Они уточняют место рядом со статичным ориентиром. «Бензовоз опрокинулся около реки, искать рядом с этим объектом»: target_landmark_id=river, local_object_id=tanker_truck. «Дерево свалилось на голубой дом, искать рядом с деревом»: target_landmark_id=blue_building, local_object_id=fallen_tree.\nlocal_object_id: tanker_truck — бензовоз; fallen_tree — упавшее дерево; car_jam — затор машин; debris_pvc — обломки ПВХ; smoke_tower — Стакан; panel_house — панельный дом; null — не указан.\nУчитывай отрицания и исправления задания. Уже проверенные места и объекты по пути не являются целью поиска. Цвет машины не означает цвет здания. Если статичный ориентир не указан или район неоднозначен, верни unknown. Не выдумывай привязку к карте. search_strategy=inspect_perimeter. reasoning — краткое обоснование на русском, включающее локальный объект. Координаты вычисляет программа по карте, не генерируй их.'
+SYSTEM_PROMPT = 'Определи СТАТИЧНЫЙ ориентир района поиска пострадавшего. Верни JSON по схеме.\nДопустимы только: yellow_building — жёлтый дом/здание; parking — остановка/парковка и обломки жёлтого здания в ячейке 1:1; blue_building — синий или голубой дом/здание; river — река/берег реки; bridges — мост/эстакада/путепровод. Фраза «обломки жёлтого здания» означает parking в ячейке 1:1, а не yellow_building.\nБензовоз, упавшее дерево, автомобили и обломки НЕ являются главным ориентиром. Они уточняют место рядом со статичным ориентиром. «Бензовоз опрокинулся около реки, искать рядом с этим объектом»: target_landmark_id=river, local_object_id=tanker_truck. «Дерево свалилось на голубой дом, искать рядом с деревом»: target_landmark_id=blue_building, local_object_id=fallen_tree.\nlocal_object_id: tanker_truck — бензовоз; fallen_tree — упавшее дерево; car_jam — затор машин; debris_pvc — обломки ПВХ; smoke_tower — Стакан; panel_house — панельный дом; null — не указан.\nУчитывай отрицания и исправления задания. Уже проверенные места и объекты по пути не являются целью поиска. Цвет машины не означает цвет здания. Если статичный ориентир не указан или район неоднозначен, верни unknown. Не выдумывай привязку к карте. search_strategy=inspect_perimeter. reasoning — краткое обоснование на русском, включающее локальный объект. Координаты вычисляет программа по карте, не генерируй их.'
 
 # JSON Schema для Structured Outputs Ollama
 OLLAMA_JSON_SCHEMA = {

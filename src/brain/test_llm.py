@@ -24,6 +24,7 @@ from brain.llm_client import (
     validate_nav2_goal,
     default_nav2_goals,
     STATIC_TARGET_IDS,
+    static_mentions,
 )
 
 
@@ -152,6 +153,16 @@ class TestHeuristicFallback(unittest.TestCase):
                 )
                 self.assertTrue(result.is_valid())
                 self.assertGreater(result.confidence, 0.5)
+
+    def test_yellow_building_debris_maps_to_parking_cell(self):
+        result = self.client.fallback_heuristic_parse(
+            "Найти пострадавшего у обломков жёлтого здания"
+        )
+        self.assertEqual(static_mentions("обломки жёлтого здания"), ["parking"])
+        self.assertEqual(result.target_landmark_id, "parking")
+        self.assertEqual(result.nav2_goals, default_nav2_goals("parking", self.client.arena))
+        self.assertEqual(self.client.arena["objects"]["parking"]["cells"], [[1, 1]])
+        self.assertIn("обломки жёлтого здания", self.client.navigation_prompt())
 
 
 class TestStaticTargetRegression(unittest.TestCase):
