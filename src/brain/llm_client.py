@@ -115,6 +115,22 @@ ALLOWED_TARGET_IDS = [
 ]
 
 
+STATIC_TARGET_IDS = ["yellow_building", "parking", "blue_building", "river", "bridges"]
+STATIC_PATTERNS = {
+    "blue_building": r"\b(?:(?:син\w*|голуб\w*)\s+(?:здани\w*|дом\w*)|(?:здани\w*|дом\w*)\s+(?:син\w*|голуб\w*))\b",
+    "yellow_building": r"\b(?:желт\w*\s+(?:здани\w*|дом\w*)|(?:здани\w*|дом\w*)\s+желт\w*)\b",
+    "parking": r"\b(?:останов\w*|парков\w*)\b",
+    "river": r"\b(?:рек(?:а|и|е|у|ой|ою)|речк\w*)\b",
+    "bridges": r"\b(?:мост(?:а|у|ом|е|ы|ов|ам|ами|ах|овой|ового|овым|овые|овых)?|эстакад\w*|путепровод\w*)\b",
+}
+
+
+def static_mentions(text: str) -> List[str]:
+    """Explicit map anchors; colors must describe a house/building, not a car."""
+    normalized = text.lower().replace('ё', 'е')
+    return [key for key, pattern in STATIC_PATTERNS.items() if re.search(pattern, normalized)]
+
+
 def target_details(target_id: str) -> Dict[str, Any]:
     """Return a description for either a regulation landmark or a map object."""
     try:
@@ -149,9 +165,7 @@ def validate_nav2_goal(goal: Any, _landmark_id: str, arena: Dict[str, Any]) -> O
     values = [goal[k] for k in ('x', 'y', 'yaw')]
     if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values):
         raise ValueError('nav2_goal coordinates must be finite numbers')
-    candidates = []
-    for object_data in arena['objects'].values():
-        candidates.extend(object_data.get('goals', []))
+    candidates = arena.get('objects', {}).get(_landmark_id, {}).get('goals', [])
     match = next((p for p in candidates if all(abs(a-b) < 1e-4 for a, b in zip(values, p))), None)
     if match is None:
         raise ValueError('nav2_goal is not an allowed approach pose on the map')
@@ -295,6 +309,7 @@ class CommandInterpretation:
     target_waypoints: List[Dict[str, Any]] = field(default_factory=list)
     raw_text: str = ""
     token_count: int = 0
+    local_object_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Конвертация в словарь."""
@@ -306,34 +321,11 @@ class CommandInterpretation:
 
     def is_valid(self) -> bool:
         """Проверка валидности ориентира или объекта карты."""
-        return self.target_landmark_id in ALLOWED_TARGET_IDS
+        return self.target_landmark_id in STATIC_TARGET_IDS
 
 
 # Системный промпт с описанием правил и ориентиров полигона
-SYSTEM_PROMPT = """Ты — бортовой аналитический модуль мобильного робота IJKbot на полигоне хакатона «Эвакуация» (Кубок РТК Высшая Лига).
-Твоя цель: проанализировать судейское задание на русском языке и точно определить целевой ориентир полигона, рядом с которым находится пострадавший человек.
-
-ГЛАВНОЕ ПРАВИЛО: В качестве главного целевого ориентира ВСЕГДА ПРИОРИТЕТНО ВЫБИРАЙ СТАТИЧНЫЕ ЭЛЕМЕНТЫ КАРТЫ ПОЛИГОНА (здания, мосты, парковка, река), так как они имеют фиксированное положение на арене:
-1. "blue_building" — Синее здание (ячейка [3, 1]). Имеет 4 точки наблюдения с 4 сторон (слева, снизу, справа, сверху). Выбирается при упоминании синего здания.
-2. "yellow_building" — Жёлтое здание (разрушенный двухсекционный дом, ячейки [1, 2] и [1, 3]). Имеет 4 точки наблюдения. Выбирается при упоминании жёлтого здания, разрушенного строения, руин.
-3. "bridges" — Мостовые переходы (ячейки [3, 4] и [4, 3]). Выбирается при упоминании моста, эстакады, путепровода.
-4. "parking" — Парковка / остановка / завал обломков жёлтого здания (ячейка [1, 1]). Выбирается при упоминании остановки, парковки, завала.
-5. "river" — Река (ячейка [3, 3], водная преграда).
-
-Регламентные ориентиры без фиксированных координат:
-6. "smoke_tower" — Здание «Стакан» с дымом/огнем.
-7. "panel_house" — Разрушенный панельный дом (соответствует жёлтому зданию на арене).
-8. "tanker_truck" — Аварийный бензовоз, разлив топлива.
-9. "fallen_tree" — Упавшее дерево, поваленная берёза.
-10. "car_jam" — Транспортный затор из легковых авто.
-11. "debris_pvc" — Завал из фрагментов ПВХ (трубы, пластик).
-
-ПРАВИЛА ДЛЯ ТОЧЕК НАВИГАЦИИ:
-- В поле "nav2_goals" ОБЯЗАТЕЛЬНО верни ВСЕ 4 точки осмотра из goals объекта (для зданий это ровно 4 точки: с 4 сторон).
-- В поле "nav2_goal" верни первую точку из nav2_goals для первоначального движения.
-- search_strategy: краткая тактика поиска на английском snake_case (например inspect_perimeter_4_points).
-- reasoning: чёткое и понятное судьям обоснование на русском языке.
-- Ответ возвращай строго в формате JSON."""
+SYSTEM_PROMPT = 'Определи СТАТИЧНЫЙ ориентир района поиска пострадавшего. Верни JSON по схеме.\nДопустимы только: yellow_building — жёлтый дом/здание; parking — остановка/парковка; blue_building — синий или голубой дом/здание; river — река/берег реки; bridges — мост/эстакада/путепровод.\nБензовоз, упавшее дерево, автомобили и обломки НЕ являются главным ориентиром. Они уточняют место рядом со статичным ориентиром. «Бензовоз опрокинулся около реки, искать рядом с этим объектом»: target_landmark_id=river, local_object_id=tanker_truck. «Дерево свалилось на голубой дом, искать рядом с деревом»: target_landmark_id=blue_building, local_object_id=fallen_tree.\nlocal_object_id: tanker_truck — бензовоз; fallen_tree — упавшее дерево; car_jam — затор машин; debris_pvc — обломки ПВХ; smoke_tower — Стакан; panel_house — панельный дом; null — не указан.\nУчитывай отрицания и исправления задания. Уже проверенные места и объекты по пути не являются целью поиска. Цвет машины не означает цвет здания. Если статичный ориентир не указан или район неоднозначен, верни unknown. Не выдумывай привязку к карте. search_strategy=inspect_perimeter. reasoning — краткое обоснование на русском, включающее локальный объект. Координаты вычисляет программа по карте, не генерируй их.'
 
 # JSON Schema для Structured Outputs Ollama
 OLLAMA_JSON_SCHEMA = {
@@ -341,7 +333,7 @@ OLLAMA_JSON_SCHEMA = {
     "properties": {
         "target_landmark_id": {
             "type": "string",
-            "enum": ALLOWED_TARGET_IDS
+            "enum": STATIC_TARGET_IDS + ["unknown"]
         },
         "search_strategy": {
             "type": "string"
@@ -349,38 +341,12 @@ OLLAMA_JSON_SCHEMA = {
         "reasoning": {
             "type": "string"
         },
-        "nav2_goals": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "frame_id": {"type": "string", "enum": ["map"]},
-                    "x": {"type": "number"},
-                    "y": {"type": "number"},
-                    "yaw": {"type": "number"}
-                },
-                "required": ["frame_id", "x", "y", "yaw"],
-                "additionalProperties": False
-            }
+        "local_object_id": {
+            "type": ["string", "null"],
+            "enum": [v.value for v in LandmarkID if v != LandmarkID.BRIDGES] + [None]
         },
-        "nav2_goal": {
-            "anyOf": [
-                {"type": "null"},
-                {
-                    "type": "object",
-                    "properties": {
-                        "frame_id": {"type": "string", "enum": ["map"]},
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
-                        "yaw": {"type": "number"}
-                    },
-                    "required": ["frame_id", "x", "y", "yaw"],
-                    "additionalProperties": False
-                }
-            ]
-        }
     },
-    "required": ["target_landmark_id", "search_strategy", "reasoning", "nav2_goals", "nav2_goal"],
+    "required": ["target_landmark_id", "search_strategy", "reasoning", "local_object_id"],
     "additionalProperties": False
 }
 
@@ -392,7 +358,7 @@ class LLMClient:
         self,
         host: Optional[str] = None,
         model: Optional[str] = None,
-        timeout: float = 15.0,
+        timeout: float = 120.0,
         temperature: float = 0.0,
         arena_file: Optional[str] = None
     ):
@@ -425,7 +391,8 @@ class LLMClient:
         url = f"{self.host}/api/generate"
         payload = {
             "model": self.model,
-            "prompt": "ping",
+            "prompt": "",
+            "options": {"num_ctx": 4096},
             "keep_alive": -1,
             "stream": False
         }
@@ -460,15 +427,7 @@ class LLMClient:
         """
         cleaned_text = task_description.strip()
         if not cleaned_text:
-            return CommandInterpretation(
-                target_landmark_id=LandmarkID.SMOKE_TOWER.value,
-                search_strategy="default_search",
-                reasoning="Получен пустой текст задания. Выбран ориентир по умолчанию.",
-                confidence=0.0,
-                source="fallback_empty",
-                raw_text="{}",
-                token_count=0
-            )
+            raise ValueError("Укажите задание и статичный ориентир поиска")
 
         t_start = time.time()
         try:
@@ -491,38 +450,27 @@ class LLMClient:
             reasoning = parsed_json.get("reasoning", "").strip()
 
             # Валидация ID ориентира (поддерживает как регламентные, так и статичные элементы арены)
-            if landmark_id not in ALLOWED_TARGET_IDS:
+            if landmark_id not in STATIC_TARGET_IDS:
                 raise ValueError(f"Неизвестный target_landmark_id: '{landmark_id}'")
-            # Валидация точек осмотра
-            goals_raw = parsed_json.get('nav2_goals')
-            valid_goals = validate_nav2_goals(goals_raw, landmark_id, self.arena)
-
-            goal_raw = parsed_json.get('nav2_goal')
-            if goal_raw is not None:
-                goal = validate_nav2_goal(goal_raw, landmark_id, self.arena)
-            elif valid_goals:
-                goal = valid_goals[0]
-            else:
-                goal = None
-
-            # Если модель не вывела список целей, но объект привязан к карте — дополняем всеми 4 точками
-            if not valid_goals and goal:
-                valid_goals = [goal]
+            # Точки осмотра берутся только из карты выбранного статичного объекта.
+            valid_goals = default_nav2_goals(landmark_id, self.arena)
             if not valid_goals:
-                valid_goals = default_nav2_goals(landmark_id, self.arena)
-                if not valid_goals:
-                    valid_goals = get_target_waypoints(landmark_id, self.arena, max_points=4)
-            if not goal and valid_goals:
-                goal = valid_goals[0]
-
+                raise ValueError("У ориентира нет точек осмотра на карте")
+            valid_goals = [validate_nav2_goal(g, landmark_id, self.arena) for g in valid_goals]
+            goal = valid_goals[0]
             waypoints = list(valid_goals)
-            if goal and goal not in waypoints:
-                waypoints.insert(0, goal)
-            waypoints = waypoints[:4]
-            valid_goals = waypoints
+            local_object = parsed_json.get('local_object_id')
+            if local_object is not None and local_object not in [v.value for v in LandmarkID if v != LandmarkID.BRIDGES]:
+                raise ValueError("Неизвестный локальный объект")
+            strategy = "inspect_perimeter"
+            # Дашборд показывает итоговый маршрут, а не выдуманные моделью координаты.
+            parsed_json.update(search_strategy=strategy, nav2_goals=valid_goals,
+                               nav2_goal=goal, target_waypoints=waypoints)
+            raw_result = json.dumps(parsed_json, ensure_ascii=False, indent=2)
 
             return CommandInterpretation(
                 target_landmark_id=landmark_id,
+                local_object_id=local_object,
                 search_strategy=strategy,
                 reasoning=reasoning,
                 confidence=0.98,
@@ -545,9 +493,9 @@ class LLMClient:
                     f"[Внимание: активирован fallback из-за сбоя LLM: {e}]. "
                     + fallback_res.reasoning
                 )
-                if not fallback_res.raw_text:
-                    fallback_res.raw_text = json.dumps(fallback_res.to_dict(), ensure_ascii=False, indent=2)
-                    fallback_res.token_count = len(fallback_res.raw_text.split())
+                fallback_res.raw_response['reasoning'] = fallback_res.reasoning
+                fallback_res.raw_response['source'] = fallback_res.source
+                fallback_res.raw_text = json.dumps(fallback_res.raw_response, ensure_ascii=False, indent=2)
                 return fallback_res
             else:
                 raise RuntimeError(f"Ошибка вызова LLM: {e}") from e
@@ -562,11 +510,13 @@ class LLMClient:
                 {"role": "user", "content": prompt}
             ],
             "format": OLLAMA_JSON_SCHEMA,
+            "think": False,
             "stream": bool(on_token and HAS_REQUESTS),
             "keep_alive": -1,
             "options": {
                 "temperature": self.temperature,
-                "num_predict": 512
+                "num_predict": 512,
+                "num_ctx": 4096
             }
         }
 
@@ -619,29 +569,7 @@ class LLMClient:
 
     def navigation_prompt(self) -> str:
         """Ground interpretation in an explicit coordinate grid and allowed poses."""
-        return (
-            'Ты бортовой аналитический модуль мобильного робота IJKbot на полигоне соревнований Кубок РТК «Эвакуация».\n'
-            'Определи целевой ориентир по тексту задания. Верни только JSON по схеме.\n\n'
-            'ОРИЕНТИРЫ ПОЛИГОНА:\n'
-            '1. Статичные элементы арены (главные приоритетные объекты, имеют точные координаты на карте):\n'
-            '- "blue_building": Синее здание (ячейка 3:1). Выбирается при упоминании синего здания.\n'
-            '- "yellow_building": Жёлтое здание (ячейки 1:2, 1:3). Выбирается при упоминании жёлтого здания.\n'
-            '- "bridges": Мостовые переходы (ячейки 3:4, 4:3). Выбирается при упоминании моста, эстакады, путепровода.\n'
-            '- "parking": Остановка / парковка (ячейка 1:1). Выбирается ТОЛЬКО при прямом упоминании слов «парковка» или «остановка».\n'
-            '- "river": Река (ячейка 3:3, водная преграда).\n\n'
-            '2. Регламентные ориентиры полигона (динамические объекты без фиксированных координат):\n'
-            '- "smoke_tower": Здание «Стакан», цилиндрическая башня, задымление, пар, очаг возгорания.\n'
-            '- "panel_house": Разрушенный панельный дом, обрушившееся панельное строение, железобетонные плиты.\n'
-            '- "tanker_truck": Аварийный бензовоз, автоцистерна, разлив топлива.\n'
-            '- "fallen_tree": Упавшее дерево, поваленная берёза, ствол, ветки на дороге.\n'
-            '- "car_jam": Транспортный затор, скопление легковых автомобилей масштаба 1:32, дорожная пробка.\n'
-            '- "debris_pvc": Завал из фрагментов ПВХ (пластиковые трубы, строительный мусор без здания).\n\n'
-            'ПРАВИЛО ТОЧЕК НАВИГАЦИИ:\n'
-            '- Для статичных объектов полигона (blue_building, yellow_building, bridges, parking, river) в поле "nav2_goals" ОБЯЗАТЕЛЬНО верни ВСЕ 4 точки осмотра из goals (для синего и жёлтого здания это ВСЕ 4 стороны: слева, снизу, справа, сверху). В поле "nav2_goal" верни ПЕРВУЮ точку.\n'
-            '- Для ориентиров с неизвестным положением на карте (smoke_tower, tanker_truck, fallen_tree, car_jam, debris_pvc) верни nav2_goals=[] и nav2_goal=null.\n'
-            '- Поле "reasoning" пиши СТРОГО на русском языке.\n\n'
-            'Сетка и допустимые точки осмотра объектов арены (goals):\n' + json.dumps(self.arena, ensure_ascii=False)
-        )
+        return SYSTEM_PROMPT
 
     def _extract_json(self, raw_content: str) -> Dict[str, Any]:
         """Извлечение и парсинг JSON из ответа модели."""
@@ -657,97 +585,33 @@ class LLMClient:
     def fallback_heuristic_parse(self, text: str) -> CommandInterpretation:
         """
         Детерминированный сопоставитель по семантическим ключевым словам.
-        Гарантирует безошибочное определение при сбоях сети/Ollama на полигоне.
+        Выбирает только единственный явно указанный статичный ориентир.
         Приоритет отдаётся статичным элементам арены (здания, мосты, парковка).
         """
-        text_lower = text.lower()
-
-        # 1. Приоритетный поиск статичных элементов карты полигона (здания, мосты, парковка)
-        if re.search(r"сине[егйму]|синяя", text_lower):
-            best_landmark = "blue_building"
-            reasoning = "В задании обнаружено упоминание синего здания — главный ориентир в ячейке [3, 1] с 4 точками обзора."
-            confidence = 0.99
-        elif re.search(r"ж[её]лт[оыае][егйму]?\s*(?:здани|дом|секци)|желтое|жёлтое", text_lower):
-            best_landmark = "yellow_building"
-            reasoning = "В задании обнаружено упоминание жёлтого здания — главный ориентир в ячейках [1, 2] и [1, 3] с 4 точками обзора."
-            confidence = 0.99
-        else:
-            scores: Dict[str, int] = {lm.value: 0 for lm in LandmarkID}
-
-            # Весовые коэффициенты для совпадений
-            all_details = {key.value: value for key, value in LANDMARK_DETAILS.items()}
-            for target_id, details in all_details.items():
-                for alias in details["aliases"]:
-                    pattern = r"\b" + re.escape(alias)
-                    matches = len(re.findall(pattern, text_lower))
-                    if matches > 0:
-                        scores[target_id] += matches * 2
-                    elif alias in text_lower:
-                        scores[target_id] += 1
-
-            # Специфические ключевые паттерны
-            if re.search(r"стакан|дым|задымлен|очаг|пожар|возгоран|пар\b", text_lower):
-                scores[LandmarkID.SMOKE_TOWER.value] += 5
-            if re.search(r"панельн|панельк|обрушивш.*дом|разрушенн.*дом|плит", text_lower):
-                scores[LandmarkID.PANEL_HOUSE.value] += 5
-            if re.search(r"мост|эстакад|путепровод|пандус", text_lower):
-                scores[LandmarkID.BRIDGES.value] += 5
-            if re.search(r"бензовоз|автоцистерн|цистерн|разлив|бензин|топлив", text_lower):
-                scores[LandmarkID.TANKER_TRUCK.value] += 5
-            if re.search(r"дерев|берез|берёз|ствол|бревн|ветк", text_lower):
-                scores[LandmarkID.FALLEN_TREE.value] += 5
-            if re.search(r"затор|пробк|скоплен.*машин|легков", text_lower):
-                scores[LandmarkID.CAR_JAM.value] += 5
-            if re.search(r"пвх|поливинилхлорид|завал|обломк|мусор", text_lower):
-                scores[LandmarkID.DEBRIS_PVC.value] += 5
-
-            best_landmark = max(scores, key=scores.get)
-            max_score = scores[best_landmark]
-
-            if max_score == 0:
-                best_landmark = LandmarkID.SMOKE_TOWER.value
-                confidence = 0.2
-                reasoning = "Ключевые слова не обнаружены; выбран ориентир по умолчанию."
-            else:
-                confidence = min(0.95, 0.5 + (max_score * 0.1))
-                reasoning = (
-                    f"Ориентир '{best_landmark}' определен эвристически по ключевым словам "
-                    f"({target_details(best_landmark)['name_ru']})."
-                )
-
+        mentions = static_mentions(text)
+        # Эвристика не разрешает отрицания/сравнения нескольких мест: здесь нужна LLM.
+        if len(mentions) != 1 or re.search(
+                r"\b(?:не|нет|либо|или|кроме)\b|проверен|осмотрен|ошибоч|отмен", text.lower()):
+            raise ValueError("Не удалось однозначно выбрать статичный ориентир. "
+                             "Уточните здание, остановку, реку или мосты; проверьте Ollama.")
+        best_landmark = mentions[0]
         goals = default_nav2_goals(best_landmark, self.arena)
         if not goals:
-            goals = get_target_waypoints(best_landmark, self.arena, max_points=4)
-        goal = goals[0] if goals else None
-        waypoints = list(goals)
-        if goal and goal not in waypoints:
-            waypoints.insert(0, goal)
-        waypoints = waypoints[:4]
-        goals = waypoints
-
-        fallback_dict = {
-            "target_landmark_id": best_landmark,
-            "search_strategy": target_details(best_landmark).get("default_strategy", "inspect_perimeter_4_points"),
-            "reasoning": reasoning,
-            "nav2_goals": goals,
-            "nav2_goal": goal,
-            "target_waypoints": waypoints
-        }
+            raise ValueError("У статичного ориентира нет точек осмотра на карте")
+        goals = [validate_nav2_goal(g, best_landmark, self.arena) for g in goals]
+        reasoning = (f"Статичный ориентир '{best_landmark}' определён резервной эвристикой. "
+                     "Точки осмотра взяты из его конфигурации карты.")
+        fallback_dict = dict(target_landmark_id=best_landmark,
+            search_strategy="inspect_perimeter", reasoning=reasoning,
+            nav2_goals=goals, nav2_goal=goals[0], target_waypoints=goals,
+            source="heuristic_fallback")
         raw_json_str = json.dumps(fallback_dict, ensure_ascii=False, indent=2)
-
         return CommandInterpretation(
-            target_landmark_id=best_landmark,
-            search_strategy=fallback_dict["search_strategy"],
-            reasoning=reasoning,
-            confidence=round(confidence, 2),
-            source="heuristic_fallback",
-            raw_response=fallback_dict,
-            nav2_goal=goal,
-            nav2_goals=goals,
-            target_waypoints=waypoints,
-            raw_text=raw_json_str,
-            token_count=len(raw_json_str.split()),
-        )
+            target_landmark_id=best_landmark, search_strategy="inspect_perimeter",
+            reasoning=reasoning, confidence=0.6, source="heuristic_fallback",
+            raw_response=fallback_dict, nav2_goal=goals[0], nav2_goals=goals,
+            target_waypoints=list(goals), raw_text=raw_json_str,
+            token_count=len(raw_json_str.split()))
 
 
 # ==============================================================================
@@ -807,6 +671,8 @@ def save_judge_report(
         "confidence": cmd.confidence,
         "source": cmd.source,
         "latency_sec": cmd.latency_sec,
+        "local_object_id": cmd.local_object_id,
+        "nav2_goals": cmd.nav2_goals,
         "raw_response": cmd.raw_response,
         "nav2_goal": cmd.nav2_goal,
     }
@@ -842,7 +708,7 @@ def create_ros_node():
             super().__init__("llm_interpreter_node")
             self.declare_parameter("host", os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
             self.declare_parameter("model", os.environ.get("OLLAMA_MODEL", "qwen3.5:9b"))
-            self.declare_parameter("timeout", 15.0)
+            self.declare_parameter("timeout", 120.0)
             self.declare_parameter("log_dir", "")
             self.declare_parameter("arena_file", "")
             self.declare_parameter("goal_topic", "/goal_pose")

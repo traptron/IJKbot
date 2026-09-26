@@ -32,7 +32,13 @@ LOG_DIR="${REPO_DIR}/log"
 mkdir -p "${LOG_DIR}"
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
-export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+if [[ -z "${RMW_IMPLEMENTATION:-}" ]]; then
+    if [[ -f "/opt/ros/jazzy/lib/librmw_cyclonedds_cpp.so" ]]; then
+        export RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
+    else
+        export RMW_IMPLEMENTATION="rmw_fastrtps_cpp"
+    fi
+fi
 
 # Параметры по умолчанию
 LLM_HOST="${LLM_HOST:-http://localhost:11434}"
@@ -256,7 +262,7 @@ echo -e "${GREEN}[OK] Порт ${PORT} свободен.${NC}"
 echo -e "\n${BLUE}${BOLD}[ШАГ 4/4] Запуск стека Ноутбука 1 (laptop.launch.py)...${NC}"
 PIXI_MANIFEST="${PIXI_PROJECT_MANIFEST:-/home/lev/ros2_jazzy/pixi.toml}"
 
-LAUNCH_CMD="source '${SETUP_BASH}' && ros2 launch bringup laptop.launch.py \
+LAUNCH_CMD="set +u && source '${SETUP_BASH}' && set -u && ros2 launch bringup laptop.launch.py \
     llm_host:='${LLM_HOST}' \
     port:='${PORT}' \
     host:='${HOST}' \
@@ -293,7 +299,9 @@ if command -v pixi &>/dev/null && [[ -f "${PIXI_MANIFEST}" ]]; then
 else
     # Нативный ROS 2
     if [[ -f "/opt/ros/jazzy/setup.bash" ]]; then
+        set +u
         source "/opt/ros/jazzy/setup.bash"
+        set -u
     fi
     bash -c "${LAUNCH_CMD}" &
     LAUNCH_PID=$!
