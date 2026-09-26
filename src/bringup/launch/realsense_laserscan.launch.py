@@ -55,7 +55,7 @@ def generate_launch_description():
         }.items()
     )
 
-    # 2. Нода преобразования среза карты глубины в 2D LaserScan (/scan)
+    # RealSense depth scan stays separate from the physical lidar scan.
     depthimage_to_laserscan_node = Node(
         package='depthimage_to_laserscan',
         executable='depthimage_to_laserscan_node',
@@ -64,7 +64,7 @@ def generate_launch_description():
         remappings=[
             ('depth', '/camera/depth/image_rect_raw'),
             ('depth_camera_info', '/camera/depth/camera_info'),
-            ('scan', '/scan'),
+            ('scan', '/depth/scan'),
         ],
         output='screen'
     )

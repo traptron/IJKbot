@@ -258,6 +258,29 @@ stateDiagram-v2
 
 ## 8. Диагностика и устранение неполадок (Troubleshooting)
 
+### RPLIDAR A2M8 и online-картографирование
+Установите официальный ROS 2 драйвер Slamtec в workspace и пересоберите пакеты:
+```bash
+cd ~/IJKbot/src
+git clone https://github.com/Slamtec/sllidar_ros2.git
+cd ..
+source /opt/ros/jazzy/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --packages-up-to bringup
+source install/setup.bash
+```
+
+`robot.launch.py` запускает A2M8 на `/scan` (115200 бод, режим `Sensitivity`); скан RealSense публикуется отдельно в `/depth/scan`. Порт по умолчанию `/dev/ttyUSB1`, так как `/dev/ttyUSB0` зарезервирован за UART приводов. При необходимости задайте стабильный порт устройства:
+```bash
+ros2 launch bringup robot.launch.py lidar_serial_port:=/dev/serial/by-id/<rplidar-device>
+```
+
+Для построения карты вместе с RPLIDAR, одометрией и TF запустите отдельный online SLAM режим вместо `system.launch.py` со статическим map server:
+```bash
+ros2 launch bringup mapping.launch.py lidar_serial_port:=/dev/serial/by-id/<rplidar-device>
+```
+`slam_toolbox` использует `/scan`, `odom`, `base_footprint` и публикует карту в `map`. Не запускайте одновременно этот режим и статический `map→odom` из Nav2.
+
 ### Проблема 1: Ошибка доступа к порту `/dev/ttyUSB0`
 - **Симптом**: Драйвер падает с `Permission denied` или `Cannot open /dev/ttyUSB0`.
 - **Решение**: Убедитесь, что пользователь входит в группу `dialout`, и примените udev-правило:

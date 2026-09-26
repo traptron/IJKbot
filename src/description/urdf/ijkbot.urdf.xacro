@@ -16,6 +16,14 @@
   <!-- Базовый фрейм проекции на пол -->
   <link name="base_footprint"/>
 
+  <!-- RPLIDAR A2M8 в центре переднего бампера -->
+  <link name="lidar_link"/>
+  <joint name="lidar_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="lidar_link"/>
+    <origin xyz="0.085 0 0.03" rpy="0 0 0"/>
+  </joint>
+
   <!-- Основной фрейм робота (центр ведущей оси) -->
   <joint name="base_footprint_to_base_link" type="fixed">
     <parent link="base_footprint"/>

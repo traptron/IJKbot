@@ -20,13 +20,31 @@ def generate_launch_description():
     declare_enable_camera = DeclareLaunchArgument(
         'enable_camera',
         default_value='true',
-        description='Запускать ли сенсорную связку (RealSense D435 + /scan)'
+        description='Запускать ли RealSense D435 и глубинный скан /depth/scan'
     )
 
     declare_enable_motors = DeclareLaunchArgument(
         'enable_motors',
         default_value='true',
         description='Запускать ли ноду драйвера сервоприводов STS3215'
+    )
+
+    declare_enable_lidar = DeclareLaunchArgument(
+        'enable_lidar',
+        default_value='true',
+        description='Запускать ли драйвер RPLIDAR A2M8 и публиковать LaserScan в /scan'
+    )
+
+    declare_lidar_serial_port = DeclareLaunchArgument(
+        'lidar_serial_port',
+        default_value='/dev/ttyUSB1',
+        description='Последовательный порт RPLIDAR; /dev/ttyUSB0 зарезервирован за приводами'
+    )
+
+    declare_lidar_serial_baudrate = DeclareLaunchArgument(
+        'lidar_serial_baudrate',
+        default_value='115200',
+        description='Скорость последовательного порта RPLIDAR A2M8'
     )
 
     declare_mock_hardware = DeclareLaunchArgument(
@@ -61,6 +79,9 @@ def generate_launch_description():
 
     enable_camera = LaunchConfiguration('enable_camera')
     enable_motors = LaunchConfiguration('enable_motors')
+    enable_lidar = LaunchConfiguration('enable_lidar')
+    lidar_serial_port = LaunchConfiguration('lidar_serial_port')
+    lidar_serial_baudrate = LaunchConfiguration('lidar_serial_baudrate')
     mock_hardware = LaunchConfiguration('mock_hardware')
     color_profile = LaunchConfiguration('color_profile')
     depth_profile = LaunchConfiguration('depth_profile')
@@ -100,9 +121,29 @@ def generate_launch_description():
         condition=IfCondition(enable_motors)
     )
 
+    rplidar_node = Node(
+        package='sllidar_ros2',
+        executable='sllidar_node',
+        name='rplidar_a2m8',
+        output='screen',
+        parameters=[{
+            'channel_type': 'serial',
+            'serial_port': lidar_serial_port,
+            'serial_baudrate': lidar_serial_baudrate,
+            'frame_id': 'lidar_link',
+            'inverted': False,
+            'angle_compensate': True,
+            'scan_mode': 'Sensitivity',
+        }],
+        condition=IfCondition(enable_lidar)
+    )
+
     return LaunchDescription([
         declare_enable_camera,
         declare_enable_motors,
+        declare_enable_lidar,
+        declare_lidar_serial_port,
+        declare_lidar_serial_baudrate,
         declare_mock_hardware,
         declare_color_profile,
         declare_depth_profile,
@@ -111,4 +152,5 @@ def generate_launch_description():
         rsp_launch,
         realsense_laserscan_launch,
         motor_driver_node,
+        rplidar_node,
     ])

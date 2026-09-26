@@ -5,7 +5,7 @@ system.launch.py — Единый мастер-лаунч мобильного �
 Запускает все подсистемы робота в одном процессе:
 1. Бортовые системы (robot.launch.py):
    - Robot State Publisher и TF-дерево (rsp.launch.py)
-   - Сенсорный пайплайн Intel RealSense D435 + LaserScan (/scan)
+    - RPLIDAR A2M8 на /scan и RealSense D435 на /depth/scan
    - Низкоуровневый драйвер приводов Feetech STS3215 (diff_drive_node, одометрия 50 Гц)
 2. Автономная навигация Nav2 (navigation.launch.py):
    - Статический TF map -> odom (навигация чисто по одометрии)
@@ -49,13 +49,31 @@ def generate_launch_description():
     declare_enable_camera = DeclareLaunchArgument(
         'enable_camera',
         default_value='true',
-        description='Запускать ли RealSense D435 и генерацию /scan'
+        description='Запускать ли RealSense D435 и генерацию /depth/scan'
     )
 
     declare_enable_motors = DeclareLaunchArgument(
         'enable_motors',
         default_value='true',
         description='Запускать ли драйвер сервоприводов STS3215'
+    )
+
+    declare_enable_lidar = DeclareLaunchArgument(
+        'enable_lidar',
+        default_value='true',
+        description='Запускать ли RPLIDAR A2M8 на роботе'
+    )
+
+    declare_lidar_serial_port = DeclareLaunchArgument(
+        'lidar_serial_port',
+        default_value='/dev/ttyUSB1',
+        description='Последовательный порт RPLIDAR A2M8'
+    )
+
+    declare_lidar_serial_baudrate = DeclareLaunchArgument(
+        'lidar_serial_baudrate',
+        default_value='115200',
+        description='Скорость последовательного порта RPLIDAR A2M8'
     )
 
     declare_use_amcl = DeclareLaunchArgument(
@@ -133,6 +151,9 @@ def generate_launch_description():
         launch_arguments={
             'enable_camera': LaunchConfiguration('enable_camera'),
             'enable_motors': LaunchConfiguration('enable_motors'),
+            'enable_lidar': LaunchConfiguration('enable_lidar'),
+            'lidar_serial_port': LaunchConfiguration('lidar_serial_port'),
+            'lidar_serial_baudrate': LaunchConfiguration('lidar_serial_baudrate'),
             'mock_hardware': LaunchConfiguration('mock_hardware'),
         }.items()
     )
@@ -182,6 +203,9 @@ def generate_launch_description():
         declare_enable_qr,
         declare_enable_camera,
         declare_enable_motors,
+        declare_enable_lidar,
+        declare_lidar_serial_port,
+        declare_lidar_serial_baudrate,
         declare_use_amcl,
         declare_initial_x,
         declare_initial_y,
