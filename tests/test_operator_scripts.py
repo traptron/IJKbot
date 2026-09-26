@@ -363,6 +363,10 @@ def test_update_pi_clean_flag(tmp_path):
     ('stop_all.sh', '--host'),
     ('teleop.sh', '--speed'),
     ('update_pi.sh', '--host'),
+    ('update_pi.sh', '--user'),
+    ('update_pi.sh', '--branch'),
+    ('update_pi.sh', '--ws'),
+    ('update_pi.sh', '--packages'),
 ])
 def test_script_missing_argument_value_fails_cleanly(script_and_flag):
     """Verify that omitting a required option argument exits with code 1 instead of crashing."""
@@ -438,4 +442,96 @@ def test_start_robot_pi_invalid_hostname_fails():
     assert "не отвечает" in output or "FAIL" in output
 
 
+def test_update_pi_remote_branch_fetch_and_checkout(tmp_path):
+    """Verify update_pi.sh fetches remote branch from origin before checking out."""
+    remote_dir = tmp_path / "remote_repo"
+    remote_dir.mkdir()
+    subprocess.run(['git', 'init', '--bare'], cwd=str(remote_dir), check=True, capture_output=True)
 
+    dev_clone = tmp_path / "dev_clone"
+    subprocess.run(['git', 'clone', str(remote_dir), str(dev_clone)], check=True, capture_output=True)
+    subprocess.run(['git', 'checkout', '-b', 'dev'], cwd=str(dev_clone), check=True, capture_output=True)
+    subprocess.run(['git', 'config', 'user.name', 'Test Dev'], cwd=str(dev_clone), check=True)
+    subprocess.run(['git', 'config', 'user.email', 'dev@example.com'], cwd=str(dev_clone), check=True)
+    (dev_clone / "base.txt").write_text("initial")
+    subprocess.run(['git', 'add', '.'], cwd=str(dev_clone), check=True)
+    subprocess.run(['git', 'commit', '-m', 'init dev'], cwd=str(dev_clone), check=True)
+    subprocess.run(['git', 'push', 'origin', 'dev'], cwd=str(dev_clone), check=True)
+
+    # Robot clones dev branch
+    robot_clone = tmp_path / "robot_clone"
+    subprocess.run(['git', 'clone', '--branch', 'dev', str(remote_dir), str(robot_clone)], check=True, capture_output=True)
+
+    # Developer creates a new branch and pushes it to origin
+    subprocess.run(['git', 'checkout', '-b', 'feature-target'], cwd=str(dev_clone), check=True, capture_output=True)
+    (dev_clone / "feature.txt").write_text("feature content")
+    subprocess.run(['git', 'add', '.'], cwd=str(dev_clone), check=True)
+    subprocess.run(['git', 'commit', '-m', 'add feature'], cwd=str(dev_clone), check=True)
+    subprocess.run(['git', 'push', 'origin', 'feature-target'], cwd=str(dev_clone), check=True)
+
+    # Robot updates to the new branch
+    script_path = os.path.join(SCRIPTS_DIR, 'update_pi.sh')
+    proc = subprocess.run(
+        [script_path, '--local', '--ws', str(robot_clone), '--branch', 'feature-target', '--no-build'],
+        capture_output=True,
+        text=True,
+        timeout=15
+    )
+    assert proc.returncode == 0
+    assert (robot_clone / "feature.txt").exists()
+    assert (robot_clone / "feature.txt").read_text() == "feature content"
+
+
+def test_update_pi_user_recomputes_remote_ws():
+    """Verify update_pi.sh recomputes default REMOTE_WS when --user is specified without --ws."""
+    script_path = os.path.join(SCRIPTS_DIR, 'update_pi.sh')
+    proc = subprocess.run(
+        [script_path, '--host', '192.0.2.1', '--user', 'custom_operator'],
+        capture_output=True,
+        text=True,
+        timeout=5
+    )
+    output = proc.stdout + proc.stderr
+    assert "custom_operator@192.0.2.1" in output
+    assert "/home/custom_operator/IJKbot" in output
+
+
+def test_update_pi_stash_conflict_fails_cleanly(tmp_path):
+    """Verify update_pi.sh aborts with non-zero exit code when stash pop encounters a conflict."""
+    remote_dir = tmp_path / "remote_stash_conflict"
+    remote_dir.mkdir()
+    subprocess.run(['git', 'init', '--bare'], cwd=str(remote_dir), check=True, capture_output=True)
+
+    clone_a = tmp_path / "clone_a"
+    subprocess.run(['git', 'clone', str(remote_dir), str(clone_a)], check=True, capture_output=True)
+    subprocess.run(['git', 'checkout', '-b', 'dev'], cwd=str(clone_a), check=True, capture_output=True)
+    subprocess.run(['git', 'config', 'user.name', 'Test A'], cwd=str(clone_a), check=True)
+    subprocess.run(['git', 'config', 'user.email', 'a@example.com'], cwd=str(clone_a), check=True)
+    (clone_a / "conflict.txt").write_text("line1\nline2\n")
+    subprocess.run(['git', 'add', '.'], cwd=str(clone_a), check=True)
+    subprocess.run(['git', 'commit', '-m', 'base'], cwd=str(clone_a), check=True)
+    subprocess.run(['git', 'push', 'origin', 'dev'], cwd=str(clone_a), check=True)
+
+    # Robot clone
+    robot_clone = tmp_path / "robot_stash_repo"
+    subprocess.run(['git', 'clone', '--branch', 'dev', str(remote_dir), str(robot_clone)], check=True, capture_output=True)
+
+    # Upstream commit
+    (clone_a / "conflict.txt").write_text("line1-upstream\nline2\n")
+    subprocess.run(['git', 'add', '.'], cwd=str(clone_a), check=True)
+    subprocess.run(['git', 'commit', '-m', 'upstream change'], cwd=str(clone_a), check=True)
+    subprocess.run(['git', 'push', 'origin', 'dev'], cwd=str(clone_a), check=True)
+
+    # Robot local uncommitted change on conflicting line
+    (robot_clone / "conflict.txt").write_text("line1-robot-local\nline2\n")
+
+    script_path = os.path.join(SCRIPTS_DIR, 'update_pi.sh')
+    proc = subprocess.run(
+        [script_path, '--local', '--ws', str(robot_clone), '--branch', 'dev', '--no-build'],
+        capture_output=True,
+        text=True,
+        timeout=15
+    )
+    assert proc.returncode != 0
+    output = proc.stdout + proc.stderr
+    assert "Конфликт при восстановлении изменений из stash" in output

@@ -146,6 +146,8 @@ done
 if [[ -n "${CUSTOM_WS}" ]]; then
     REMOTE_WS="${CUSTOM_WS}"
     LOCAL_WS="${CUSTOM_WS}"
+else
+    REMOTE_WS="/home/${PI_USER}/IJKbot"
 fi
 
 # Основная функция обновления (выполняется либо локально, либо удаленно через SSH)
@@ -221,7 +223,18 @@ do_update() {
     if ! git remote get-url origin &>/dev/null; then
         echo -e "${YELLOW}[WARN] Удаленный репозиторий 'origin' не настроен для '${ws}'. Пропуск git fetch & pull.${NC}"
     else
-        # Переключение ветки при необходимости
+        # 1. Сначала подтягиваем изменения с удаленного репозитория
+        echo -e "${BLUE}[GIT] Выполнение 'git fetch origin ${branch}'...${NC}"
+        if ! git fetch origin "${branch}"; then
+            echo -e "${RED}[ERROR] Ошибка выполнения git fetch origin ${branch}! Проверьте соединение с интернетом/GitHub.${NC}" >&2
+            if [[ "${had_stash}" == "true" ]]; then
+                echo -e "${YELLOW}[INFO] Восстанавливаем сохраненный stash...${NC}"
+                git stash pop || true
+            fi
+            return 1
+        fi
+
+        # 2. Переключение на целевую ветку при необходимости
         if [[ "${current_branch}" != "${branch}" ]]; then
             echo -e "${BLUE}[GIT] Переключение на ветку '${branch}'...${NC}"
             if ! git checkout "${branch}" 2>/dev/null; then
@@ -238,19 +251,9 @@ do_update() {
             fi
         fi
 
-        # Получение изменений
-        echo -e "${BLUE}[GIT] Выполнение 'git fetch origin ${branch}'...${NC}"
-        if ! git fetch origin "${branch}"; then
-            echo -e "${RED}[ERROR] Ошибка выполнения git fetch origin ${branch}! Проверьте соединение с интернетом/GitHub.${NC}" >&2
-            if [[ "${had_stash}" == "true" ]]; then
-                echo -e "${YELLOW}[INFO] Восстанавливаем сохраненный stash...${NC}"
-                git stash pop || true
-            fi
-            return 1
-        fi
-
-        echo -e "${BLUE}[GIT] Выполнение 'git pull origin ${branch}'...${NC}"
-        if ! git pull origin "${branch}"; then
+        # 3. Применение изменений (pull)
+        echo -e "${BLUE}[GIT] Выполнение 'git pull --no-edit origin ${branch}'...${NC}"
+        if ! git pull --no-edit origin "${branch}"; then
             echo -e "${RED}[ERROR] Ошибка выполнения git pull origin ${branch}! Возможен конфликт слияния.${NC}" >&2
             if [[ "${had_stash}" == "true" ]]; then
                 echo -e "${YELLOW}[INFO] Восстанавливаем сохраненный stash...${NC}"
@@ -269,8 +272,9 @@ do_update() {
         if git stash pop; then
             echo -e "${GREEN}[OK] Локальные изменения успешно применены поверх обновлений.${NC}"
         else
-            echo -e "${RED}[WARN] Конфликт при восстановлении изменений из stash!${NC}" >&2
-            echo -e "${YELLOW}Пожалуйста, проверьте состояние файлов ('git status') и разрешите конфликты вручную.${NC}" >&2
+            echo -e "${RED}[ERROR] Конфликт при восстановлении изменений из stash!${NC}" >&2
+            echo -e "${YELLOW}Пожалуйста, проверьте состояние файлов ('git status') и разрешите конфликты вручную перед сборкой.${NC}" >&2
+            return 1
         fi
     fi
 
@@ -295,16 +299,18 @@ do_update() {
         return 0
     fi
 
-    # Sourcing ROS 2
+    # Sourcing ROS 2 (отключаем nounset на время sourcing для совместимости с ROS скриптами)
     local ros_sourced=false
+    set +u
     if [[ -f "/opt/ros/jazzy/setup.bash" ]]; then
         # Нативный ROS 2 Jazzy (Raspberry Pi Ubuntu 24.04)
-        source /opt/ros/jazzy/setup.bash
+        source /opt/ros/jazzy/setup.bash 2>/dev/null || true
         ros_sourced=true
     elif [[ -n "${ROS_DISTRO:-}" && -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
-        source "/opt/ros/${ROS_DISTRO}/setup.bash"
+        source "/opt/ros/${ROS_DISTRO}/setup.bash" 2>/dev/null || true
         ros_sourced=true
     fi
+    set -u
 
     local colcon_cmd="colcon"
     if [[ "${ros_sourced}" != "true" ]]; then
@@ -325,9 +331,15 @@ do_update() {
     if [[ -n "${pkgs}" ]]; then
         echo -e "${BLUE}[BUILD] Сборка указанных пакетов: ${BOLD}${pkgs}${NC}"
         build_args+=("--packages-up-to" ${pkgs})
-    elif [[ "${clean}" != "true" && -n "${old_commit}" && -n "${new_commit}" && "${old_commit}" != "${new_commit}" ]]; then
+    elif [[ "${clean}" != "true" ]]; then
         local changed_dirs
-        changed_dirs=$(git diff --name-only "${old_commit}" "${new_commit}" 2>/dev/null | awk -F/ '{print $1}' | sort -u || true)
+        changed_dirs=$( {
+            if [[ -n "${old_commit}" && -n "${new_commit}" && "${old_commit}" != "${new_commit}" ]]; then
+                git diff --name-only "${old_commit}" "${new_commit}" 2>/dev/null || true
+            fi
+            git diff --name-only HEAD 2>/dev/null || true
+            git status --porcelain 2>/dev/null | awk '{print $NF}' || true
+        } | awk -F/ '{print $1}' | sort -u || true)
         local detected_pkgs=()
         for d in ${changed_dirs}; do
             if [[ -f "${ws}/${d}/package.xml" ]]; then
@@ -338,7 +350,7 @@ do_update() {
             echo -e "${BLUE}[BUILD] Обнаружены изменения в пакетах: ${BOLD}${detected_pkgs[*]}${NC}"
             build_args+=("--packages-up-to" "${detected_pkgs[@]}")
         else
-            echo -e "${BLUE}[BUILD] Изменения в ROS-пакетах не обнаружены, проверка сборки воркспейса...${NC}"
+            echo -e "${BLUE}[BUILD] Сборка всех пакетов воркспейса...${NC}"
         fi
     else
         echo -e "${BLUE}[BUILD] Сборка всех пакетов воркспейса...${NC}"
@@ -415,12 +427,13 @@ fi
 
 # Удаленный режим через SSH
 echo -ne "${BLUE}[1/2] Проверка связи с Raspberry Pi (${PI_HOST})... ${NC}"
-SSH_PROBE_OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${PI_HOST}" "true" 2>&1 || true)
+SSH_PROBE_OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${PI_HOST}" "true" 2>&1)
+SSH_PROBE_EXIT=$?
 HOST_UNREACHABLE=false
 
-if echo "${SSH_PROBE_OUT}" | grep -qE "timed out|No route to host|Connection refused|Connection timed out during banner exchange"; then
-    HOST_UNREACHABLE=true
-elif ! ping -c 1 -W 1 "${PI_HOST}" &>/dev/null && [[ -n "${SSH_PROBE_OUT}" ]] && ! echo "${SSH_PROBE_OUT}" | grep -qE "Permission denied"; then
+if [[ ${SSH_PROBE_EXIT} -eq 0 ]] || echo "${SSH_PROBE_OUT}" | grep -q "Permission denied"; then
+    HOST_UNREACHABLE=false
+else
     HOST_UNREACHABLE=true
 fi
 
@@ -463,7 +476,7 @@ REMOTE_PAYLOAD="$(typeset -f do_update); do_update \"${REMOTE_WS}\" \"${BRANCH}\
 B64_PAYLOAD=$(echo "${REMOTE_PAYLOAD}" | base64 -w 0)
 
 ssh ${SSH_TTY_OPT} -o ConnectTimeout=10 -o StrictHostKeyChecking=no "${PI_USER}@${PI_HOST}" \
-    "bash -c \"\$(echo '${B64_PAYLOAD}' | base64 -d)\"" &
+    "echo '${B64_PAYLOAD}' | base64 -d | bash" &
 SSH_PID=$!
 
 wait "${SSH_PID}"
