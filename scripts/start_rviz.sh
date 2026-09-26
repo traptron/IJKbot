@@ -123,5 +123,5 @@ cleanup() {
 trap cleanup SIGINT SIGTERM EXIT
 
 export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
-pixi run rviz2 -d "${RVIZ_CONFIG}" "${EXTRA_ARGS[@]}" || true
+pixi run rviz2 -d "${RVIZ_CONFIG}" "${EXTRA_ARGS[@]}"
 cleanup

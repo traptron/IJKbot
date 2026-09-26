@@ -163,11 +163,16 @@ trap stop_on_exit EXIT INT TERM
 
 export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
 # Запуск без exec, чтобы при выходе или сигнале bash гарантированно выполнил trap stop_on_exit
-pixi run ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+if pixi run ros2 run teleop_twist_keyboard teleop_twist_keyboard \
     --ros-args \
     -r /cmd_vel:="${TARGET_TOPIC}" \
     -p speed:="${SPEED}" \
-    -p turn:="${TURN}" || true
+    -p turn:="${TURN}"; then
+    TELEOP_EXIT=0
+else
+    TELEOP_EXIT=$?
+fi
 
 stop_on_exit
+exit "${TELEOP_EXIT}"
 

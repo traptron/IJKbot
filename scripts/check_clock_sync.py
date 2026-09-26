@@ -201,17 +201,22 @@ def check_clock_sync(
 ) -> ClockSyncResult:
     """Основная функция проверки синхронизации часов между ноутбуком и Raspberry Pi."""
     if mock:
+        delta_ms = 0.85
+        passed = delta_ms < threshold_ms
+        status = 'PASS' if passed else 'FAIL'
+        comparator = '<' if passed else '>='
         return ClockSyncResult(
-            passed=True,
-            status='PASS',
-            delta_ms=0.85,
+            passed=passed,
+            status=status,
+            delta_ms=delta_ms,
             threshold_ms=threshold_ms,
             laptop_offset_ms=-0.42,
             robot_offset_ms=-1.27,
             laptop_stratum=3,
             robot_stratum=3,
             connected_host='mock-hardware',
-            message='[PASS] [MOCK] Синхронизация часов симулирована (Δt = 0.85 мс < 5.0 мс)',
+            message=f'[{status}] [MOCK] Синхронизация часов симулирована '
+                    f'(Δt = {delta_ms:.2f} мс {comparator} {threshold_ms:.1f} мс)',
             details={'mode': 'mock'},
         )
 

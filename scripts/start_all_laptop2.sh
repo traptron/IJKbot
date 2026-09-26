@@ -128,6 +128,11 @@ while [[ $# -gt 0 ]]; do
                 print_help
                 exit 1
             fi
+            if [[ ! "$2" =~ ^(bg|tabs|windows|tmux)$ ]]; then
+                echo -e "${RED}[ERROR] Неизвестный режим запуска: ${2:-<не указан>}${NC}" >&2
+                print_help
+                exit 1
+            fi
             LAUNCH_MODE="$2"
             shift 2
             ;;
