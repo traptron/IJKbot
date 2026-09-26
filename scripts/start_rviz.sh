@@ -30,8 +30,8 @@ export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
 PIXI_MANIFEST="${PIXI_PROJECT_MANIFEST:-/home/lev/ros2_jazzy/pixi.toml}"
-DEFAULT_RVIZ_CONFIG="${REPO_DIR}/ijkbot_nav2/rviz/nav2_default_view.rviz"
-FALLBACK_RVIZ_CONFIG="${REPO_DIR}/ijkbot_nav2/rviz/nav2_view.rviz"
+DEFAULT_RVIZ_CONFIG="${REPO_DIR}/src/nav2/rviz/nav2_default_view.rviz"
+FALLBACK_RVIZ_CONFIG="${REPO_DIR}/src/nav2/rviz/nav2_view.rviz"
 
 RVIZ_CONFIG="${DEFAULT_RVIZ_CONFIG}"
 EXTRA_ARGS=()

@@ -60,7 +60,7 @@ def test_script_help_flag(script_name):
 
 def test_rviz_default_view_config():
     """Verify that nav2_default_view.rviz exists and has all required displays."""
-    rviz_file = os.path.join(REPO_DIR, 'ijkbot_nav2', 'rviz', 'nav2_default_view.rviz')
+    rviz_file = os.path.join(REPO_DIR, 'src', 'nav2', 'rviz', 'nav2_default_view.rviz')
     assert os.path.isfile(rviz_file), "nav2_default_view.rviz not found"
 
     with open(rviz_file, 'r') as f:

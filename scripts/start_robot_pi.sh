@@ -159,7 +159,7 @@ if [[ "${RUN_LOCAL}" == "true" ]]; then
     }
     trap cleanup_local SIGINT SIGTERM EXIT
 
-    pixi run bash -c "source '${LOCAL_SETUP}' && ros2 launch ijkbot_bringup robot.launch.py \
+    pixi run bash -c "source '${LOCAL_SETUP}' && ros2 launch bringup robot.launch.py \
         mock_hardware:='${MOCK_HARDWARE}' \
         ${EXTRA_LAUNCH_ARGS}" &
     LOCAL_PID=$!
@@ -209,7 +209,7 @@ REMOTE_SETUP="
 
 REMOTE_CMD="${REMOTE_SETUP}
     echo '[REMOTE] Запуск robot.launch.py (mock_hardware:=${MOCK_HARDWARE})...';
-    exec ros2 launch ijkbot_bringup robot.launch.py mock_hardware:=${MOCK_HARDWARE} ${EXTRA_LAUNCH_ARGS}
+    exec ros2 launch bringup robot.launch.py mock_hardware:=${MOCK_HARDWARE} ${EXTRA_LAUNCH_ARGS}
 "
 
 CLEANUP_CALLED=false

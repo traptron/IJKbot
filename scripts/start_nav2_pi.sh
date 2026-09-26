@@ -220,7 +220,7 @@ if [[ "${RUN_LOCAL}" == "true" ]]; then
     }
     trap cleanup_local SIGINT SIGTERM EXIT
 
-    pixi run bash -c "source '${LOCAL_SETUP}' && ros2 launch ijkbot_nav2 navigation.launch.py \
+    pixi run bash -c "source '${LOCAL_SETUP}' && ros2 launch nav2 navigation.launch.py \
         initial_x:='${INITIAL_X}' \
         initial_y:='${INITIAL_Y}' \
         initial_yaw:='${INITIAL_YAW}' \
@@ -274,7 +274,7 @@ fi
 
 REMOTE_CMD="${REMOTE_SETUP}
     echo '[REMOTE] Запуск navigation.launch.py...';
-    exec ros2 launch ijkbot_nav2 navigation.launch.py \
+    exec ros2 launch nav2 navigation.launch.py \
         initial_x:=${INITIAL_X} \
         initial_y:=${INITIAL_Y} \
         initial_yaw:=${INITIAL_YAW} \
