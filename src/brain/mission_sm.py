@@ -167,7 +167,7 @@ STATIC_ARENA_CELLS: Dict[Tuple[int, int], Dict[str, Any]] = {
     (1, 1): {
         "title": "ОСТАНОВКА",
         "subtitle": "Парковка",
-        "detail": "Обломки жёлтого зд.",
+        "detail": "ОБЛОМКИ ЖЁЛТОГО ЗДАНИЯ",
         "fill": "#78350f",
         "stroke": "#f59e0b",
         "text_color": "#fbbf24",
@@ -254,6 +254,9 @@ LANDMARK_WAYPOINTS: Dict[str, Waypoint] = {
     ),
     "parking": Waypoint(
         x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Остановка / парковка"
+    ),
+    "yellow_building_debris": Waypoint(
+        x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Обломки жёлтого здания"
     ),
     "river": Waypoint(
         x=2.0, y=2.8, yaw=0.0, cell=(2, 3), name="Река"
@@ -2072,6 +2075,10 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         f'<text x="{cx}" y="{cy - 2}" fill="{text_col}" font-size="9" font-weight="bold" font-family="sans-serif" text-anchor="middle">{st["title"]}</text>'
                         f'<text x="{cx}" y="{cy + 12}" fill="{text_col}" font-size="7.5" font-family="sans-serif" text-anchor="middle" opacity="0.95">{st["subtitle"]}</text>'
                     )
+                    if st.get("detail"):
+                        svg_parts.append(
+                            f'<text x="{cx}" y="{cy + 25}" fill="{text_col}" font-size="6.5" font-weight="bold" font-family="sans-serif" text-anchor="middle" opacity="0.95" textLength="78" lengthAdjust="spacingAndGlyphs">{st["detail"]}</text>'
+                        )
                 else:
                     # Обычная проходимая ячейка полигона
                     fill = "#1e293b"

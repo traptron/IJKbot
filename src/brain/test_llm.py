@@ -24,7 +24,6 @@ from brain.llm_client import (
     validate_nav2_goal,
     default_nav2_goals,
     STATIC_TARGET_IDS,
-    static_mentions,
 )
 
 
@@ -51,7 +50,7 @@ class TestLandmarkDefinitions(unittest.TestCase):
 
     def test_map_objects_are_not_regulation_landmarks(self):
         self.assertEqual(set(MAP_OBJECT_DETAILS), {
-            "start", "parking", "yellow_building", "blue_building", "river"
+            "start", "parking", "yellow_building_debris", "yellow_building", "blue_building", "river"
         })
 
     def test_landmark_details_coverage(self):
@@ -154,15 +153,25 @@ class TestHeuristicFallback(unittest.TestCase):
                 self.assertTrue(result.is_valid())
                 self.assertGreater(result.confidence, 0.5)
 
-    def test_yellow_building_debris_maps_to_parking_cell(self):
-        result = self.client.fallback_heuristic_parse(
-            "Найти пострадавшего у обломков жёлтого здания"
-        )
-        self.assertEqual(static_mentions("обломки жёлтого здания"), ["parking"])
-        self.assertEqual(result.target_landmark_id, "parking")
-        self.assertEqual(result.nav2_goals, default_nav2_goals("parking", self.client.arena))
-        self.assertEqual(self.client.arena["objects"]["parking"]["cells"], [[1, 1]])
-        self.assertIn("обломки жёлтого здания", self.client.navigation_prompt())
+    def test_fallback_requires_llm_for_yellow_building_debris(self):
+        with self.assertRaisesRegex(ValueError, "требует распознавания локальной LLM"):
+            self.client.fallback_heuristic_parse("Пострадавший у обломков жёлтого здания")
+
+    def test_llm_selects_yellow_building_debris_and_uses_cell_1_1_route(self):
+        answer = json.dumps(dict(
+            target_landmark_id="yellow_building_debris",
+            search_strategy="inspect",
+            reasoning="Обломки жёлтого здания указаны как отдельный ориентир.",
+            local_object_id=None,
+        ), ensure_ascii=False)
+        with patch.object(self.client, "_query_ollama", return_value=answer):
+            result = self.client.interpret("Найти пострадавшего у обломков жёлтого здания", use_fallback=False)
+
+        self.assertEqual(result.target_landmark_id, "yellow_building_debris")
+        self.assertEqual(self.client.arena["objects"]["yellow_building_debris"]["cells"], [[1, 1]])
+        self.assertEqual(result.nav2_goals, default_nav2_goals("yellow_building_debris", self.client.arena))
+        self.assertIn("yellow_building_debris", self.client.navigation_prompt())
+        self.assertIn("выбирай yellow_building_debris", self.client.navigation_prompt())
 
 
 class TestStaticTargetRegression(unittest.TestCase):
@@ -227,6 +236,7 @@ class TestOllamaLiveIntegration(unittest.TestCase):
             ('Пострадавший находится рядом с деревом,свалившимся на голубой дом.'
              'Продолжайте поиск пострадавшего рядом с упавшим деревом.', 'blue_building', 'fallen_tree'),
             ('Бензовоз возле жёлтого здания. Ищите человека рядом с ним.', 'yellow_building', 'tanker_truck'),
+            ('Пострадавший находится у обломков жёлтого здания.', 'yellow_building_debris', None),
             ('Пострадавший у дерева возле остановки.', 'parking', 'fallen_tree'),
             ('Пострадавший у бензовоза возле моста.', 'bridges', 'tanker_truck'),
             ('Не у реки, а у синего здания находится бензовоз с пострадавшим.', 'blue_building', 'tanker_truck'),

@@ -353,7 +353,9 @@ class TestMissionStateMachine(unittest.TestCase):
         p11 = STATIC_ARENA_CELLS[(1, 1)]
         self.assertEqual(p11["title"], "ОСТАНОВКА")
         self.assertEqual(p11["subtitle"], "Парковка")
-        self.assertIn("Обломки", p11["detail"])
+        self.assertIn("ОБЛОМКИ ЖЁЛТОГО ЗДАНИЯ", p11["detail"])
+        self.assertIn("yellow_building_debris", LANDMARK_WAYPOINTS)
+        self.assertEqual(LANDMARK_WAYPOINTS["yellow_building_debris"].cell, (0, 1))
 
     def test_llm_tokens_captured(self):
         """Проверка фиксации сгенерированных токенов от LLM в конечном автомате."""
