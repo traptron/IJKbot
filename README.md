@@ -193,24 +193,24 @@ stateDiagram-v2
    ```
 
 3. **Комплексный запуск систем (Однокнопочный старт)**:
-   ```bash
-   ./scripts/start_all_laptop2.sh
-   ```
-   Скрипт автоматически:
-   - Проверит сеть и пинг до Raspberry Pi;
-   - Проверит синхронизацию времени Chrony;
-   - Запустит сенсоры RealSense и C++ драйвер моторов на Pi по SSH;
-   - Запустит стек Nav2 на Pi по SSH;
-   - Откроет предварительно настроенное окно RViz2 на ноутбуке.
+   - **Ноутбук 1 (Судейский ИИ, дашборд и зрение)**:
+     ```bash
+     ./scripts/start_all_laptop1.sh
+     ```
+     Скрипт проверяет сервер Ollama, модель Qwen 2.5, порт 8080, запускает `laptop.launch.py` и автоматически открывает браузер.
+   - **Ноутбук 2 (Операторская станция, робот и навигация)**:
+     ```bash
+     ./scripts/start_all_laptop2.sh
+     ```
+     Скрипт проверяет сеть, Chrony, запускает базовый стек и Nav2 на Pi по SSH и поднимает RViz2.
 
 4. **Запуск миссии**:
-   - Откройте веб-интерфейс дашборда по адресу: [http://localhost:8080](http://localhost:8080)
-   - Введите текст задания судей в поле ввода (или отправьте голосовую расшифровку) и нажмите кнопку **«Распознать задание»**.
+   - В веб-интерфейсе дашборда [http://localhost:8080](http://localhost:8080) введите текст задания судей в поле ввода (или отправьте голосовую расшифровку) и нажмите **«Распознать задание»**.
    - Убедитесь, что LLM выбрала целевую ячейку, и нажмите зелёную кнопку **«СТАРТ МИССИИ»**.
 
 5. **Экстренная остановка**:
    - В интерфейсе: красная кнопка **«E-STOP»**.
-   - В консоли: нажмите `Ctrl+C` в окне `start_all_laptop2.sh` или выполните:
+   - В консоли: нажмите `Ctrl+C` в окне запуска или выполните:
    ```bash
    ./scripts/stop_all.sh
    ```
@@ -221,8 +221,9 @@ stateDiagram-v2
 
 | Скрипт | Назначение | Пример использования |
 |---|---|---|
-| [`start_all_laptop2.sh`](file:///home/lev/IJKbot/scripts/start_all_laptop2.sh) | Главный оркестратор запуска | `./scripts/start_all_laptop2.sh --mode tmux` |
-| [`stop_all.sh`](file:///home/lev/IJKbot/scripts/stop_all.sh) | Остановка всех процессов на ПК и Pi | `./scripts/stop_all.sh --host 192.168.1.10` |
+| [`start_all_laptop1.sh`](file:///home/lev/IJKbot/scripts/start_all_laptop1.sh) | Запуск судейского ИИ, NiceGUI дашборда и QR-детекции | `./scripts/start_all_laptop1.sh` |
+| [`start_all_laptop2.sh`](file:///home/lev/IJKbot/scripts/start_all_laptop2.sh) | Главный оркестратор оператора (Pi SSH + Nav2 + RViz2) | `./scripts/start_all_laptop2.sh --mode tmux` |
+| [`stop_all.sh`](file:///home/lev/IJKbot/scripts/stop_all.sh) | Остановка всех процессов на Ноутбуках и Pi | `./scripts/stop_all.sh --host 192.168.1.10` |
 | [`teleop.sh`](file:///home/lev/IJKbot/scripts/teleop.sh) | Ручное телеуправление с клавиатуры | `./scripts/teleop.sh --speed 0.15` |
 | [`start_rviz.sh`](file:///home/lev/IJKbot/scripts/start_rviz.sh) | Запуск RViz2 с соревновательным профилем | `./scripts/start_rviz.sh` |
 | [`check_clock_sync.py`](file:///home/lev/IJKbot/scripts/check_clock_sync.py) | Проверка точности Chrony | `./scripts/check_clock_sync.py --threshold-ms 5.0` |

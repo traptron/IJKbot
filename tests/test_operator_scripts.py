@@ -13,6 +13,7 @@ REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(REPO_DIR, 'scripts')
 
 SCRIPTS = [
+    'start_all_laptop1.sh',
     'start_all_laptop2.sh',
     'start_robot_pi.sh',
     'start_nav2_pi.sh',
@@ -41,6 +42,7 @@ def test_script_syntax_with_bash_n(script_name):
 
 
 @pytest.mark.parametrize("script_name", [
+    'start_all_laptop1.sh',
     'start_all_laptop2.sh',
     'start_robot_pi.sh',
     'start_nav2_pi.sh',
@@ -512,3 +514,45 @@ def test_update_pi_stash_conflict_fails_cleanly(tmp_path):
     assert proc.returncode != 0
     output = proc.stdout + proc.stderr
     assert "Конфликт при восстановлении изменений из stash" in output
+
+
+def test_start_all_laptop1_invalid_arg():
+    """Verify start_all_laptop1.sh rejects unknown options."""
+    script_path = os.path.join(SCRIPTS_DIR, 'start_all_laptop1.sh')
+    proc = subprocess.run(
+        [script_path, '--invalid-flag-test'],
+        capture_output=True,
+        text=True,
+        timeout=5
+    )
+    assert proc.returncode != 0
+    output = proc.stdout + proc.stderr
+    assert "Неизвестный параметр" in output
+
+
+def test_start_all_laptop1_missing_arg_value():
+    """Verify start_all_laptop1.sh requires argument value."""
+    script_path = os.path.join(SCRIPTS_DIR, 'start_all_laptop1.sh')
+    proc = subprocess.run(
+        [script_path, '--port'],
+        capture_output=True,
+        text=True,
+        timeout=5
+    )
+    assert proc.returncode != 0
+    output = proc.stdout + proc.stderr
+    assert "требует номера порта" in output
+
+
+def test_start_all_laptop1_unreachable_ollama_fails():
+    """Verify start_all_laptop1.sh detects unreachable Ollama server and exits with error."""
+    script_path = os.path.join(SCRIPTS_DIR, 'start_all_laptop1.sh')
+    proc = subprocess.run(
+        [script_path, '--llm-host', 'http://127.0.0.1:59999', '--no-browser'],
+        capture_output=True,
+        text=True,
+        timeout=10
+    )
+    assert proc.returncode != 0
+    output = proc.stdout + proc.stderr
+    assert "Ollama не отвечает" in output

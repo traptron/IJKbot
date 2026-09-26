@@ -194,6 +194,8 @@ pkill -f teleop_twist_keyboard 2>/dev/null && echo -e "  - teleop_twist_keyboard
 
 # Остановка локальных ROS 2 нод IJKbot
 LOCAL_ROS_PATTERNS=(
+    "laptop.launch.py"
+    "dashboard_app"
     "robot.launch.py"
     "navigation.launch.py"
     "diff_drive_node"
@@ -219,8 +221,8 @@ for pat in "${LOCAL_ROS_PATTERNS[@]}"; do
     pgrep -f "${pat}" | grep -v -E "${EXCLUDE_PIDS}" | xargs -r kill -9 2>/dev/null || true
 done
 
-# Остановка фоновых скриптов запуска Ноутбука 2 (исключая текущий процесс, родителя и редактор)
-for script in "start_robot_pi.sh" "start_nav2_pi.sh" "start_rviz.sh" "teleop.sh"; do
+# Остановка фоновых скриптов запуска Ноутбука 1 и 2 (исключая текущий процесс, родителя и редактор)
+for script in "start_all_laptop1.sh" "start_all_laptop2.sh" "start_robot_pi.sh" "start_nav2_pi.sh" "start_rviz.sh" "teleop.sh"; do
     pgrep -f "bash.*${script}|/${script}" | grep -v -E "${EXCLUDE_PIDS}" | xargs -r kill -2 2>/dev/null || true
 done
 sleep 0.2
