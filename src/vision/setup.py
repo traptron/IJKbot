@@ -9,7 +9,8 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', ['launch/qr_reader.launch.py']),
+        ('share/' + package_name + '/launch', [
+            'launch/qr_reader.launch.py', 'launch/rpi_qr.launch.py']),
         ('share/' + package_name + '/config', ['config/qr_reader.yaml']),
     ],
     install_requires=['setuptools'],
@@ -22,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'qr_reader_node = vision.qr_reader_node:main',
+            'rpi_camera_node = vision.rpi_camera_node:main',
         ],
     },
 )
