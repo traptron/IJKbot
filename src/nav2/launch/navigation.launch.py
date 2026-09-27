@@ -112,7 +112,13 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[configured_params]
+        parameters=[
+            configured_params,
+            {
+                'use_sim_time': use_sim_time,
+                'yaml_filename': map_yaml_file
+            }
+        ]
     )
 
     # Режим А (по умолчанию): навигация чисто по идеальной колесной одометрии
@@ -155,7 +161,17 @@ def generate_launch_description():
         executable='amcl',
         name='amcl',
         output='screen',
-        parameters=[configured_params],
+        parameters=[
+            configured_params,
+            {
+                'use_sim_time': use_sim_time,
+                'set_initial_pose': True,
+                'initial_pose.x': initial_x,
+                'initial_pose.y': initial_y,
+                'initial_pose.z': 0.0,
+                'initial_pose.yaw': initial_yaw
+            }
+        ],
         condition=IfCondition(use_amcl)
     )
 
