@@ -688,8 +688,11 @@ class MissionStateMachine:
         """Старт выполнения миссии по кнопке судей/оператора."""
         with self.lock:
             if self.state not in [MissionState.READY_TO_START, MissionState.PREPARATION]:
-                self._log("WARN", f"Попытка старта из недопустимого состояния {self.state}")
-                return
+                self._log("WARN", f"Повторный старт миссии из состояния {self.state}: сброс и перезапуск...")
+                self._cancel_nav_goal()
+                self.victim_found = False
+                self.qr_scanned = False
+                self.evacuated_home = False
 
             if not self.command_interpretation:
                 if self.current_task_text:
@@ -711,10 +714,12 @@ class MissionStateMachine:
 
             self.state = MissionState.NAVIGATING_TO_LANDMARK
             total_wp = len(self.waypoints_queue) if self.waypoints_queue else 1
-            self._log("STATE", f"СТАРТ МИССИИ! Движение к точке [1/{total_wp}]: {self.current_waypoint.name}")
+            wp_name = self.current_waypoint.name if self.current_waypoint else "Цель"
+            self._log("STATE", f"СТАРТ МИССИИ! Движение к точке [1/{total_wp}]: {wp_name}")
 
             # Публикация цели Nav2 в ROS 2
-            self._publish_goal_pose(self.current_waypoint)
+            if self.current_waypoint:
+                self._publish_goal_pose(self.current_waypoint)
 
     def _cancel_nav_goal(self) -> None:
         """Явная отмена активной цели Nav2 при смене состояний миссии."""
@@ -1741,10 +1746,15 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
                     # 2. Шаг 2: СТАРТ МИССИИ / ПЛАНЕРА
                     def handle_start():
-                        sm.set_task_description(task_input.value or "")
+                        text = task_input.value or ""
+                        if text:
+                            sm.set_task_description(text)
                         if not sm.command_interpretation:
-                            ui.notify("Сначала нажмите «1. Распознать (LLM)» для определения ориентира!", type="warning")
-                            return
+                            try:
+                                sm.parse_task_with_llm()
+                            except Exception as ex:
+                                ui.notify(f"Ошибка LLM анализа: {ex}", type="negative")
+                                return
                         sm.start_mission()
                         ui.notify("МИССИЯ ЗАПУЩЕНА! Цель передана в Nav2, робот следует к ячейке поиска.", type="positive")
 
