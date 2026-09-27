@@ -939,6 +939,31 @@ class TestMissionStateMachine(unittest.TestCase):
         for sym in subpkg_symlinks:
             self.assertTrue(sym.resolve().exists(), f"Битая символическая ссылка: {sym} -> {sym.resolve()}")
 
+    def test_waypoint_arrival_does_not_require_yaw_alignment(self):
+        """Проверка: переход в SEARCHING_VICTIM не блокируется несовпадением углов (yaw)."""
+        self.sm.mock_mode = False  # Проверяем логику реального режима
+        self.sm.set_task_description("Пострадавший у здания Стакан")
+        self.sm.start_mission()
+        self.assertEqual(self.sm.state, MissionState.NAVIGATING_TO_LANDMARK)
+
+        # Робот прибыл в точку назначения (x, y), но направлен в противоположную сторону (yaw diff ~ 180°)
+        target_wp = self.sm.current_waypoint
+        self.assertIsNotNone(target_wp)
+        self.sm.robot_x = target_wp.x
+        self.sm.robot_y = target_wp.y
+        self.sm.robot_yaw = (target_wp.yaw + math.pi) % (2 * math.pi)  # Противоположный угол
+
+        # Должен произойти переход в SEARCHING_VICTIM для начала кругового осмотра
+        self.sm.step(0.1)
+        self.assertEqual(
+            self.sm.state,
+            MissionState.SEARCHING_VICTIM,
+            "Робот должен сразу начать круговой скан при достижении (x, y), невзирая на yaw"
+        )
+        self.assertEqual(self.sm.spin_step, 0)
+        self.assertEqual(self.sm.spin_phase, "ROTATE")
+
 
 if __name__ == "__main__":
     unittest.main()
+

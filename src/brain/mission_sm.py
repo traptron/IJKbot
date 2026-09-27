@@ -1113,15 +1113,26 @@ class MissionStateMachine:
             return False
         dist = math.hypot(wp.x - self.robot_x, wp.y - self.robot_y)
         yaw_diff = abs((wp.yaw - self.robot_yaw + math.pi) % (2 * math.pi) - math.pi)
-        tol_dist = 0.06 if self.mock_mode else 0.08
-        tol_yaw = 0.20 if self.mock_mode else 0.25
+        tol_dist = 0.06 if self.mock_mode else 0.15
+        tol_yaw = 0.20 if self.mock_mode else 0.35
 
         # Проверка завершения цели через ActionClient Nav2
         action_succeeded = False
         if not self.mock_mode and self.ros_node and getattr(self.ros_node, "goal_status", None) == GoalStatus.STATUS_SUCCEEDED:
-            if dist < 0.12:
+            if dist < 0.25:
                 action_succeeded = True
             self.ros_node.goal_status = None
+
+        # Для ячеек поиска (где выполняется 360° круговой скан), подъезда к пострадавшему
+        # и эвакуации на базу [0.4, 0.4] конечная ориентация робота не имеет значения:
+        # Nav2 RegulatedPurePursuitController отслеживает только (x, y) геометрию пути
+        # и не разворачивает робота в произвольный угол целевой точки на финише.
+        if self.state in [
+            MissionState.NAVIGATING_TO_LANDMARK,
+            MissionState.APPROACHING_VICTIM,
+            MissionState.RETURNING_HOME,
+        ]:
+            return dist < tol_dist or action_succeeded
 
         return (dist < tol_dist and yaw_diff < tol_yaw) or action_succeeded
 
