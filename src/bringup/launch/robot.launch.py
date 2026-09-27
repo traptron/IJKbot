@@ -19,8 +19,8 @@ def generate_launch_description():
     # Аргументы запуска
     declare_enable_camera = DeclareLaunchArgument(
         'enable_camera',
-        default_value='true',
-        description='Запускать ли RealSense D435 и глубинный скан /depth/scan'
+        default_value='false',
+        description='Запускать ли RealSense D435 и глубинный скан /depth/scan (по умолчанию false, RealSense снята)'
     )
 
     declare_enable_motors = DeclareLaunchArgument(

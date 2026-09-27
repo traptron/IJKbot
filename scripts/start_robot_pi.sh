@@ -35,6 +35,7 @@ fi
 PI_USER="${PI_USER:-${ROBOT_USER:-otmorozki}}"
 REMOTE_WS="/home/${PI_USER}/IJKbot"
 MOCK_HARDWARE="false"
+ENABLE_CAMERA="false"
 FORCE_START="false"
 RUN_LOCAL="false"
 HOST_SPECIFIED="false"
@@ -48,6 +49,8 @@ print_help() {
     echo "  --host <IP>          IP-адрес Raspberry Pi (по умолчанию: ${PI_HOST})"
     echo "  --user <USER>        SSH-пользователь на роботе (по умолчанию: ${PI_USER})"
     echo "  --mock               Запуск с имитацией моторов (mock_hardware:=true)"
+    echo "  --no-camera          Не запускать камеру RealSense (по умолчанию выключена)"
+    echo "  --with-camera        Принудительно запустить камеру RealSense D435"
     echo "  --local              Запуск robot.launch.py локально на этом ноутбуке (через Pixi)"
     echo "  --ws <DIR>           Путь к репозиторию на Pi (по умолчанию: ${REMOTE_WS})"
     echo "  --force              Игнорировать ошибки проверки ping и продолжать запуск"
@@ -83,6 +86,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --mock)
             MOCK_HARDWARE="true"
+            shift
+            ;;
+        --no-camera)
+            ENABLE_CAMERA="false"
+            shift
+            ;;
+        --with-camera)
+            ENABLE_CAMERA="true"
             shift
             ;;
         --local)
@@ -129,6 +140,7 @@ echo -e "${CYAN}${BOLD}=========================================================
 echo -e "${BLUE}Хост запуска:${NC}      ${BOLD}$([[ "${RUN_LOCAL}" == "true" ]] && echo "Локальный (Ноутбук 2)" || echo "${PI_USER}@${PI_HOST}")${NC}"
 echo -e "${BLUE}ROS_DOMAIN_ID:${NC}     ${BOLD}${ROS_DOMAIN_ID}${NC}"
 echo -e "${BLUE}Режим моторов:${NC}     ${BOLD}$([[ "${MOCK_HARDWARE}" == "true" ]] && echo "MOCK (симуляция)" || echo "РЕАЛЬНЫЕ (UART STS3215)")${NC}"
+echo -e "${BLUE}Камера RealSense:${NC}  $([[ "${ENABLE_CAMERA}" == "true" ]] && echo "ВКЛЮЧЕНА (D435)" || echo "ОТКЛЮЧЕНА (RealSense снята)")${NC}"
 echo -e "${BLUE}Рабочая папка:${NC}     $([[ "${RUN_LOCAL}" == "true" ]] && echo "${REPO_DIR}" || echo "${REMOTE_WS}")"
 echo -e "${CYAN}----------------------------------------------------------------${NC}"
 
@@ -177,6 +189,7 @@ if [[ "${RUN_LOCAL}" == "true" ]]; then
 
     pixi run bash -c "source '${LOCAL_SETUP}' && ros2 launch bringup robot.launch.py \
         mock_hardware:='${MOCK_HARDWARE}' \
+        enable_camera:='${ENABLE_CAMERA}' \
         ${EXTRA_LAUNCH_ARGS}" &
     LOCAL_PID=$!
     wait "${LOCAL_PID}" || true
@@ -237,8 +250,8 @@ REMOTE_SETUP="
 "
 
 REMOTE_CMD="${REMOTE_SETUP}
-    echo '[REMOTE] Запуск robot.launch.py (mock_hardware:=${MOCK_HARDWARE})...';
-    exec ros2 launch bringup robot.launch.py mock_hardware:=${MOCK_HARDWARE} ${EXTRA_LAUNCH_ARGS}
+    echo '[REMOTE] Запуск robot.launch.py (mock_hardware:=${MOCK_HARDWARE}, enable_camera:=${ENABLE_CAMERA})...';
+    exec ros2 launch bringup robot.launch.py mock_hardware:=${MOCK_HARDWARE} enable_camera:=${ENABLE_CAMERA} ${EXTRA_LAUNCH_ARGS}
 "
 
 CLEANUP_CALLED=false

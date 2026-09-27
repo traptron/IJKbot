@@ -61,7 +61,7 @@ MAP_FILE=""
 MAP_INPUT=""
 INTERACTIVE_MODE="auto" # 'auto', 'true', 'false'
 FORCE_START="false"
-NO_CAMERA="false"
+NO_CAMERA="true"
 
 ROBOT_PID=""
 NAV2_PID=""
@@ -79,7 +79,8 @@ print_help() {
     echo "  --force              Игнорировать сбои сетевых проверок и продолжать запуск"
     echo "  --mode <MODE>        Режим запуска интерфейсов: 'bg' (по умолчанию), 'tabs', 'windows', 'tmux'"
     echo "  --no-rviz            Не запускать RViz2 (фоновый режим)"
-    echo "  --no-camera          Не запускать камеру RealSense (только моторы и одометрия)"
+    echo "  --no-camera          Не запускать камеру RealSense (по умолчанию выключена)"
+    echo "  --with-camera        Принудительно запустить камеру RealSense D435"
     echo "  --skip-sync          Пропустить предстартовую проверку Chrony (или игнорировать ошибку Δt)"
     echo "  --threshold-ms <MS>  Максимально допустимое расхождение времени в мс (по умолчанию: 5.0)"
     echo "  --initial-x <X>      Начальная координата X на карте (по умолчанию: 0.4)"
@@ -160,6 +161,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-camera)
             NO_CAMERA="true"
+            shift
+            ;;
+        --with-camera)
+            NO_CAMERA="false"
             shift
             ;;
         --skip-sync)
@@ -440,6 +445,8 @@ if [[ "${RUN_LOCAL}" != "true" && -f "${MAP_FILE}" && "${LOC_METHOD}" != "slam" 
             echo -e "${YELLOW}[WARN] Не удалось выполнить автокопирование карты на Pi (возможно, хост пока недоступен).${NC}"
         fi
     fi
+fi
+
 if [[ "${RUN_LOCAL}" != "true" ]]; then
     SRC_IP=$(ip route get "${PI_HOST}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')
     if [[ -n "${SRC_IP}" ]]; then
