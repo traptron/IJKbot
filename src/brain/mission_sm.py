@@ -1108,13 +1108,13 @@ class MissionStateMachine:
             return False
         dist = math.hypot(wp.x - self.robot_x, wp.y - self.robot_y)
         yaw_diff = abs((wp.yaw - self.robot_yaw + math.pi) % (2 * math.pi) - math.pi)
-        tol_dist = 0.08 if self.mock_mode else 0.18
-        tol_yaw = 0.25 if self.mock_mode else 0.35
+        tol_dist = 0.06 if self.mock_mode else 0.08
+        tol_yaw = 0.20 if self.mock_mode else 0.25
 
         # Проверка завершения цели через ActionClient Nav2
         action_succeeded = False
         if not self.mock_mode and self.ros_node and getattr(self.ros_node, "goal_status", None) == GoalStatus.STATUS_SUCCEEDED:
-            if dist < tol_dist * 2.5:
+            if dist < 0.12:
                 action_succeeded = True
             self.ros_node.goal_status = None
 
