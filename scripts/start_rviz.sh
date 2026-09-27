@@ -81,7 +81,7 @@ echo -e "${CYAN}${BOLD}=========================================================
 echo -e "${BLUE}ROS_DOMAIN_ID:${NC} ${BOLD}${ROS_DOMAIN_ID}${NC}"
 echo -e "${BLUE}Pixi Manifest:${NC} ${PIXI_MANIFEST}"
 
-# Проверка наличия Pixi
+# Проверка доступного окружения запуска
 if ! command -v pixi &>/dev/null; then
     if [[ -x "${HOME}/.pixi/bin/pixi" ]]; then
         export PATH="${HOME}/.pixi/bin:${PATH}"
@@ -90,13 +90,23 @@ if ! command -v pixi &>/dev/null; then
     fi
 fi
 
-if ! command -v pixi &>/dev/null; then
-    echo -e "${RED}[ERROR] Утилита 'pixi' не найдена в PATH! Убедитесь, что pixi установлен.${NC}" >&2
-    exit 1
-fi
-
-if [[ ! -f "${PIXI_MANIFEST}" ]]; then
-    echo -e "${RED}[ERROR] Файл манифеста Pixi не найден: ${PIXI_MANIFEST}${NC}" >&2
+RVIZ_RUNNER=()
+if command -v pixi &>/dev/null && [[ -f "${PIXI_MANIFEST}" ]]; then
+    export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
+    RVIZ_RUNNER=(pixi run)
+elif [[ -f /opt/ros/jazzy/setup.bash ]]; then
+    set +u
+    source /opt/ros/jazzy/setup.bash
+    set -u
+    # Snap editor GTK modules can load an incompatible glibc into native RViz.
+    unset GTK_PATH GIO_MODULE_DIR GTK_EXE_PREFIX GTK_DATA_PREFIX
+    unset QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH
+    if [[ "${RMW_IMPLEMENTATION}" == rmw_cyclonedds_cpp ]] &&
+       [[ ! -f /opt/ros/jazzy/lib/librmw_cyclonedds_cpp.so ]]; then
+        export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    fi
+else
+    echo -e "${RED}[ERROR] Не найдено окружение Pixi или ROS 2 Jazzy.${NC}" >&2
     exit 1
 fi
 
@@ -130,6 +140,5 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM EXIT
 
-export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
-pixi run rviz2 -d "${RVIZ_CONFIG}" "${EXTRA_ARGS[@]}"
+"${RVIZ_RUNNER[@]}" rviz2 -d "${RVIZ_CONFIG}" "${EXTRA_ARGS[@]}"
 cleanup
