@@ -117,6 +117,13 @@ echo -e "${CYAN}----------------------------------------------------------------
 # 1. Отправка нулевой скорости для немедленного торможения приводов
 if [[ "${SEND_ZERO_VEL}" == "true" ]]; then
     echo -e "${YELLOW}[1/3] Отправка нулевой скорости (/cmd_vel_emergency, /cmd_vel_sm & /cmd_vel)...${NC}"
+    if ! command -v pixi &>/dev/null; then
+        if [[ -x "${HOME}/.pixi/bin/pixi" ]]; then
+            export PATH="${HOME}/.pixi/bin:${PATH}"
+        elif [[ -x "/home/lev/.pixi/bin/pixi" ]]; then
+            export PATH="/home/lev/.pixi/bin:${PATH}"
+        fi
+    fi
     if command -v pixi &>/dev/null && [[ -f "${PIXI_MANIFEST}" ]]; then
         # Публикуем быстрым пакетным Python скриптом за <1 секунды во все 3 топика сразу
         timeout 3s pixi run --manifest-path "${PIXI_MANIFEST}" python3 -c '

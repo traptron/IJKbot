@@ -184,6 +184,13 @@ echo -e "${CYAN}----------------------------------------------------------------
 
 # Если выбран локальный запуск через Pixi
 if [[ "${RUN_LOCAL}" == "true" ]]; then
+    if ! command -v pixi &>/dev/null; then
+        if [[ -x "${HOME}/.pixi/bin/pixi" ]]; then
+            export PATH="${HOME}/.pixi/bin:${PATH}"
+        elif [[ -x "/home/lev/.pixi/bin/pixi" ]]; then
+            export PATH="/home/lev/.pixi/bin:${PATH}"
+        fi
+    fi
     PIXI_MANIFEST="${PIXI_PROJECT_MANIFEST:-/home/lev/ros2_jazzy/pixi.toml}"
     LOCAL_SETUP="${REPO_DIR}/install/setup.bash"
     if [[ ! -f "${LOCAL_SETUP}" ]]; then

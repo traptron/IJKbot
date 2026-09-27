@@ -83,6 +83,14 @@ echo -e "${BLUE}Pixi Manifest:${NC} ${PIXI_MANIFEST}"
 
 # Проверка наличия Pixi
 if ! command -v pixi &>/dev/null; then
+    if [[ -x "${HOME}/.pixi/bin/pixi" ]]; then
+        export PATH="${HOME}/.pixi/bin:${PATH}"
+    elif [[ -x "/home/lev/.pixi/bin/pixi" ]]; then
+        export PATH="/home/lev/.pixi/bin:${PATH}"
+    fi
+fi
+
+if ! command -v pixi &>/dev/null; then
     echo -e "${RED}[ERROR] Утилита 'pixi' не найдена в PATH! Убедитесь, что pixi установлен.${NC}" >&2
     exit 1
 fi

@@ -292,6 +292,14 @@ fi
 echo -e "${GREEN}${BOLD}Запуск нод... (Для остановки нажмите Ctrl+C)${NC}"
 echo -e "${CYAN}----------------------------------------------------------------${NC}"
 
+if ! command -v pixi &>/dev/null; then
+    if [[ -x "${HOME}/.pixi/bin/pixi" ]]; then
+        export PATH="${HOME}/.pixi/bin:${PATH}"
+    elif [[ -x "/home/lev/.pixi/bin/pixi" ]]; then
+        export PATH="/home/lev/.pixi/bin:${PATH}"
+    fi
+fi
+
 if command -v pixi &>/dev/null && [[ -f "${PIXI_MANIFEST}" ]]; then
     export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
     pixi run bash -c "${LAUNCH_CMD}" &

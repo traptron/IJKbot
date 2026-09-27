@@ -323,6 +323,13 @@ do_update() {
 
     local colcon_cmd="colcon"
     if [[ "${ros_sourced}" != "true" ]]; then
+        if ! command -v pixi &>/dev/null; then
+            if [[ -x "${HOME}/.pixi/bin/pixi" ]]; then
+                export PATH="${HOME}/.pixi/bin:${PATH}"
+            elif [[ -x "/home/lev/.pixi/bin/pixi" ]]; then
+                export PATH="/home/lev/.pixi/bin:${PATH}"
+            fi
+        fi
         if command -v pixi &>/dev/null && [[ -f "${pixi_manifest}" ]]; then
             colcon_cmd="pixi run --manifest-path ${pixi_manifest} colcon"
             ros_sourced=true
