@@ -44,7 +44,9 @@ SSH_PID=""
 INITIAL_X="0.4"
 INITIAL_Y="0.4"
 INITIAL_YAW="0.0"
+LOC_METHOD="odom"
 USE_AMCL="false"
+USE_LOCALIZATION="true"
 MAP_FILE=""
 EXTRA_NAV2_ARGS=""
 
@@ -57,8 +59,11 @@ print_help() {
     echo "  --initial-x <X>      Начальная координата X на карте (по умолчанию: 0.4)"
     echo "  --initial-y <Y>      Начальная координата Y на карте (по умолчанию: 0.4)"
     echo "  --initial-yaw <YAW>  Начальный угол Yaw на карте в радианах (по умолчанию: 0.0)"
-    echo "  --map <YAML_FILE>    Путь к пользовательской карте полигона"
-    echo "  --use-amcl           Использовать AMCL локализацию (по умолчанию: одометрия)"
+    echo "  --map <YAML_FILE>    Путь или имя файла карты полигона"
+    echo "  --loc <MODE>         Способ локализации: 'amcl', 'odom' (дефолт), 'slam'"
+    echo "  --use-amcl           Использовать AMCL локализацию (shortcut для --loc amcl)"
+    echo "  --use-odom           Использовать чистую одометрию (shortcut для --loc odom)"
+    echo "  --slam               Использовать SLAM картографирование (shortcut для --loc slam)"
     echo "  --local              Запустить Nav2 локально на этом ноутбуке (через Pixi)"
     echo "  --ws <DIR>           Путь к репозиторию на Pi (по умолчанию: ${REMOTE_WS})"
     echo "  --force              Игнорировать ошибки проверки ping и продолжать запуск"
@@ -128,8 +133,51 @@ while [[ $# -gt 0 ]]; do
             MAP_FILE="$2"
             shift 2
             ;;
+        --loc|--localization)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует способа локализации (amcl, odom, slam)${NC}" >&2
+                print_help
+                exit 1
+            fi
+            case "$2" in
+                amcl|AMCL)
+                    LOC_METHOD="amcl"
+                    USE_AMCL="true"
+                    USE_LOCALIZATION="true"
+                    ;;
+                odom|ODOM|static|STATIC)
+                    LOC_METHOD="odom"
+                    USE_AMCL="false"
+                    USE_LOCALIZATION="true"
+                    ;;
+                slam|SLAM)
+                    LOC_METHOD="slam"
+                    USE_AMCL="false"
+                    USE_LOCALIZATION="false"
+                    ;;
+                *)
+                    echo -e "${RED}[ERROR] Неизвестный способ локализации: $2 (допустимо: amcl, odom, slam)${NC}" >&2
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
         --use-amcl)
+            LOC_METHOD="amcl"
             USE_AMCL="true"
+            USE_LOCALIZATION="true"
+            shift
+            ;;
+        --use-odom)
+            LOC_METHOD="odom"
+            USE_AMCL="false"
+            USE_LOCALIZATION="true"
+            shift
+            ;;
+        --slam)
+            LOC_METHOD="slam"
+            USE_AMCL="false"
+            USE_LOCALIZATION="false"
             shift
             ;;
         --local)
@@ -170,15 +218,44 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Разрешение путей карты для локального и удаленного запуска
+LOCAL_MAP_PATH=""
+REMOTE_MAP_PATH=""
+
+if [[ -n "${MAP_FILE}" ]]; then
+    if [[ "${MAP_FILE}" == "${REPO_DIR}/"* ]]; then
+        REL_MAP="${MAP_FILE#"${REPO_DIR}/"}"
+        REMOTE_MAP_PATH="${REMOTE_WS}/${REL_MAP}"
+        LOCAL_MAP_PATH="${MAP_FILE}"
+    elif [[ -f "${REPO_DIR}/src/nav2/maps/${MAP_FILE}" ]]; then
+        LOCAL_MAP_PATH="${REPO_DIR}/src/nav2/maps/${MAP_FILE}"
+        REMOTE_MAP_PATH="${REMOTE_WS}/src/nav2/maps/${MAP_FILE}"
+    elif [[ -f "${REPO_DIR}/src/nav2/maps/${MAP_FILE}.yaml" ]]; then
+        LOCAL_MAP_PATH="${REPO_DIR}/src/nav2/maps/${MAP_FILE}.yaml"
+        REMOTE_MAP_PATH="${REMOTE_WS}/src/nav2/maps/${MAP_FILE}.yaml"
+    elif [[ "${MAP_FILE}" =~ ^/ ]]; then
+        LOCAL_MAP_PATH="${MAP_FILE}"
+        if [[ "${MAP_FILE}" =~ /src/nav2/maps/ ]]; then
+            MAP_BASENAME="$(basename "${MAP_FILE}")"
+            REMOTE_MAP_PATH="${REMOTE_WS}/src/nav2/maps/${MAP_BASENAME}"
+        else
+            REMOTE_MAP_PATH="${MAP_FILE}"
+        fi
+    else
+        LOCAL_MAP_PATH="${MAP_FILE}"
+        REMOTE_MAP_PATH="${MAP_FILE}"
+    fi
+fi
+
 echo -e "${CYAN}${BOLD}================================================================${NC}"
 echo -e "${CYAN}${BOLD}     IJKbot — Запуск навигации Nav2 ($([[ "${RUN_LOCAL}" == "true" ]] && echo "Локально на Ноутбуке 2" || echo "Удаленно на Raspberry Pi"))   ${NC}"
 echo -e "${CYAN}${BOLD}================================================================${NC}"
 echo -e "${BLUE}Хост запуска:${NC}      ${BOLD}$([[ "${RUN_LOCAL}" == "true" ]] && echo "Локальный (Ноутбук 2)" || echo "${PI_USER}@${PI_HOST}")${NC}"
 echo -e "${BLUE}ROS_DOMAIN_ID:${NC}     ${BOLD}${ROS_DOMAIN_ID}${NC}"
 echo -e "${BLUE}Стартовая поза:${NC}    X=${INITIAL_X} м, Y=${INITIAL_Y} м, Yaw=${INITIAL_YAW} рад"
-echo -e "${BLUE}Локализация:${NC}       $([[ "${USE_AMCL}" == "true" ]] && echo "AMCL" || echo "Чистая одометрия + static TF map->odom")"
-if [[ -n "${MAP_FILE}" ]]; then
-    echo -e "${BLUE}Карта:${NC}             ${MAP_FILE}"
+echo -e "${BLUE}Локализация:${NC}       $([[ "${LOC_METHOD}" == "amcl" ]] && echo "AMCL (лидар + карта)" || ([[ "${LOC_METHOD}" == "slam" ]] && echo "SLAM (slam_toolbox)" || echo "Чистая одометрия + static TF map->odom"))"
+if [[ -n "${LOCAL_MAP_PATH}" && "${USE_LOCALIZATION}" == "true" ]]; then
+    echo -e "${BLUE}Карта:${NC}             ${LOCAL_MAP_PATH}"
 fi
 echo -e "${CYAN}----------------------------------------------------------------${NC}"
 
@@ -201,8 +278,8 @@ if [[ "${RUN_LOCAL}" == "true" ]]; then
     echo -e "${GREEN}[OK] Запуск Nav2 локально через Pixi...${NC}"
     export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
     MAP_PARAM=()
-    if [[ -n "${MAP_FILE}" ]]; then
-        MAP_PARAM+=("map:=${MAP_FILE}")
+    if [[ -n "${LOCAL_MAP_PATH}" && "${USE_LOCALIZATION}" == "true" ]]; then
+        MAP_PARAM+=("map:=${LOCAL_MAP_PATH}")
     fi
 
     LOCAL_PID=""
@@ -240,6 +317,7 @@ if [[ "${RUN_LOCAL}" == "true" ]]; then
         initial_x:='${INITIAL_X}' \
         initial_y:='${INITIAL_Y}' \
         initial_yaw:='${INITIAL_YAW}' \
+        use_localization:='${USE_LOCALIZATION}' \
         use_amcl:='${USE_AMCL}' \
         ${MAP_PARAM[*]} \
         ${EXTRA_NAV2_ARGS}" &
@@ -302,16 +380,18 @@ REMOTE_SETUP="
 "
 
 MAP_REMOTE=""
-if [[ -n "${MAP_FILE}" ]]; then
-    MAP_REMOTE="map:=${MAP_FILE}"
+if [[ -n "${REMOTE_MAP_PATH}" && "${USE_LOCALIZATION}" == "true" ]]; then
+    MAP_REMOTE="map:=${REMOTE_MAP_PATH}"
 fi
 
 REMOTE_CMD="${REMOTE_SETUP}
-    echo '[REMOTE] Запуск navigation.launch.py...';
+    echo '[REMOTE] Запуск navigation.launch.py (локализация: ${LOC_METHOD})...';
+    $([[ "${LOC_METHOD}" == "slam" ]] && echo "ros2 launch slam_toolbox online_async_launch.py use_sim_time:=false &")
     exec ros2 launch nav2 navigation.launch.py \
         initial_x:=${INITIAL_X} \
         initial_y:=${INITIAL_Y} \
         initial_yaw:=${INITIAL_YAW} \
+        use_localization:=${USE_LOCALIZATION} \
         use_amcl:=${USE_AMCL} \
         ${MAP_REMOTE} \
         ${EXTRA_NAV2_ARGS}
@@ -329,8 +409,10 @@ cleanup() {
     # Удаленная отправка сигналов остановки на Pi (мягко SIGINT, затем гарантированно SIGKILL всем Nav2 компонентам)
     ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no "${PI_USER}@${PI_HOST}" "
         pkill -2 -f 'navigation.launch.py' 2>/dev/null || true;
+        pkill -2 -f 'slam_toolbox' 2>/dev/null || true;
         sleep 0.5;
         pkill -9 -f 'navigation.launch.py' 2>/dev/null || true;
+        pkill -9 -f 'slam_toolbox' 2>/dev/null || true;
         pkill -9 -f 'controller_server' 2>/dev/null || true;
         pkill -9 -f 'smoother_server' 2>/dev/null || true;
         pkill -9 -f 'planner_server' 2>/dev/null || true;

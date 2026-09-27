@@ -45,6 +45,7 @@ else
 fi
 HOST_SPECIFIED="false"
 PI_USER="${PI_USER:-${ROBOT_USER:-otmorozki}}"
+REMOTE_WS="${REMOTE_WS:-/home/${PI_USER}/IJKbot}"
 MOCK_HARDWARE="false"
 RUN_LOCAL="false"
 SKIP_SYNC="false"
@@ -54,8 +55,11 @@ LAUNCH_MODE="bg" # 'bg', 'tabs', 'windows', 'tmux'
 INITIAL_X="0.4"
 INITIAL_Y="0.4"
 INITIAL_YAW="0.0"
+LOC_METHOD=""
 USE_AMCL="false"
 MAP_FILE=""
+MAP_INPUT=""
+INTERACTIVE_MODE="auto" # 'auto', 'true', 'false'
 FORCE_START="false"
 NO_CAMERA="false"
 
@@ -81,8 +85,13 @@ print_help() {
     echo "  --initial-x <X>      Начальная координата X на карте (по умолчанию: 0.4)"
     echo "  --initial-y <Y>      Начальная координата Y на карте (по умолчанию: 0.4)"
     echo "  --initial-yaw <YAW>  Начальный угол Yaw на карте (по умолчанию: 0.0)"
-    echo "  --map <YAML_FILE>    Путь к пользовательской карте полигона (.yaml)"
-    echo "  --use-amcl           Использовать AMCL локализацию (по умолчанию: одометрия)"
+    echo "  --map <YAML_FILE>    Путь к карте или имя файла в src/nav2/maps/ (например: polygon_real)"
+    echo "  --loc <MODE>         Способ локализации: 'amcl' (по лидару и карте), 'odom', 'slam'"
+    echo "  --use-amcl           Использовать AMCL локализацию (shortcut для --loc amcl)"
+    echo "  --use-odom           Использовать чистую одометрию (shortcut для --loc odom)"
+    echo "  --slam               Использовать SLAM картографирование на лету (shortcut для --loc slam)"
+    echo "  -i, --interactive    Принудительно показать интерактивное меню выбора карты и локализации"
+    echo "  -y, --batch          Пропустить интерактивное меню (использовать дефолты или флаги CLI)"
     echo "  -h, --help           Показать эту справку"
     echo ""
     echo "Переменные окружения:"
@@ -91,7 +100,8 @@ print_help() {
     echo "  ROS_DOMAIN_ID        ID ROS-домена (дефолт: 42)"
     echo ""
     echo "Примеры:"
-    echo "  $0                   Обычный запуск на мобильной точке (Wi-Fi ${PRIMARY_HOST})"
+    echo "  $0                   Интерактивный запуск с выбором карты и способа локализации"
+    echo "  $0 --map polygon_real --loc amcl  Запуск с реальной картой и AMCL локализацией"
     echo "  $0 --mock --local    Полностью автономный тестовый прогон на ноутбуке без робота"
     echo "  $0 --mode tabs       Запуск компонентов в отдельных вкладках терминала"
 }
@@ -194,15 +204,48 @@ while [[ $# -gt 0 ]]; do
             ;;
         --map)
             if [[ $# -lt 2 ]]; then
-                echo -e "${RED}[ERROR] Опция $1 требует пути к файлу карты (.yaml)${NC}" >&2
+                echo -e "${RED}[ERROR] Опция $1 требует пути или имени карты${NC}" >&2
                 print_help
                 exit 1
             fi
-            MAP_FILE="$2"
+            MAP_INPUT="$2"
+            shift 2
+            ;;
+        --loc|--localization)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}[ERROR] Опция $1 требует способа локализации (amcl, odom, slam)${NC}" >&2
+                print_help
+                exit 1
+            fi
+            case "$2" in
+                amcl|AMCL) LOC_METHOD="amcl" ;;
+                odom|ODOM|static|STATIC) LOC_METHOD="odom" ;;
+                slam|SLAM) LOC_METHOD="slam" ;;
+                *)
+                    echo -e "${RED}[ERROR] Неизвестный способ локализации: $2 (допустимо: amcl, odom, slam)${NC}" >&2
+                    exit 1
+                    ;;
+            esac
             shift 2
             ;;
         --use-amcl)
-            USE_AMCL="true"
+            LOC_METHOD="amcl"
+            shift
+            ;;
+        --use-odom)
+            LOC_METHOD="odom"
+            shift
+            ;;
+        --slam)
+            LOC_METHOD="slam"
+            shift
+            ;;
+        -i|--interactive)
+            INTERACTIVE_MODE="true"
+            shift
+            ;;
+        -y|--non-interactive|--batch)
+            INTERACTIVE_MODE="false"
             shift
             ;;
         -h|--help)
@@ -217,6 +260,188 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+MAPS_DIR="${REPO_DIR}/src/nav2/maps"
+
+# 1. Сбор всех доступных карт из src/nav2/maps/
+AVAILABLE_MAPS=()
+if [[ -d "${MAPS_DIR}" ]]; then
+    # Приоритет polygon_real.yaml, затем polygon_empty_4x4.yaml, затем остальные
+    if [[ -f "${MAPS_DIR}/polygon_real.yaml" ]]; then
+        AVAILABLE_MAPS+=("${MAPS_DIR}/polygon_real.yaml")
+    fi
+    if [[ -f "${MAPS_DIR}/polygon_empty_4x4.yaml" ]]; then
+        AVAILABLE_MAPS+=("${MAPS_DIR}/polygon_empty_4x4.yaml")
+    fi
+    for m in "${MAPS_DIR}"/*.yaml; do
+        [[ -f "$m" ]] || continue
+        if [[ "$m" != "${MAPS_DIR}/polygon_real.yaml" && "$m" != "${MAPS_DIR}/polygon_empty_4x4.yaml" ]]; then
+            AVAILABLE_MAPS+=("$m")
+        fi
+    done
+fi
+
+# 2. Если карта передана через аргумент командной строки
+if [[ -n "${MAP_INPUT}" ]]; then
+    if [[ -f "${MAP_INPUT}" ]]; then
+        MAP_FILE="$(realpath "${MAP_INPUT}")"
+    elif [[ -f "${MAPS_DIR}/${MAP_INPUT}" ]]; then
+        MAP_FILE="${MAPS_DIR}/${MAP_INPUT}"
+    elif [[ -f "${MAPS_DIR}/${MAP_INPUT}.yaml" ]]; then
+        MAP_FILE="${MAPS_DIR}/${MAP_INPUT}.yaml"
+    else
+        echo -e "${RED}[ERROR] Карта '${MAP_INPUT}' не найдена!${NC}" >&2
+        echo -e "${YELLOW}Доступные карты в ${MAPS_DIR}:${NC}" >&2
+        for m in "${AVAILABLE_MAPS[@]}"; do
+            echo -e "  - $(basename "$m")" >&2
+        done
+        exit 1
+    fi
+fi
+
+# 3. Интерактивный режим выбора (если терминал интерактивный и не все параметры переданы)
+SHOULD_PROMPT="false"
+if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
+    SHOULD_PROMPT="true"
+elif [[ "${INTERACTIVE_MODE}" == "auto" && -t 0 ]]; then
+    if [[ -z "${MAP_FILE}" || -z "${LOC_METHOD}" ]]; then
+        SHOULD_PROMPT="true"
+    fi
+fi
+
+if [[ "${SHOULD_PROMPT}" == "true" ]]; then
+    # Меню выбора карты (если не была задана через флаг)
+    if [[ -z "${MAP_FILE}" ]]; then
+        echo -e "\n${CYAN}${BOLD}----------------------------------------------------------------${NC}"
+        echo -e "${CYAN}${BOLD}                 [ВЫБОР КАРТЫ ПОЛИГОНА]                         ${NC}"
+        echo -e "${CYAN}${BOLD}----------------------------------------------------------------${NC}"
+        echo -e "Доступные карты в ${BLUE}src/nav2/maps/${NC}:"
+
+        idx=1
+        for m in "${AVAILABLE_MAPS[@]}"; do
+            m_name="$(basename "$m")"
+            m_desc=""
+            if [[ "${m_name}" == "polygon_real.yaml" ]]; then
+                m_desc="${GREEN}(РЕКОМЕНДУЕТСЯ — актуальная карта полигона)${NC}"
+            elif [[ "${m_name}" == "polygon_empty_4x4.yaml" ]]; then
+                m_desc="${YELLOW}(пустой квадрат 4x4 м)${NC}"
+            else
+                m_desc="${BLUE}(пользовательская копия)${NC}"
+            fi
+            echo -e "  ${BOLD}[${idx}]${NC} ${m_name} ${m_desc}"
+            ((idx++))
+        done
+        echo -e "  ${BOLD}[C]${NC} Указать свой путь к .yaml файлу вручную"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+
+        DEFAULT_MAP_NAME=""
+        if [[ ${#AVAILABLE_MAPS[@]} -gt 0 ]]; then
+            DEFAULT_MAP_NAME="$(basename "${AVAILABLE_MAPS[0]}")"
+        fi
+
+        echo -ne "${YELLOW}Выберите карту [1-$((idx-1)), C] (Enter = [1] ${DEFAULT_MAP_NAME}, таймаут 10с): ${NC}"
+        MAP_CHOICE=""
+        read -t 10 -r MAP_CHOICE || true
+        echo ""
+
+        MAP_CHOICE="$(echo -e "${MAP_CHOICE}" | tr -d '[:space:]')"
+
+        if [[ -z "${MAP_CHOICE}" || "${MAP_CHOICE}" == "1" ]]; then
+            if [[ ${#AVAILABLE_MAPS[@]} -gt 0 ]]; then
+                MAP_FILE="${AVAILABLE_MAPS[0]}"
+            fi
+        elif [[ "${MAP_CHOICE}" =~ ^[0-9]+$ ]] && [[ "${MAP_CHOICE}" -le ${#AVAILABLE_MAPS[@]} && "${MAP_CHOICE}" -ge 1 ]]; then
+            MAP_FILE="${AVAILABLE_MAPS[$((MAP_CHOICE-1))]}"
+        elif [[ "${MAP_CHOICE}" =~ ^[cC]$ ]]; then
+            echo -ne "${BLUE}Введите путь к файлу карты (.yaml): ${NC}"
+            read -r CUSTOM_MAP_PATH
+            if [[ -f "${CUSTOM_MAP_PATH}" ]]; then
+                MAP_FILE="$(realpath "${CUSTOM_MAP_PATH}")"
+            else
+                echo -e "${RED}[ERROR] Файл '${CUSTOM_MAP_PATH}' не найден! Откат к [1] ${DEFAULT_MAP_NAME}${NC}"
+                MAP_FILE="${AVAILABLE_MAPS[0]}"
+            fi
+        else
+            echo -e "${YELLOW}[WARN] Некорректный ввод '${MAP_CHOICE}', выбран вариант [1] ${DEFAULT_MAP_NAME}.${NC}"
+            MAP_FILE="${AVAILABLE_MAPS[0]}"
+        fi
+    fi
+
+    # Меню выбора локализации (если не была задана)
+    if [[ -z "${LOC_METHOD}" ]]; then
+        echo -e "\n${CYAN}${BOLD}----------------------------------------------------------------${NC}"
+        echo -e "${CYAN}${BOLD}             [ВЫБОР СПОСОБА ЛОКАЛИЗАЦИИ]                        ${NC}"
+        echo -e "${CYAN}${BOLD}----------------------------------------------------------------${NC}"
+        echo -e "  ${BOLD}[1]${NC} ${GREEN}AMCL${NC}        — Адаптивная локализация по лидару и карте ${GREEN}(РЕКОМЕНДУЕТСЯ)${NC}"
+        echo -e "  ${BOLD}[2]${NC} ${YELLOW}Одометрия${NC}   — Чистая одометрия колес + статический TF map->odom"
+        echo -e "  ${BOLD}[3]${NC} ${MAGENTA}SLAM${NC}        — Онлайн построение карты и навигация (slam_toolbox)"
+        echo -e "${CYAN}----------------------------------------------------------------${NC}"
+
+        echo -ne "${YELLOW}Выберите способ [1-3] (Enter = [1] AMCL, таймаут 10с): ${NC}"
+        LOC_CHOICE=""
+        read -t 10 -r LOC_CHOICE || true
+        echo ""
+
+        LOC_CHOICE="$(echo -e "${LOC_CHOICE}" | tr -d '[:space:]')"
+
+        case "${LOC_CHOICE}" in
+            ""|"1")
+                LOC_METHOD="amcl"
+                ;;
+            "2")
+                LOC_METHOD="odom"
+                ;;
+            "3")
+                LOC_METHOD="slam"
+                ;;
+            *)
+                echo -e "${YELLOW}[WARN] Некорректный выбор '${LOC_CHOICE}', выбран [1] AMCL.${NC}"
+                LOC_METHOD="amcl"
+                ;;
+        esac
+    fi
+fi
+
+# 4. Значения по умолчанию, если параметры не были заданы
+if [[ -z "${MAP_FILE}" ]]; then
+    if [[ ${#AVAILABLE_MAPS[@]} -gt 0 ]]; then
+        MAP_FILE="${AVAILABLE_MAPS[0]}"
+    else
+        MAP_FILE="${MAPS_DIR}/polygon_empty_4x4.yaml"
+    fi
+fi
+
+if [[ -z "${LOC_METHOD}" ]]; then
+    LOC_METHOD="amcl"
+fi
+
+if [[ "${LOC_METHOD}" == "amcl" ]]; then
+    USE_AMCL="true"
+else
+    USE_AMCL="false"
+fi
+
+# 5. Автоматическая проверка и синхронизация карты на Raspberry Pi
+if [[ "${RUN_LOCAL}" != "true" && -f "${MAP_FILE}" && "${LOC_METHOD}" != "slam" ]]; then
+    MAP_BASENAME="$(basename "${MAP_FILE}")"
+    if ! ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no "${PI_USER}@${PI_HOST}" "test -f '${REMOTE_WS}/src/nav2/maps/${MAP_BASENAME}'" 2>/dev/null; then
+        echo -e "${YELLOW}[SYNC] Карта ${MAP_BASENAME} отсутствует на Raspberry Pi. Копирование по SCP...${NC}"
+        MAP_DIR="$(dirname "${MAP_FILE}")"
+        PGM_NAME="$(grep -E "^image:" "${MAP_FILE}" | awk '{print $2}' || true)"
+        PGM_PATH="${MAP_DIR}/${PGM_NAME}"
+
+        FILES_TO_SYNC=("${MAP_FILE}")
+        if [[ -n "${PGM_NAME}" && -f "${PGM_PATH}" ]]; then
+            FILES_TO_SYNC+=("${PGM_PATH}")
+        fi
+
+        if scp -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no "${FILES_TO_SYNC[@]}" "${PI_USER}@${PI_HOST}:${REMOTE_WS}/src/nav2/maps/" 2>/dev/null; then
+            echo -e "${GREEN}[OK] Карта ${MAP_BASENAME} успешно синхронизирована с Raspberry Pi.${NC}"
+        else
+            echo -e "${YELLOW}[WARN] Не удалось выполнить автокопирование карты на Pi (возможно, хост пока недоступен).${NC}"
+        fi
+    fi
+fi
+
 echo -e "${CYAN}${BOLD}================================================================${NC}"
 echo -e "${CYAN}${BOLD}     IJKbot — Единый командный центр (Ноутбук 2 / Оператор)     ${NC}"
 echo -e "${CYAN}${BOLD}================================================================${NC}"
@@ -225,6 +450,16 @@ echo -e "${BLUE}ROS_DOMAIN_ID:${NC}     ${BOLD}${ROS_DOMAIN_ID}${NC}"
 echo -e "${BLUE}Режим аппаратуры:${NC}  $([[ "${MOCK_HARDWARE}" == "true" ]] && echo -e "${YELLOW}MOCK (симуляция)${NC}" || echo -e "${GREEN}ФИЗИЧЕСКИЙ РОБОТ (UART STS3215)${NC}")"
 echo -e "${BLUE}Режим запуска:${NC}     ${BOLD}${LAUNCH_MODE}${NC} (логи в ${LOG_DIR}/)"
 echo -e "${BLUE}Запуск RViz2:${NC}      ${START_RVIZ}"
+echo -e "${CYAN}----------------------------------------------------------------${NC}"
+if [[ "${LOC_METHOD}" != "slam" ]]; then
+    echo -e "${BLUE}Карта полигона:${NC}    ${BOLD}$(basename "${MAP_FILE}")${NC} (${MAP_FILE})"
+fi
+case "${LOC_METHOD}" in
+    amcl) echo -e "${BLUE}Локализация:${NC}       ${GREEN}${BOLD}AMCL (адаптивная по лидару и карте)${NC}" ;;
+    odom) echo -e "${BLUE}Локализация:${NC}       ${YELLOW}${BOLD}Одометрия (чистая одометрия + static TF map->odom)${NC}" ;;
+    slam) echo -e "${BLUE}Локализация:${NC}       ${MAGENTA}${BOLD}SLAM (онлайн картографирование slam_toolbox)${NC}" ;;
+esac
+echo -e "${BLUE}Стартовая поза:${NC}    X=${INITIAL_X} м, Y=${INITIAL_Y} м, Yaw=${INITIAL_YAW} рад"
 echo -e "${CYAN}----------------------------------------------------------------${NC}"
 
 WATCHDOG_PID=""
@@ -425,11 +660,8 @@ echo -e "${GREEN}Готово.${NC}"
 echo -e "\n${BLUE}${BOLD}[ШАГ 4/5] Запуск навигации Nav2 ($([[ "${RUN_LOCAL}" == "true" ]] && echo "локально через Pixi" || echo "на Raspberry Pi по SSH"))...${NC}"
 NAV2_LOG="${LOG_DIR}/nav2_pi.log"
 
-START_NAV2_CMD="${SCRIPT_DIR}/start_nav2_pi.sh --host ${PI_HOST} --user ${PI_USER} --initial-x ${INITIAL_X} --initial-y ${INITIAL_Y} --initial-yaw ${INITIAL_YAW}"
-if [[ "${USE_AMCL}" == "true" ]]; then
-    START_NAV2_CMD="${START_NAV2_CMD} --use-amcl"
-fi
-if [[ -n "${MAP_FILE}" ]]; then
+START_NAV2_CMD="${SCRIPT_DIR}/start_nav2_pi.sh --host ${PI_HOST} --user ${PI_USER} --initial-x ${INITIAL_X} --initial-y ${INITIAL_Y} --initial-yaw ${INITIAL_YAW} --loc ${LOC_METHOD}"
+if [[ "${LOC_METHOD}" != "slam" && -n "${MAP_FILE}" ]]; then
     START_NAV2_CMD="${START_NAV2_CMD} --map ${MAP_FILE}"
 fi
 if [[ "${RUN_LOCAL}" == "true" ]]; then
