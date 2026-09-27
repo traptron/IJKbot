@@ -6,12 +6,12 @@
 <robot name="ijkbot">
   <!-- Базовый фрейм проекции на пол -->
   <link name="base_footprint"/>
-  <!-- Лидар по центру переднего бампера: 45 мм выступа и 30 мм над полом -->
+  <!-- Лидар по центру переднего бампера: 45 мм выступа и 55 мм над полом -->
   <link name="lidar_link"/>
   <joint name="lidar_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="lidar_link"/>
-    <origin rpy="0 0 3.141592653589793" xyz="0.08499999999999999 0 0.03"/>
+    <origin rpy="0 0 3.141592653589793" xyz="0.08499999999999999 0 0.055"/>
   </joint>
   <!-- Основной фрейм робота (центр ведущей оси) -->
   <joint name="base_footprint_to_base_link" type="fixed">
