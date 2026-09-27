@@ -2,7 +2,7 @@
 
 import pytest
 
-from vision.csi_capture import MjpegFramer, capture_command
+from vision.csi_capture import RAW_FRAME_BYTES, MjpegFramer, capture_command, raw10_to_jpeg
 from vision.qr_decoder import decode_jpeg
 
 
@@ -33,6 +33,16 @@ def test_mock_does_not_open_camera():
     command = capture_command(10, 85, mock_hardware=True)
     assert 'videotestsrc' in command
     assert 'libcamerasrc' not in command
+
+
+def test_raw_ov5647_frame_to_jpeg():
+    cv2 = pytest.importorskip('cv2')
+    raw = bytes([100, 110, 120, 130, 0]) * (RAW_FRAME_BYTES // 5)
+    jpeg = raw10_to_jpeg(raw, 85)
+    assert jpeg.startswith(b'\xff\xd8') and jpeg.endswith(b'\xff\xd9')
+    assert 'v4l2-ctl' == capture_command(10, 85, backend='v4l2_raw')[0]
+    with pytest.raises(ValueError):
+        raw10_to_jpeg(raw[:-1], 85)
 
 
 def test_camera_name_is_one_argument():

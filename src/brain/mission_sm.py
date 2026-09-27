@@ -1041,12 +1041,12 @@ class MissionStateMachine:
         if not self.qr_scanned:
             self.qr_scanned = True
             self._log("QR", f"Данные с QR-кода состояния успешно считаны:\n{self.qr_code_data}")
-
-            # Направляем робота домой в стартовую ячейку [0, 0]
-            self.current_waypoint = START_WAYPOINT
-            self.state = MissionState.RETURNING_HOME
-            self._log("NAV", "Начало эвакуации пострадавшего в пункт сбора (ячейка [0, 0])...")
-            self._publish_goal_pose(START_WAYPOINT)
+            self.victim_found = True
+            self.victim_detected = True
+            self.state = MissionState.WAIT_5_SECONDS
+            self.wait_timer_start = time.time()
+            self._publish_zero_velocity()
+            self._log("STATE", "QR получен: остановка на 5 секунд перед возвратом в стартовую ячейку")
 
     def _handle_mission_completion(self) -> None:
         """Фиксация успешной эвакуации и завершения миссии."""
@@ -1363,7 +1363,7 @@ class MissionROSNode:
             self.sm.latest_qr_received_at = self.sm._now_str()
             if self.sm.state in [MissionState.SEARCHING_VICTIM, MissionState.READING_QR]:
                 self.sm.qr_code_data = msg.data
-                if not self.sm.qr_scanned and self.sm.state == MissionState.SEARCHING_VICTIM:
+                if not self.sm.qr_scanned:
                     self.sm.victim_detected = True
                     self.sm.victim_found = True
                     self.sm.qr_scanned = True
@@ -2169,9 +2169,6 @@ def build_judge_dashboard(sm: MissionStateMachine):
     def update_dashboard():
         nonlocal last_rendered_log_count
 
-        # Шаг автомата состояний
-        sm.step(dt=0.1)
-
         # 1. Бейдж состояния
         st = sm.state
         state_badge.text = st.value
@@ -2429,18 +2426,36 @@ def main(args=None):
         except KeyboardInterrupt:
             print("Остановка по сигналу.")
     else:
+        # Миссия не должна зависеть от открытой вкладки судейского интерфейса.
+        stop_mission_loop = threading.Event()
+
+        def run_mission_loop() -> None:
+            while not stop_mission_loop.is_set():
+                try:
+                    sm.step(0.1)
+                except Exception as error:
+                    sm._log('ERROR', f'Ошибка цикла миссии: {error}')
+                stop_mission_loop.wait(0.1)
+
+        mission_thread = threading.Thread(target=run_mission_loop, daemon=True)
+        mission_thread.start()
+
         @ui.page('/')
         def index():
             build_judge_dashboard(sm)
 
-        ui.run(
-            host=parsed_args.host,
-            port=parsed_args.port,
-            title="IJKbot — Центр Управления Миссией",
-            favicon="🤖",
-            reload=False,
-            show=False
-        )
+        try:
+            ui.run(
+                host=parsed_args.host,
+                port=parsed_args.port,
+                title="IJKbot — Центр Управления Миссией",
+                favicon="🤖",
+                reload=False,
+                show=False
+            )
+        finally:
+            stop_mission_loop.set()
+            mission_thread.join(timeout=2.0)
 
 
 if __name__ in {"__main__", "__mp_main__"}:

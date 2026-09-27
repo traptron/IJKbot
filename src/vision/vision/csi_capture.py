@@ -1,5 +1,24 @@
 """Bounded MJPEG framing and libcamera capture command (no ROS dependency)."""
 
+RAW_FRAME_BYTES = 640 * 480 * 10 // 8
+
+
+def raw10_to_jpeg(raw: bytes, quality: int) -> bytes:
+    """Demosaic OV5647 packed GBRG10 and encode one bounded JPEG frame."""
+    if len(raw) != RAW_FRAME_BYTES:
+        raise ValueError('Incomplete 640x480 packed Bayer frame')
+    import cv2
+    import numpy as np
+
+    groups = np.frombuffer(raw, dtype=np.uint8).reshape(480, 160, 5)
+    # The first four bytes of each MIPI RAW10 group contain the high eight bits.
+    bayer = groups[:, :, :4].reshape(480, 640)
+    bgr = cv2.cvtColor(bayer, cv2.COLOR_BayerGBRG2BGR)
+    ok, encoded = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise RuntimeError('Camera JPEG encoding failed')
+    return encoded.tobytes()
+
 
 class MjpegFramer:
     """Split camera JPEG frames even when markers cross pipe read boundaries."""
@@ -32,10 +51,16 @@ class MjpegFramer:
 
 
 def capture_command(fps: int, quality: int, camera_name: str = '',
-                    mock_hardware: bool = False) -> list[str]:
+                    mock_hardware: bool = False,
+                    backend: str = 'libcamera') -> list[str]:
     """Use libcamera for CSI; mock mode uses a GStreamer test pattern."""
     if not 1 <= fps <= 15 or not 1 <= quality <= 100:
         raise ValueError('fps must be 1..15 and jpeg_quality must be 1..100')
+    if backend not in ('libcamera', 'v4l2_raw'):
+        raise ValueError('backend must be libcamera or v4l2_raw')
+    if backend == 'v4l2_raw' and not mock_hardware:
+        return ['v4l2-ctl', '-d', '/dev/video0', '--stream-mmap=4',
+                '--stream-to=/dev/stdout']
     source = ['videotestsrc', 'is-live=true'] if mock_hardware else ['libcamerasrc']
     if camera_name and not mock_hardware:
         if any(char in camera_name for char in '\n\r\0'):

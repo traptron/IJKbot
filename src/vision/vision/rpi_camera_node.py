@@ -15,7 +15,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
 
-from .csi_capture import MjpegFramer, capture_command
+from .csi_capture import RAW_FRAME_BYTES, MjpegFramer, capture_command, raw10_to_jpeg
 
 
 class RpiCameraNode(Node):
@@ -29,15 +29,21 @@ class RpiCameraNode(Node):
         self.declare_parameter('fps', 10)
         self.declare_parameter('jpeg_quality', 85)
         self.declare_parameter('mock_hardware', False)
+        self.declare_parameter('backend', 'v4l2_raw')
+        self.declare_parameter('exposure', 2500)
+        self.declare_parameter('analogue_gain', 48)
         fps = int(self.get_parameter('fps').value)
+        self._quality = int(self.get_parameter('jpeg_quality').value)
+        self._raw_backend = (
+            str(self.get_parameter('backend').value) == 'v4l2_raw'
+            and not bool(self.get_parameter('mock_hardware').value))
         self._command = capture_command(
-            fps, int(self.get_parameter('jpeg_quality').value),
+            fps, self._quality,
             str(self.get_parameter('camera_name').value),
-            bool(self.get_parameter('mock_hardware').value))
+            bool(self.get_parameter('mock_hardware').value),
+            str(self.get_parameter('backend').value))
         if not shutil.which(self._command[0]):
-            raise RuntimeError(
-                'Install gstreamer1.0-tools, gstreamer1.0-libcamera, '
-                'gstreamer1.0-plugins-base and gstreamer1.0-plugins-good')
+            raise RuntimeError(f'Camera capture program missing: {self._command[0]}')
         self._frame_id = str(self.get_parameter('frame_id').value)
         topic = str(self.get_parameter('image_topic').value)
         self._publisher = self.create_publisher(CompressedImage, topic, qos_profile_sensor_data)
@@ -59,9 +65,21 @@ class RpiCameraNode(Node):
         while not self._stop.is_set():
             process = None
             try:
+                if self._raw_backend:
+                    exposure = int(self.get_parameter('exposure').value)
+                    gain = int(self.get_parameter('analogue_gain').value)
+                    if not 4 <= exposure <= 3145 or not 16 <= gain <= 1023:
+                        raise ValueError('OV5647 exposure or analogue_gain out of range')
+                    subprocess.run([
+                        'v4l2-ctl', '-d', '/dev/v4l-subdev0',
+                        f'--set-ctrl=exposure={exposure},analogue_gain={gain}',
+                    ], check=True, capture_output=True)
                 # argv list, no shell; camera errors remain visible in the launch log.
-                process = subprocess.Popen(self._command, stdout=subprocess.PIPE, bufsize=0)
-                parser = MjpegFramer()
+                process = subprocess.Popen(
+                    self._command, stdout=subprocess.PIPE, bufsize=0,
+                    stderr=subprocess.DEVNULL if self._raw_backend else None)
+                parser = MjpegFramer() if not self._raw_backend else None
+                raw_buffer = bytearray()
                 last_frame = time.monotonic()
                 first_frame = True
                 with selectors.DefaultSelector() as selector:
@@ -74,7 +92,15 @@ class RpiCameraNode(Node):
                         chunk = os.read(process.stdout.fileno(), 65536)
                         if not chunk:
                             raise RuntimeError('Camera capture closed its output')
-                        frames = parser.feed(chunk)
+                        if self._raw_backend:
+                            raw_buffer.extend(chunk)
+                            frames = []
+                            while len(raw_buffer) >= RAW_FRAME_BYTES:
+                                frames.append(raw10_to_jpeg(
+                                    bytes(raw_buffer[:RAW_FRAME_BYTES]), self._quality))
+                                del raw_buffer[:RAW_FRAME_BYTES]
+                        else:
+                            frames = parser.feed(chunk)
                         if not frames:
                             continue
                         last_frame = time.monotonic()
@@ -88,7 +114,7 @@ class RpiCameraNode(Node):
                         if first_frame:
                             self.get_logger().info('Camera stream active: first JPEG received')
                             first_frame = False
-            except (OSError, RuntimeError, ValueError) as error:
+            except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
                 if not self._stop.is_set():
                     self.get_logger().error(f'CSI capture failed: {error}; retry in 2 seconds')
             finally:

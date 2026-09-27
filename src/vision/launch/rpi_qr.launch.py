@@ -12,12 +12,14 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('camera_name', default_value=''),
         DeclareLaunchArgument('mock_hardware', default_value='false'),
+        DeclareLaunchArgument('backend', default_value='v4l2_raw'),
         DeclareLaunchArgument('enable_reader', default_value='true'),
         DeclareLaunchArgument('confirm_frames', default_value='3'),
         Node(
             package='vision', executable='rpi_camera_node', output='screen',
             parameters=[{
                 'camera_name': ParameterValue(LaunchConfiguration('camera_name'), value_type=str),
+                'backend': ParameterValue(LaunchConfiguration('backend'), value_type=str),
                 'mock_hardware': ParameterValue(
                     LaunchConfiguration('mock_hardware'), value_type=bool),
             }],

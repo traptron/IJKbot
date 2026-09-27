@@ -63,7 +63,7 @@ class TestMissionStateMachine(unittest.TestCase):
         self.assertEqual(sm.state, MissionState.SEARCHING_VICTIM)
         self.assertFalse(sm.victim_found)
 
-    def test_qr_callback_accepts_only_reading_state_and_preserves_text(self):
+    def test_qr_callback_stops_on_reading_state_and_preserves_text(self):
         from types import SimpleNamespace
         from brain.mission_sm import MissionROSNode
         wrapper = SimpleNamespace(sm=self.sm)
@@ -76,6 +76,33 @@ class TestMissionStateMachine(unittest.TestCase):
         self.sm.state = MissionState.READING_QR
         MissionROSNode._qr_callback(wrapper, message)
         self.assertEqual(self.sm.qr_code_data, message.data)
+        self.assertEqual(self.sm.state, MissionState.WAIT_5_SECONDS)
+        self.assertTrue(self.sm.qr_scanned)
+        self.assertIsNotNone(self.sm.wait_timer_start)
+
+    def test_qr_reading_waits_five_seconds_before_home_goal(self):
+        from unittest.mock import Mock, patch
+        from types import SimpleNamespace
+        from brain.mission_sm import MissionROSNode
+        self.sm.mock_mode = False
+        self.sm.state = MissionState.READING_QR
+        self.sm._publish_goal_pose = Mock()
+        self.sm._publish_zero_velocity = Mock()
+        self.sm._cancel_nav_goal = Mock()
+        wrapper = SimpleNamespace(sm=self.sm, cancel_nav_goal=Mock())
+        with patch('brain.mission_sm.time.time', return_value=100.0):
+            MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='Пульс: 126'))
+        wrapper.cancel_nav_goal.assert_called_once()
+        self.sm._publish_zero_velocity.assert_called()
+        self.sm._publish_goal_pose.assert_not_called()
+        with patch('brain.mission_sm.time.time', return_value=104.9):
+            self.sm.step()
+        self.sm._publish_goal_pose.assert_not_called()
+        with patch('brain.mission_sm.time.time', return_value=105.0):
+            self.sm.step()
+        self.assertEqual(self.sm.state, MissionState.RETURNING_HOME)
+        self.assertEqual(self.sm.current_waypoint, START_WAYPOINT)
+        self.sm._publish_goal_pose.assert_called_once_with(START_WAYPOINT)
 
     def test_qr_dashboard_ignores_blank_and_deduplicates_log(self):
         from types import SimpleNamespace
@@ -330,7 +357,7 @@ class TestMissionStateMachine(unittest.TestCase):
 
         real_sm.qr_code_data = 'Состояние: стабильное'
         real_sm.step(0.1)
-        self.assertEqual(real_sm.state, MissionState.RETURNING_HOME)
+        self.assertEqual(real_sm.state, MissionState.WAIT_5_SECONDS)
         self.assertTrue(real_sm.qr_scanned)
 
     def test_static_arena_elements(self):
@@ -915,4 +942,3 @@ class TestMissionStateMachine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
