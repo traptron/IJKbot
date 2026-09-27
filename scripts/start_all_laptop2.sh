@@ -440,6 +440,28 @@ if [[ "${RUN_LOCAL}" != "true" && -f "${MAP_FILE}" && "${LOC_METHOD}" != "slam" 
             echo -e "${YELLOW}[WARN] Не удалось выполнить автокопирование карты на Pi (возможно, хост пока недоступен).${NC}"
         fi
     fi
+if [[ "${RUN_LOCAL}" != "true" ]]; then
+    SRC_IP=$(ip route get "${PI_HOST}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')
+    if [[ -n "${SRC_IP}" ]]; then
+        CYCLONE_XML="/tmp/cyclonedds_ijkbot.xml"
+        cat <<EOF > "${CYCLONE_XML}"
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config">
+    <Domain id="any">
+        <General>
+            <NetworkInterfaceAddress>${SRC_IP}</NetworkInterfaceAddress>
+            <AllowMulticast>true</AllowMulticast>
+        </General>
+        <Discovery>
+            <Peers>
+                <Peer address="${PI_HOST}"/>
+            </Peers>
+        </Discovery>
+    </Domain>
+</CycloneDDS>
+EOF
+        export CYCLONEDDS_URI="file://${CYCLONE_XML}"
+    fi
 fi
 
 echo -e "${CYAN}${BOLD}================================================================${NC}"

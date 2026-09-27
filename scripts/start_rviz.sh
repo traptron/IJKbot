@@ -29,6 +29,30 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
+# Автонастройка CycloneDDS: выбор интерфейса маршрута к роботу и добавление unicast peer
+PI_TARGET_HOST="${PI_HOST:-${ROBOT_IP:-172.22.35.154}}"
+SRC_IP=$(ip route get "${PI_TARGET_HOST}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')
+if [[ -n "${SRC_IP}" ]]; then
+    CYCLONE_XML="/tmp/cyclonedds_ijkbot.xml"
+    cat <<EOF > "${CYCLONE_XML}"
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config">
+    <Domain id="any">
+        <General>
+            <NetworkInterfaceAddress>${SRC_IP}</NetworkInterfaceAddress>
+            <AllowMulticast>true</AllowMulticast>
+        </General>
+        <Discovery>
+            <Peers>
+                <Peer address="${PI_TARGET_HOST}"/>
+            </Peers>
+        </Discovery>
+    </Domain>
+</CycloneDDS>
+EOF
+    export CYCLONEDDS_URI="file://${CYCLONE_XML}"
+fi
+
 PIXI_MANIFEST="${PIXI_PROJECT_MANIFEST:-/home/lev/ros2_jazzy/pixi.toml}"
 DEFAULT_RVIZ_CONFIG="${REPO_DIR}/src/nav2/rviz/nav2_default_view.rviz"
 FALLBACK_RVIZ_CONFIG="${REPO_DIR}/src/nav2/rviz/nav2_view.rviz"
@@ -101,10 +125,6 @@ elif [[ -f /opt/ros/jazzy/setup.bash ]]; then
     # Snap editor GTK modules can load an incompatible glibc into native RViz.
     unset GTK_PATH GIO_MODULE_DIR GTK_EXE_PREFIX GTK_DATA_PREFIX
     unset QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH
-    if [[ "${RMW_IMPLEMENTATION}" == rmw_cyclonedds_cpp ]] &&
-       [[ ! -f /opt/ros/jazzy/lib/librmw_cyclonedds_cpp.so ]]; then
-        export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-    fi
 else
     echo -e "${RED}[ERROR] Не найдено окружение Pixi или ROS 2 Jazzy.${NC}" >&2
     exit 1
