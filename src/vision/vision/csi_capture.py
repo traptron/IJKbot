@@ -3,6 +3,34 @@
 RAW_FRAME_BYTES = 640 * 480 * 10 // 8
 
 
+def correct_color(image, saturation_gain: float = 2.5):
+    """Reduce channel cast and lift underexposed shadows without unbounded gain."""
+    import cv2
+    import numpy as np
+
+    channel_means = image.mean(axis=(0, 1))
+    reference = float(channel_means.mean())
+    gains = np.clip(reference / np.maximum(channel_means, 1.0), 0.75, 1.35)
+    balanced = np.clip(image.astype(np.float32) * gains, 0, 255).astype(np.uint8)
+
+    luminance = cv2.cvtColor(balanced, cv2.COLOR_BGR2GRAY)
+    mean_luminance = float(luminance.mean())
+    if mean_luminance < 110.0:
+        normalized_mean = max(mean_luminance / 255.0, 1.0 / 255.0)
+        gamma = float(np.clip(np.log(0.5) / np.log(normalized_mean), 0.42, 0.88))
+        lookup = np.array([
+            round(((value / 255.0) ** gamma) * 255.0) for value in range(256)
+        ], dtype=np.uint8)
+        balanced = cv2.LUT(balanced, lookup)
+
+    hsv = cv2.cvtColor(balanced, cv2.COLOR_BGR2HSV)
+    hsv[:, :, 1] = np.clip(
+        hsv[:, :, 1].astype(np.float32) * saturation_gain, 0, 255
+    ).astype(np.uint8)
+    balanced = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    return balanced
+
+
 def raw10_to_jpeg(raw: bytes, quality: int) -> bytes:
     """Demosaic OV5647 packed GBRG10 and encode one bounded JPEG frame."""
     if len(raw) != RAW_FRAME_BYTES:
@@ -11,9 +39,9 @@ def raw10_to_jpeg(raw: bytes, quality: int) -> bytes:
     import numpy as np
 
     groups = np.frombuffer(raw, dtype=np.uint8).reshape(480, 160, 5)
-    # The first four bytes of each MIPI RAW10 group contain the high eight bits.
     bayer = groups[:, :, :4].reshape(480, 640)
     bgr = cv2.cvtColor(bayer, cv2.COLOR_BayerGBRG2BGR)
+    bgr = correct_color(bgr)
     ok, encoded = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise RuntimeError('Camera JPEG encoding failed')
@@ -59,7 +87,9 @@ def capture_command(fps: int, quality: int, camera_name: str = '',
     if backend not in ('libcamera', 'v4l2_raw'):
         raise ValueError('backend must be libcamera or v4l2_raw')
     if backend == 'v4l2_raw' and not mock_hardware:
-        return ['v4l2-ctl', '-d', '/dev/video0', '--stream-mmap=4',
+        return ['v4l2-ctl', '-d', '/dev/video0',
+            '--set-fmt-video=width=640,height=480,pixelformat=pGAA',
+                '--stream-mmap=4',
                 '--stream-to=/dev/stdout']
     source = ['videotestsrc', 'is-live=true'] if mock_hardware else ['libcamerasrc']
     if camera_name and not mock_hardware:

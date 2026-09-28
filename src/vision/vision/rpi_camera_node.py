@@ -31,10 +31,10 @@ class RpiCameraNode(Node):
         self.declare_parameter('mock_hardware', False)
         self.declare_parameter('backend', 'v4l2_raw')
         self.declare_parameter('exposure', 2500)
-        self.declare_parameter('analogue_gain', 48)
+        self.declare_parameter('analogue_gain', 320)
         fps = int(self.get_parameter('fps').value)
         self._quality = int(self.get_parameter('jpeg_quality').value)
-        self._raw_backend = (
+        self._v4l2_backend = (
             str(self.get_parameter('backend').value) == 'v4l2_raw'
             and not bool(self.get_parameter('mock_hardware').value))
         self._command = capture_command(
@@ -65,7 +65,7 @@ class RpiCameraNode(Node):
         while not self._stop.is_set():
             process = None
             try:
-                if self._raw_backend:
+                if self._v4l2_backend:
                     exposure = int(self.get_parameter('exposure').value)
                     gain = int(self.get_parameter('analogue_gain').value)
                     if not 4 <= exposure <= 3145 or not 16 <= gain <= 1023:
@@ -77,9 +77,9 @@ class RpiCameraNode(Node):
                 # argv list, no shell; camera errors remain visible in the launch log.
                 process = subprocess.Popen(
                     self._command, stdout=subprocess.PIPE, bufsize=0,
-                    stderr=subprocess.DEVNULL if self._raw_backend else None)
-                parser = MjpegFramer() if not self._raw_backend else None
-                raw_buffer = bytearray()
+                    stderr=subprocess.DEVNULL if self._v4l2_backend else None)
+                parser = MjpegFramer() if not self._v4l2_backend else None
+                frame_buffer = bytearray()
                 last_frame = time.monotonic()
                 first_frame = True
                 with selectors.DefaultSelector() as selector:
@@ -92,13 +92,13 @@ class RpiCameraNode(Node):
                         chunk = os.read(process.stdout.fileno(), 65536)
                         if not chunk:
                             raise RuntimeError('Camera capture closed its output')
-                        if self._raw_backend:
-                            raw_buffer.extend(chunk)
+                        if self._v4l2_backend:
+                            frame_buffer.extend(chunk)
                             frames = []
-                            while len(raw_buffer) >= RAW_FRAME_BYTES:
+                            while len(frame_buffer) >= RAW_FRAME_BYTES:
                                 frames.append(raw10_to_jpeg(
-                                    bytes(raw_buffer[:RAW_FRAME_BYTES]), self._quality))
-                                del raw_buffer[:RAW_FRAME_BYTES]
+                                    bytes(frame_buffer[:RAW_FRAME_BYTES]), self._quality))
+                                del frame_buffer[:RAW_FRAME_BYTES]
                         else:
                             frames = parser.feed(chunk)
                         if not frames:
