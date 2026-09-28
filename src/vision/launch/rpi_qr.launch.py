@@ -15,9 +15,14 @@ def generate_launch_description():
         DeclareLaunchArgument('backend', default_value='v4l2_raw'),
         DeclareLaunchArgument('enable_reader', default_value='true'),
         DeclareLaunchArgument('confirm_frames', default_value='3'),
+        DeclareLaunchArgument('implementation', default_value='vision_cpp'),
+        DeclareLaunchArgument('fps', default_value='10'),
+        DeclareLaunchArgument('jpeg_quality', default_value='85'),
         Node(
-            package='vision', executable='rpi_camera_node', output='screen',
+            package=LaunchConfiguration('implementation'), executable='rpi_camera_node', output='screen',
             parameters=[{
+                'fps': ParameterValue(LaunchConfiguration('fps'), value_type=int),
+                'jpeg_quality': ParameterValue(LaunchConfiguration('jpeg_quality'), value_type=int),
                 'camera_name': ParameterValue(LaunchConfiguration('camera_name'), value_type=str),
                 'backend': ParameterValue(LaunchConfiguration('backend'), value_type=str),
                 'mock_hardware': ParameterValue(
@@ -25,7 +30,7 @@ def generate_launch_description():
             }],
         ),
         Node(
-            package='vision', executable='qr_reader_node', output='screen',
+            package=LaunchConfiguration('implementation'), executable='qr_reader_node', output='screen',
             condition=IfCondition(LaunchConfiguration('enable_reader')),
             parameters=[{
                 'image_topic': '/camera/color/image_raw/compressed',

@@ -10,7 +10,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('image_topic', default_value='/camera/color/image_raw/compressed'),
         DeclareLaunchArgument('port', default_value='8080'),
-        Node(package='vision', executable='qr_reader_node', output='screen',
+        DeclareLaunchArgument('implementation', default_value='vision_cpp'),
+        Node(package=LaunchConfiguration('implementation'), executable='qr_reader_node', output='screen',
              parameters=[{'image_topic': LaunchConfiguration('image_topic')}]),
         Node(package='brain', executable='dashboard_app', output='screen',
              arguments=['--no-mock', '--port', LaunchConfiguration('port')]),

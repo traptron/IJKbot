@@ -1,13 +1,21 @@
 # CSI-камера Raspberry Pi и QR
 
+Launch-файлы по умолчанию запускают C++17-ноды пакета `vision_cpp`.
 `rpi_camera_node` получает кадры CSI-камеры OV5647 через прямой захват
-V4L2 и публикует только JPEG 640×480, по умолчанию 10 кадров/с.
+V4L2 mmap и публикует только JPEG 640×480, по умолчанию 10 кадров/с (качество 85).
 Нода `qr_reader_node` декодирует текст QR и подтверждает его в трёх кадрах.
 Захват выполняется в отдельном потоке; при зависании или отключении камеры
-процесс захвата перезапускается. В очереди хранится только последний кадр.
+захват перезапускается. В очереди хранится только последний кадр.
 Такой захват выбран для текущей Ubuntu на Pi: установленный `libcamera`
 падает при первом кадре. Packed Bayer RAW10 преобразуется в JPEG с балансом
 цвета, умеренным усилением насыщенности и адаптивным подъёмом тёмных кадров.
+Ограничение FPS выполняется до преобразования RAW и JPEG-кодирования.
+Цветокоррекция использует LUT вместо полноразмерных массивов float32.
+Оптимизированные таблицы Хаффмана уменьшают размер JPEG без изменения
+декодированных пикселей. Разрешение, качество JPEG и алгоритмы QR сохранены.
+QR работает в отдельном потоке: WeChatQRCode, затем QRCodeDetector, включая
+увеличение мелких кодов в 2 и 4 раза. Аннотированный JPEG создаётся только
+после подтверждения и из уже декодированного изображения.
 
 Маркировка платы камеры не используется для угадывания сенсора: камера должна
 определяться `libcamera`. На Ubuntu 24.04 установите системные компоненты:
@@ -15,7 +23,7 @@ V4L2 и публикует только JPEG 640×480, по умолчанию 1
 ```bash
 sudo apt install libcamera-tools gstreamer1.0-tools gstreamer1.0-libcamera \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good v4l-utils \
-  python3-opencv python3-numpy
+  libopencv-dev python3-opencv python3-numpy
 sudo usermod -aG video "$USER"
 cam -l
 ```
@@ -29,11 +37,16 @@ cam -l
 ```bash
 cd ~/IJKbot
 source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install --packages-select vision
+colcon build --symlink-install --packages-select vision_cpp vision --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 export ROS_DOMAIN_ID=42
 ros2 launch vision rpi_qr.launch.py
 ```
+
+Пакет C++ можно запускать без Python-пакета `vision`:
+`ros2 launch vision_cpp rpi_qr.launch.py`. Старые Python-ноды сохранены для
+сравнения и отката: `ros2 launch vision rpi_qr.launch.py implementation:=vision`.
+Аргументы `fps:=10 jpeg_quality:=85` управляют потоком и в обычном launch.
 
 Этот запуск не требует состояния миссии, не сохраняет фотографии на диск
 и не запускает моторы. Параллельный запуск RealSense с тем же топиком камеры
@@ -78,13 +91,45 @@ JPEG на Pi, не аппаратным временем экспозиции. `
 
 # QR в судейском веб-интерфейсе через SSH-поток
 
-Если DDS-видеопоток с Raspberry Pi недоступен, скопируйте
-`scripts/csi_jpeg_stream.py` на Pi в `/home/otmorozki/IJKbot/scripts/`,
-запустите веб-интерфейс `brain.dashboard_app --no-mock`, а на ноутбуке —
-`python3 scripts/qr_ssh_preview.py --no-window` после `source` ROS 2 и
-`install/setup.bash`. Оба процесса должны использовать `ROS_DOMAIN_ID=42`.
+Если DDS-видеопоток с Raspberry Pi недоступен, соберите `vision_cpp` на Pi и
+ноутбуке. Камеру должен захватывать только один процесс: перед SSH-запуском
+остановите отдельный `rpi_qr.launch.py` на Pi, оставив моторы и лидар запущенными.
+Откройте управляющее SSH-соединение в отдельном терминале:
+
+```bash
+ssh -M -N -S /tmp/ijkbot-camera-new.sock otmorozki@10.18.233.154
+```
+
+Запустите веб-интерфейс `brain.dashboard_app --no-mock`, а на ноутбуке —
+`./scripts/start_qr_stream.sh otmorozki@10.18.233.154` после `source` ROS 2 и
+`install/setup.bash`. Адрес замените на текущий IP Pi; пароль в скриптах не хранится.
+Мост и декодер должны использовать `ROS_DOMAIN_ID=42`. При таком запуске не
+включайте второй QR-reader в дашборде: скрипт уже запускает один C++-декодер.
 SSH-поток несёт только сжатые JPEG-кадры. Мост публикует распознанный текст в
 `/victim_status` и снимок с рамкой QR в `/vision/qr/image/compressed`;
 они появляются в карточке «Данные QR-кода пострадавшего» по адресу
 `http://<IP-ноутбука>:8080/`. Цель возврата в стартовую ячейку выдаётся только
 после пяти секунд остановки с момента получения QR во время миссии.
+
+Захват, кодирование, SSH-мост и распознавание выполняются на C++; Python-скрипты
+`csi_jpeg_stream.py` и `qr_ssh_preview.py` оставлены только как прежняя реализация.
+Мост передаёт исходные JPEG без декодирования/повторного кодирования и не
+блокируется на окне предпросмотра. Видео доступно по тому же ROS-топику.
+
+Проверка и измерения:
+
+```bash
+colcon test --packages-select vision_cpp
+colcon test-result --test-result-base build/vision_cpp
+PYTHONPATH=src/vision:$PYTHONPATH python3 src/vision_cpp/test/compare_encoder.py \
+  install/vision_cpp/lib/vision_cpp/csi_jpeg_stream
+python3 scripts/measure_video.py --seconds 10
+```
+
+Сравнение проверяет RAW10, тёмные/мелкие QR, побитовое равенство декодированных
+пикселей, размер потока и повреждённый ввод. ROS-тест проверяет фильтр состояния
+миссии, подтверждение по разным кадрам, снимок по триггеру и мок камеры.
+Результат синтетических тестов не заменяет проверку реального QR на нужной
+дистанции и при освещении полигона. Полоса в `measure_video.py` учитывает только
+полезные JPEG-байты, без накладных расходов DDS/SSH/Wi-Fi.
+Прямой захват использует [V4L2 mmap API](https://docs.kernel.org/userspace-api/media/v4l/mmap.html).
