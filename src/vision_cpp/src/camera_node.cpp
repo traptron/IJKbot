@@ -3,6 +3,7 @@
 #include <thread>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
+#include <std_msgs/msg/bool.hpp>
 
 class CameraNode : public rclcpp::Node {
 public:
@@ -22,6 +23,16 @@ public:
     const auto topic = declare_parameter("image_topic", "/camera/color/image_raw/compressed");
     publisher_ = create_publisher<sensor_msgs::msg::CompressedImage>(topic,
       rclcpp::SensorDataQoS().keep_last(1));
+    if (declare_parameter("stop_on_qr", false)) {
+      complete_sub_ = create_subscription<std_msgs::msg::Bool>(
+        declare_parameter("complete_topic", "/vision/qr/session_complete"),
+        rclcpp::QoS(1).reliable().transient_local(),
+        [this](std_msgs::msg::Bool::ConstSharedPtr message) {
+          if (message->data && !stop_.exchange(true)) {
+            RCLCPP_INFO(get_logger(), "Confirmed QR received: camera capture stopped");
+          }
+        });
+    }
     RCLCPP_INFO(get_logger(), "Native CSI: JPEG 640x480 Q=%d, at most %d fps -> %s",
       options.quality, options.fps, topic.c_str());
     worker_ = std::thread([this, options] {
@@ -47,6 +58,7 @@ private:
   std::thread worker_;
   std::string frame_id_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr publisher_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr complete_sub_;
 };
 int main(int argc, char ** argv) {
   rclcpp::init(argc, argv);

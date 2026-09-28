@@ -48,3 +48,73 @@ four decode successfully in both, while two fail in both; there is no regression
 Reducing QR CPU further without changing its search behaviour would require
 additional work; the native QR node still uses approximately one core in this
 scene.
+
+## One QR per capture session
+
+The standalone C++ `rpi_qr.launch.py` now defaults to `one_shot:=true`:
+the first QR confirmed in three distinct frames is published once, with one
+evidence image. `/vision/qr/session_complete` then stops camera capture,
+the JPEG relay and the desktop preview. Further frames, photo triggers and
+mission-state changes cannot publish another result during that session.
+Camera quality and QR confirmation rules are unchanged.
+
+Deployed on the Pi on 2026-09-28 after a successful `vision_cpp`/`vision`
+build and all eight native unit/ROS checks. The capture session runs in tmux
+`ijkbot-vision-native`; its output is `/tmp/ijkbot-qr-once.log` on the Pi.
+
+The reader stays alive without decoding to retain the result for a laptop
+that reconnects after the Wi-Fi outage. Reliable/transient-local subscriptions
+can fetch the cached text after streaming has stopped:
+
+```bash
+ROS_DOMAIN_ID=42 ros2 topic echo --once --qos-reliability reliable \
+  --qos-durability transient_local /victim_status std_msgs/msg/String
+```
+
+Restart the standalone launch to begin a new session. Use `one_shot:=false`
+for continuous C++ capture. General-purpose reader/camera nodes remain
+continuous by default; the Python rollback implementation does not implement
+the new one-shot controls.
+
+## Low-backlog desktop preview
+
+Build `vision_cpp` on both computers. On the Pi, disable the optional desktop
+target with `--cmake-args -DBUILD_VIDEO_VIEWER=OFF`. Leave the camera and QR reader
+running: the new `jpeg_topic_stream` subscribes to their existing compressed
+topic, rather than opening the camera again.
+
+On the laptop, run:
+
+```bash
+bash scripts/show_video.sh otmorozki@10.18.233.154 4
+```
+
+The host argument is the robot's current address, not a guaranteed static IP.
+SSH asks for credentials interactively; no password is stored. The window is
+`IJKbot - live camera`; Q/Escape closes it. An SSH control connection remains
+available for subsequent launches (close with `ssh -S
+"$XDG_RUNTIME_DIR/ijkbot-preview-ssh.sock" -O exit <host>` when finished).
+
+Preview is limited to four FPS by default; the Pi camera and QR reader keep
+their original ten FPS. Every displayed JPEG uses the original compressed bytes,
+without resizing or re-encoding. Only one frame may be in flight: the receiver
+acknowledges complete JPEGs, and the sender then selects the newest pending
+frame. Stalls do not create a growing application backlog. The viewer marks
+missing frames after 0.5 seconds and retries failed SSH channels. Direct DDS
+preview remains available by running `video_viewer` without `ssh_host`.
+
+This does not guarantee real-time delivery through a failing Wi-Fi link. During
+diagnosis on 2026-09-28, both SSH and DDS stalled through the Pixel_1765 hotspot
+on 2.4 GHz. Pi Wi-Fi power saving was found enabled and disabled for the current
+boot only. This is a reversible runtime change, not a persistent network
+configuration; no router, SSID, channel or motor settings were changed.
+
+The added ROS relay regression test checks byte-for-byte JPEG preservation,
+absence of output before acknowledgement, and newest-frame selection after it.
+At the relay-only stage, both platforms passed seven native unit/ROS checks. After switching
+preview transport, the laptop briefly displayed 2.2–3.8 FPS, then the underlying
+SSH connection failed again. A six-packet ping sample showed 16.7% loss and
+151–935 ms RTT (with one duplicate). Thus the recurring long freeze is **not
+resolved** by this code change. A healthy network link is still required.
+If the SSH master itself dies, rerun the preview script to authenticate again;
+channel retries cannot recover password authentication without interaction.

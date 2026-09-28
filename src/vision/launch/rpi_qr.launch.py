@@ -15,6 +15,7 @@ def generate_launch_description():
         DeclareLaunchArgument('backend', default_value='v4l2_raw'),
         DeclareLaunchArgument('enable_reader', default_value='true'),
         DeclareLaunchArgument('confirm_frames', default_value='3'),
+        DeclareLaunchArgument('one_shot', default_value='true'),
         DeclareLaunchArgument('implementation', default_value='vision_cpp'),
         DeclareLaunchArgument('fps', default_value='10'),
         DeclareLaunchArgument('jpeg_quality', default_value='85'),
@@ -27,6 +28,7 @@ def generate_launch_description():
                 'backend': ParameterValue(LaunchConfiguration('backend'), value_type=str),
                 'mock_hardware': ParameterValue(
                     LaunchConfiguration('mock_hardware'), value_type=bool),
+                'stop_on_qr': ParameterValue(LaunchConfiguration('one_shot'), value_type=bool),
             }],
         ),
         Node(
@@ -37,6 +39,7 @@ def generate_launch_description():
                 'state_filter_enabled': False,
                 'snapshot_mode': False,
                 'save_snapshot': False,
+                'one_shot': ParameterValue(LaunchConfiguration('one_shot'), value_type=bool),
                 'confirm_frames': ParameterValue(
                     LaunchConfiguration('confirm_frames'), value_type=int),
             }],

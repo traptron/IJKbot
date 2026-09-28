@@ -20,14 +20,23 @@ public:
     snapshot_ = declare_parameter("snapshot_mode", false);
     state_filter_ = declare_parameter("state_filter_enabled", true);
     save_ = declare_parameter("save_snapshot", true);
+    one_shot_ = declare_parameter("one_shot", false);
     log_dir_ = declare_parameter("log_dir", "log");
     const auto image_topic = declare_parameter("image_topic", "/camera/color/image_raw/compressed");
-    status_pub_ = create_publisher<std_msgs::msg::String>(declare_parameter("status_topic", "/victim_status"), 10);
+    auto result_qos = rclcpp::QoS(one_shot_ ? 1 : 10).reliable();
+    if (one_shot_) {result_qos.transient_local();}
+    status_pub_ = create_publisher<std_msgs::msg::String>(declare_parameter("status_topic", "/victim_status"), result_qos);
     detected_pub_ = create_publisher<std_msgs::msg::Bool>(declare_parameter("detected_topic", "/vision/qr/detected"), 10);
-    evidence_pub_ = create_publisher<Image>(declare_parameter("qr_image_topic", "/vision/qr/image/compressed"), 10);
+    evidence_pub_ = create_publisher<Image>(declare_parameter("qr_image_topic", "/vision/qr/image/compressed"), result_qos);
+    if (one_shot_) {
+      complete_pub_ = create_publisher<std_msgs::msg::Bool>(
+        declare_parameter("complete_topic", "/vision/qr/session_complete"),
+        rclcpp::QoS(1).reliable().transient_local());
+    }
     image_sub_ = create_subscription<Image>(image_topic, rclcpp::SensorDataQoS().keep_last(1),
       [this](Image::ConstSharedPtr message) {
         std::lock_guard<std::mutex> guard(mutex_);
+        if (completed_) {return;}
         latest_ = message;
         if (snapshot_ || !allowed()) {return;}
         // A forced photograph cannot be replaced by a later streaming frame.
@@ -39,6 +48,7 @@ public:
       [this](std_msgs::msg::Bool::ConstSharedPtr message) {
         if (!message->data) {return;}
         std::lock_guard<std::mutex> guard(mutex_);
+        if (completed_) {return;}
         if (!latest_) {RCLCPP_WARN(get_logger(), "Photo requested but no camera frame received"); return;}
         pending_ = latest_;
         pending_time_ = Steady::now();
@@ -49,6 +59,7 @@ public:
       declare_parameter("mission_state_topic", "/mission/state"), 10,
       [this](std_msgs::msg::String::ConstSharedPtr message) {
         std::lock_guard<std::mutex> guard(mutex_);
+        if (completed_) {return;}
         const auto start = message->data.find_first_not_of(" \t\r\n");
         const auto end = message->data.find_last_not_of(" \t\r\n");
         const auto state = start == std::string::npos ? "" : message->data.substr(start, end - start + 1);
@@ -59,6 +70,7 @@ public:
       });
     timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] {
         std::lock_guard<std::mutex> guard(mutex_);
+        if (completed_) {return;}
         if (last_frame_ != Steady::time_point{} && Steady::now() - last_frame_ > std::chrono::seconds(1)) {
           confirmation_.reset(); last_stamp_.reset();
           std_msgs::msg::Bool message;
@@ -151,9 +163,18 @@ private:
       evidence_pub_->publish(evidence);
       if (save_ && (force || last_saved_ != *confirmed)) {save_snapshot(evidence.data); last_saved_ = *confirmed;}
       if (last_logged_ != *confirmed) {RCLCPP_INFO(get_logger(), "QR confirmed: %s", confirmed->c_str()); last_logged_ = *confirmed;}
+      if (one_shot_) {
+        completed_ = true;
+        latest_.reset(); pending_.reset();
+        std_msgs::msg::Bool complete;
+        complete.data = true;
+        complete_pub_->publish(complete);
+        RCLCPP_INFO(get_logger(), "QR session complete: one result retained; stopping capture and preview");
+        return;  // Keep ROS alive to deliver the cached result after Wi-Fi reconnects.
+      }
     }
   }
-  bool snapshot_, state_filter_, save_, stop_ = false, forced_ = false;
+  bool snapshot_, state_filter_, save_, one_shot_, completed_ = false, stop_ = false, forced_ = false;
   std::string log_dir_, state_, last_saved_, last_logged_;
   uint64_t epoch_ = 0, snapshot_id_ = 0;
   std::mutex mutex_;
@@ -165,6 +186,7 @@ private:
   vision_cpp::Confirmation confirmation_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr detected_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr complete_pub_;
   rclcpp::Publisher<Image>::SharedPtr evidence_pub_;
   rclcpp::Subscription<Image>::SharedPtr image_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr trigger_sub_;
