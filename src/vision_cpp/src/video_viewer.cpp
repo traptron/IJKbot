@@ -68,6 +68,7 @@ int main(int argc, char ** argv) {
               "ConnectTimeout=5", host, "bash", "-lc", "'" + command + "'"});
             vision_cpp::MjpegFramer parser;
             auto last_data = Clock::now();
+            bool received_frame = false;
             uint8_t buffer[65536];
             while (!stop.load()) {
               pollfd descriptor{child.output(), POLLIN, 0};
@@ -83,14 +84,19 @@ int main(int argc, char ** argv) {
                   auto message = std::make_shared<Image>();
                   message->format = "jpeg";
                   message->data = std::move(jpeg);
+                  received_frame = true;
                   receive(message);
                   child.acknowledge();
                 }
               } else if (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) {
                 throw std::runtime_error("SSH preview disconnected");
               }
-              if (Clock::now() - last_data > std::chrono::seconds(5)) {
-                throw std::runtime_error("No SSH frame for 5 seconds");
+              // Allow process startup and DDS discovery before the first frame.
+              // A running stream still reconnects quickly after a network stall.
+              const auto timeout = std::chrono::seconds(received_frame ? 5 : 15);
+              if (Clock::now() - last_data > timeout) {
+                throw std::runtime_error(received_frame ? "No SSH frame for 5 seconds" :
+                  "Camera/DDS startup timed out after 15 seconds");
               }
             }
           } catch (const std::exception & error) {

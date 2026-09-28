@@ -186,10 +186,11 @@ def test_one_shot_result_is_retained_and_camera_stops():
     retained = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                           reliability=ReliabilityPolicy.RELIABLE)
     publisher = node.create_publisher(CompressedImage, '/test/once/input', qos)
-    results, completed, frames, late_results = [], [], [], []
+    results, completed, frames, late_results, full_frames = [], [], [], [], []
     node.create_subscription(String, '/test/once/status', results.append, retained)
     node.create_subscription(Bool, '/test/once/complete', completed.append, retained)
     node.create_subscription(CompressedImage, '/test/once/camera', frames.append, qos)
+    node.create_subscription(CompressedImage, '/test/once/full', full_frames.append, qos)
     processes = []
 
     def spin(seconds):
@@ -202,6 +203,8 @@ def test_one_shot_result_is_retained_and_camera_stops():
             os.environ['CAMERA_EXECUTABLE'], '--ros-args',
             '-p', 'mock_hardware:=true', '-p', 'image_topic:=/test/once/camera',
             '-p', 'stop_on_qr:=true', '-p', 'complete_topic:=/test/once/complete',
+            '-p', 'width:=1296', '-p', 'height:=972',
+            '-p', 'qr_image_topic:=/test/once/full', '-p', 'preview_fps:=4',
         ])
         processes.append(camera)
         reader = subprocess.Popen([
@@ -216,6 +219,11 @@ def test_one_shot_result_is_retained_and_camera_stops():
         while (publisher.get_subscription_count() == 0 or len(frames) < 3) and time.monotonic() < until:
             spin(0.05)
         assert publisher.get_subscription_count() == 1 and len(frames) >= 3
+        assert full_frames
+        full = cv2.imdecode(np.frombuffer(bytes(full_frames[-1].data), np.uint8), cv2.IMREAD_COLOR)
+        preview = cv2.imdecode(np.frombuffer(bytes(frames[-1].data), np.uint8), cv2.IMREAD_COLOR)
+        assert full.shape == (972, 1296, 3)
+        assert preview.shape == (480, 640, 3)
         qr = cv2.QRCodeEncoder_create().encode('single session result')
         qr = cv2.copyMakeBorder(qr, 4, 4, 4, 4, cv2.BORDER_CONSTANT, value=255)
         qr = cv2.resize(qr, (400, 400), interpolation=cv2.INTER_NEAREST)
@@ -225,13 +233,17 @@ def test_one_shot_result_is_retained_and_camera_stops():
         for stamp in range(1, 9):
             message.header.stamp.sec = stamp
             publisher.publish(message)
-            spin(0.15)
+            # Dense-code processing may span >1 s. Live distinct observations
+            # must still confirm; the former one-second timer erased progress.
+            spin(1.2 if stamp < 3 else 0.2)
         assert [item.data for item in results] == ['single session result']
         assert len(completed) == 1 and completed[0].data
         spin(0.5)  # Allow capture and already queued frames to drain.
         stopped_count = len(frames)
+        stopped_full_count = len(full_frames)
         spin(0.5)
         assert len(frames) == stopped_count
+        assert len(full_frames) == stopped_full_count
         # A laptop that reconnects after capture ended must still receive the result.
         node.create_subscription(String, '/test/once/status', late_results.append, retained)
         spin(0.5)

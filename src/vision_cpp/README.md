@@ -5,6 +5,83 @@ reading. Public ROS topics and QR parameters remain compatible with `vision`.
 Python nodes remain available through `implementation:=vision` for rollback.
 See [the operator guide](../vision/README.md) for build/run commands.
 
+## Dense QR capture and independent preview
+
+The native standalone launch now defaults to a real **1296×972** sensor mode,
+JPEG quality 95 and up to 6 capture FPS. This is not an enlarged VGA image.
+V4L2 configures both the sensor and capture device and rejects a mismatched
+resolution. The general camera executable retains its legacy 640×480 defaults.
+
+```bash
+# On the robot (ROS_DOMAIN_ID=42), no motor launch:
+ros2 launch vision_cpp rpi_qr.launch.py one_shot:=true
+# On the laptop, using the robot's current IP:
+bash scripts/show_video.sh otmorozki@10.18.233.154 4
+```
+
+Capture publishes the full-resolution JPEG to `/camera/qr/image/compressed`,
+which the on-robot QR reader consumes. A separate preview worker keeps only the
+latest frame, prepares a letterboxed 640×480 JPEG at quality 85 and publishes
+`/camera/color/image_raw/compressed` at up to 4 FPS. Preview encoding is skipped
+when nobody subscribes. Only subscribe to the full-resolution topic on the Pi;
+use the existing preview topic/SSH relay on Wi-Fi. No raw images are transmitted.
+QR evidence also preserves the full capture dimensions.
+
+Recognition uses OpenCV C++ WeChatQRCode and QRCodeDetector. It tries the original
+grayscale image, supplemented by Otsu, adaptive thresholding and CLAHE, plus the
+existing 2×/4× nearest-neighbour retries for small inputs. It never downsamples
+the recognition input. Expansions above six million pixels are skipped to bound
+memory usage. The successful variant is tried first on following frames.
+Streaming rotates costly fallback variants over fresh frames; a photo trigger
+tries all variants on the requested photograph. Thresholding never replaces the
+original capture or colour evidence. See the
+[OpenCV thresholding documentation](https://docs.opencv.org/4.6.0/d7/d4d/tutorial_py_thresholding.html).
+
+Before high-resolution decoding, OpenCV contours locate the three nested finder
+squares. A geometric QR locator is used as a fallback, with periodic native-size
+searches for small patterns. A reduced image may be used for **location only**;
+the candidate is cropped from the original image with quiet-zone padding and
+all payload decoding operates on those original pixels. Evidence coordinates
+are translated back into the original full frame. This avoids passing an entire
+high-resolution textured scene into model-free WeChat, which took 27–71 seconds
+per failed attempt in the first live measurement. Candidates still need three
+successful distinct-frame decodes; a finder pattern alone is not a result.
+
+`max_decode_fps:=3.0` limits the background worker's start rate independently of
+capture and preview. An in-progress decode and at most one pending frame are
+retained; newer frames replace the pending one. Actual recognition FPS depends
+on scene complexity. `decode_duty_cycle:=0.7` adds a proportional cooldown after
+expensive attempts so the worker yields CPU even when decoding is slower than
+the target period. This is a scheduling target, not a hard CPU quota; photo
+triggers bypass the cooldown. `confirmation_timeout_sec:=5.0` allows slow dense-code
+observations to accumulate without the previous one-second reset. Confirmation
+still requires three distinct frame timestamps; lost capture or a disallowed
+mission state resets it. Status, detected, evidence, snapshot triggers, disk
+deduplication, state filtering and one-shot completion retain their contracts.
+
+Other native launch controls: `width`, `height`, `fps`, `jpeg_quality`,
+`preview_fps`, `preview_quality`, `confirm_frames`, `qr_image_topic`.
+For the previous sensor resolution use `width:=640 height:=480 fps:=10
+jpeg_quality:=85`. The `vision` compatibility launch still has its legacy VGA
+defaults. `csi_jpeg_stream` also accepts `--width` and `--height`.
+
+Validation includes a 1158-byte UTF-8 QR (including Cyrillic), even lighting and
+a simulated shadow, unchanged full-resolution evidence, padded RAW10 at both
+resolutions, and ROS tests for the split streams, slow confirmations, snapshots,
+state gating, duplicate timestamps, retained results and stopping both streams.
+Synthetic fixtures do not establish readability of a particular printed code:
+focus, motion and pixels per QR module still require a physical test. JPEG Q95
+is lossy; additional pixels do not recover detail lost to focus or motion blur.
+
+Read-only on-robot stream measurements:
+
+```bash
+python3 src/vision_cpp/test/measure_streams.py --seconds 10
+```
+
+The measurements below describe the earlier VGA implementation, not a benchmark
+of the new high-resolution capture path.
+
 The RAW10 route uses V4L2 mmap, drains old buffers, rate-limits **before**
 demosaicing/encoding, reuses OpenCV storage and replaces full-image floating-point
 colour correction with equivalent lookup tables. JPEG stays 640×480, Q=85,

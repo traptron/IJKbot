@@ -37,6 +37,23 @@ TEST(Camera, ValidationAndPaddedStride) {
   auto image = cv::imdecode(contiguous, cv::IMREAD_COLOR);
   EXPECT_EQ(image.cols, 640); EXPECT_EQ(image.rows, 480);
 }
+TEST(Camera, FullResolutionPackedAndPaddedStride) {
+  vision_cpp::Options options;
+  options.width = 1297;
+  EXPECT_THROW(options.validate(), std::invalid_argument);
+  constexpr int width = 1296, height = 972, packed_stride = width * 5 / 4;
+  vision_cpp::Encoder encoder(95, width, height);
+  vision_cpp::Bytes raw(packed_stride * height, 100);
+  auto contiguous = encoder.encode(raw.data(), raw.size());
+  vision_cpp::Bytes padded((packed_stride + 16) * height, 42);
+  for (int row = 0; row < height; ++row) {
+    std::copy_n(raw.data() + row * packed_stride, packed_stride,
+      padded.data() + row * (packed_stride + 16));
+  }
+  EXPECT_EQ(contiguous, encoder.encode(padded.data(), padded.size(), packed_stride + 16));
+  const auto image = cv::imdecode(contiguous, cv::IMREAD_COLOR);
+  EXPECT_EQ(image.cols, width); EXPECT_EQ(image.rows, height);
+}
 TEST(Transport, ClosedPipeAndMissingChildFailCleanly) {
   EXPECT_THROW(vision_cpp::ChildPipe({"/ijkbot/nonexistent/camera"}), std::runtime_error);
   int descriptors[2];
@@ -93,4 +110,60 @@ TEST(Qr, TextCoordinatesAndEvidenceForSmallAndDarkCodes) {
       EXPECT_EQ(evidence.cols, 640); EXPECT_EQ(evidence.rows, 480);
     }
   }
+}
+TEST(Qr, DenseUtf8PayloadAtFullResolution) {
+  std::string text = "Пациент: Иван; состояние: стабилен; ";
+  for (int i = 0; i < 24; ++i) {
+    text += "field_" + std::to_string(i) + "=abcdefghijklmnopqrstuvwxyz0123456789;";
+  }
+  ASSERT_GT(text.size(), 1000U);
+  cv::QRCodeEncoder::Params params;
+  params.mode = cv::QRCodeEncoder::MODE_BYTE;
+  params.correction_level = cv::QRCodeEncoder::CORRECT_LEVEL_M;
+  cv::Mat code;
+  cv::QRCodeEncoder::create(params)->encode(text, code);
+  cv::copyMakeBorder(code, code, 4, 4, 4, 4, cv::BORDER_CONSTANT, 255);
+  const int side = code.rows * 4;
+  ASSERT_LT(side, 900);
+  cv::resize(code, code, {side, side}, 0, 0, cv::INTER_NEAREST);
+  for (int scene : {0, 1, 2}) {
+    const bool shadow = scene == 1;
+    cv::Mat frame(972, 1296, CV_8UC1, cv::Scalar(240));
+    code.copyTo(frame(cv::Rect(180, 80, side, side)));
+    if (shadow) {
+      for (int y = 0; y < frame.rows; ++y) {
+        auto * row = frame.ptr<uint8_t>(y);
+        for (int x = 0; x < frame.cols; ++x) {
+          row[x] = cv::saturate_cast<uint8_t>(row[x] * (0.35 + 0.6 * x / frame.cols) + 15);
+        }
+      }
+    }
+    if (scene == 2) {
+      const auto transform = cv::getRotationMatrix2D({180 + side / 2.0F, 80 + side / 2.0F}, 12, 1);
+      cv::warpAffine(frame, frame, transform, frame.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, 240);
+    }
+    vision_cpp::Bytes jpeg;
+    ASSERT_TRUE(cv::imencode(".jpg", frame, jpeg, {cv::IMWRITE_JPEG_QUALITY, 95}));
+    vision_cpp::QrDecoder decoder;
+    std::optional<vision_cpp::Detection> detection;
+    const auto started = vision_cpp::Clock::now();
+    for (int attempt = 0; attempt < 6 && !detection; ++attempt) {detection = decoder.decode(jpeg, false);}
+    ASSERT_TRUE(detection) << "scene=" << scene;
+    EXPECT_EQ(detection->text, text);
+    EXPECT_EQ(detection->image.cols, 1296); EXPECT_EQ(detection->image.rows, 972);
+    const auto evidence = cv::imdecode(decoder.annotate(*detection), cv::IMREAD_COLOR);
+    EXPECT_EQ(evidence.cols, 1296); EXPECT_EQ(evidence.rows, 972);
+    std::cout << "Dense QR " << text.size() << " bytes, scene=" << scene << ", "
+      << std::chrono::duration<double, std::milli>(vision_cpp::Clock::now() - started).count()
+      << " ms, method=" << detection->method << '\n';
+  }
+}
+TEST(Qr, TexturedFullResolutionSceneDoesNotProduceText) {
+  cv::Mat noise(972, 1296, CV_8UC1);
+  cv::RNG random(42);
+  random.fill(noise, cv::RNG::UNIFORM, 0, 256);
+  vision_cpp::Bytes jpeg;
+  ASSERT_TRUE(cv::imencode(".jpg", noise, jpeg, {cv::IMWRITE_JPEG_QUALITY, 95}));
+  vision_cpp::QrDecoder decoder;
+  for (int i = 0; i < 4; ++i) {EXPECT_FALSE(decoder.decode(jpeg, false));}
 }

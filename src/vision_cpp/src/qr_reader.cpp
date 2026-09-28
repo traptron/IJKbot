@@ -1,5 +1,6 @@
 #include "vision_cpp/qr.hpp"
 #include <condition_variable>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +22,15 @@ public:
     state_filter_ = declare_parameter("state_filter_enabled", true);
     save_ = declare_parameter("save_snapshot", true);
     one_shot_ = declare_parameter("one_shot", false);
+    const double max_fps = declare_parameter("max_decode_fps", 3.0);
+    decode_duty_cycle_ = declare_parameter("decode_duty_cycle", 0.7);
+    const double timeout = declare_parameter("confirmation_timeout_sec", 5.0);
+    if (!std::isfinite(max_fps) || max_fps <= 0 || max_fps > 30 ||
+      !std::isfinite(timeout) || timeout <= 0 || timeout > 60 ||
+      !std::isfinite(decode_duty_cycle_) || decode_duty_cycle_ <= 0 || decode_duty_cycle_ > 1)
+    {throw std::invalid_argument("Invalid QR decode rate or confirmation timeout");}
+    decode_period_ = std::chrono::duration_cast<Steady::duration>(std::chrono::duration<double>(1 / max_fps));
+    confirmation_timeout_ = std::chrono::duration_cast<Steady::duration>(std::chrono::duration<double>(timeout));
     log_dir_ = declare_parameter("log_dir", "log");
     const auto image_topic = declare_parameter("image_topic", "/camera/color/image_raw/compressed");
     auto result_qos = rclcpp::QoS(one_shot_ ? 1 : 10).reliable();
@@ -38,9 +48,13 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         if (completed_) {return;}
         latest_ = message;
+        last_received_ = Steady::now();
         if (snapshot_ || !allowed()) {return;}
         // A forced photograph cannot be replaced by a later streaming frame.
-        if (!forced_) {pending_ = message; pending_time_ = Steady::now();}
+        if (!forced_) {
+          if (pending_) {++replaced_;}
+          pending_ = message; pending_time_ = last_received_;
+        }
         wake_.notify_one();
       });
     trigger_sub_ = create_subscription<std_msgs::msg::Bool>(
@@ -71,8 +85,9 @@ public:
     timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] {
         std::lock_guard<std::mutex> guard(mutex_);
         if (completed_) {return;}
-        if (last_frame_ != Steady::time_point{} && Steady::now() - last_frame_ > std::chrono::seconds(1)) {
+        if (last_received_ != Steady::time_point{} && Steady::now() - last_received_ > confirmation_timeout_) {
           confirmation_.reset(); last_stamp_.reset();
+          ++epoch_;  // Reject a decode still running after capture has gone stale.
           std_msgs::msg::Bool message;
           message.data = false;
           detected_pub_->publish(message);
@@ -80,6 +95,8 @@ public:
       });
     RCLCPP_INFO(get_logger(), "Native QR reader: %s; confirmation=%d; snapshot=%d; state_filter=%d",
       image_topic.c_str(), static_cast<int>(get_parameter("confirm_frames").as_int()), snapshot_, state_filter_);
+    RCLCPP_INFO(get_logger(), "Background OpenCV QR: max %.1f attempts/s; full resolution; confirmation gap %.1f s",
+      max_fps, timeout);
     worker_ = std::thread([this] {
         try {work();} catch (const std::exception & error) {
           RCLCPP_ERROR(get_logger(), "QR worker stopped: %s", error.what());
@@ -112,6 +129,8 @@ private:
   }
   void work() {
     vision_cpp::QrDecoder decoder;
+    auto next_decode = Steady::now();
+    auto last_stats = Steady::now();
     while (true) {
       Image::ConstSharedPtr image;
       bool force;
@@ -121,6 +140,9 @@ private:
         std::unique_lock<std::mutex> guard(mutex_);
         wake_.wait(guard, [this] {return stop_ || pending_;});
         if (stop_) {return;}
+        wake_.wait_until(guard, next_decode, [this] {return stop_ || forced_;});
+        if (stop_) {return;}
+        if (!pending_) {continue;}
         image = std::move(pending_);
         force = forced_;
         forced_ = false;
@@ -128,18 +150,31 @@ private:
         received = pending_time_;
         const auto stamp = std::make_pair(image->header.stamp.sec, image->header.stamp.nanosec);
         if (!force && stamp != std::make_pair(0, 0U) && last_stamp_ == stamp) {continue;}
-        if (last_frame_ == Steady::time_point{} || received - last_frame_ > std::chrono::seconds(1) ||
+        if (last_frame_ == Steady::time_point{} || received - last_frame_ > confirmation_timeout_ ||
           (last_publication_ != Steady::time_point{} && received - last_publication_ >= std::chrono::seconds(1)))
         {confirmation_.reset(); last_publication_ = {};}
         last_stamp_ = stamp;
         last_frame_ = received;
       }
+      const auto started = Steady::now();
+      next_decode = started + decode_period_;
       std::optional<vision_cpp::Detection> detection;
-      try {detection = decoder.decode(image->data);} catch (const std::exception & error) {
+      try {detection = decoder.decode(image->data, force);} catch (const std::exception & error) {
         RCLCPP_WARN(get_logger(), "QR decoding: %s", error.what());
       }
+      // A slow failed decode must also yield CPU to capture and preview.
+      // Forced snapshots bypass this cooldown; normal work still keeps only the newest frame.
+      const auto elapsed = Steady::now() - started;
+      next_decode = std::max(next_decode, started +
+        std::chrono::duration_cast<Steady::duration>(elapsed / decode_duty_cycle_));
       std::lock_guard<std::mutex> guard(mutex_);
       if (stop_ || !rclcpp::ok()) {return;}
+      if (Steady::now() - last_stats >= std::chrono::seconds(5)) {
+        RCLCPP_INFO(get_logger(), "QR worker: decode %.0f ms; replaced pending frames=%lu; method=%s",
+          std::chrono::duration<double, std::milli>(Steady::now() - started).count(),
+          static_cast<unsigned long>(replaced_), detection ? detection->method.c_str() : "not decoded");
+        last_stats = Steady::now(); replaced_ = 0;
+      }
       // Do not publish a result from a mission state that has already ended.
       if (!force && (epoch != epoch_ || !allowed())) {continue;}
       std_msgs::msg::Bool found;
@@ -176,12 +211,15 @@ private:
   }
   bool snapshot_, state_filter_, save_, one_shot_, completed_ = false, stop_ = false, forced_ = false;
   std::string log_dir_, state_, last_saved_, last_logged_;
-  uint64_t epoch_ = 0, snapshot_id_ = 0;
+  uint64_t epoch_ = 0, snapshot_id_ = 0, replaced_ = 0;
   std::mutex mutex_;
   std::condition_variable wake_;
   std::thread worker_;
   Image::ConstSharedPtr latest_, pending_;
   Steady::time_point last_frame_{}, last_publication_{}, pending_time_{};
+  Steady::time_point last_received_{};
+  Steady::duration decode_period_{}, confirmation_timeout_{};
+  double decode_duty_cycle_;
   std::optional<std::pair<int32_t, uint32_t>> last_stamp_;
   vision_cpp::Confirmation confirmation_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;

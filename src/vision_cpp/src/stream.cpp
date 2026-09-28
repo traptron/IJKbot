@@ -22,13 +22,15 @@ int main(int argc, char ** argv) {
       else if (argument == "--mock") {options.mock = true;}
       else if (argument == "--help") {
         std::cerr << "csi_jpeg_stream [--fps 10] [--quality 85] [--device /dev/video0] "
-          "[--exposure 2500] [--gain 320] [--mock] [--raw-stdin]\n";
+          "[--width 640] [--height 480] [--exposure 2500] [--gain 320] [--mock] [--raw-stdin]\n";
         return 0;
       } else {
         if (i + 1 >= argc) {throw std::invalid_argument("Missing option value");}
         const std::string value = argv[++i];
         if (argument == "--fps") {options.fps = std::stoi(value);}
         else if (argument == "--quality") {options.quality = std::stoi(value);}
+        else if (argument == "--width") {options.width = std::stoi(value);}
+        else if (argument == "--height") {options.height = std::stoi(value);}
         else if (argument == "--device") {options.device = value;}
         else if (argument == "--subdevice") {options.subdevice = value;}
         else if (argument == "--exposure") {options.exposure = std::stoi(value);}
@@ -45,8 +47,8 @@ int main(int argc, char ** argv) {
       };
     if (stdin_raw) {
       // Deterministic offline conversion for regression tests; no camera required.
-      vision_cpp::Encoder encoder(options.quality);
-      vision_cpp::Bytes raw(vision_cpp::kRawBytes);
+      vision_cpp::Encoder encoder(options.quality, options.width, options.height);
+      vision_cpp::Bytes raw(static_cast<size_t>(options.width) * options.height * 5 / 4);
       while (!stopped.load()) {
         std::cin.read(reinterpret_cast<char *>(raw.data()), raw.size());
         if (std::cin.gcount() == 0 && std::cin.eof()) {break;}

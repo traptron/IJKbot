@@ -53,6 +53,7 @@ int main(int argc, char ** argv) {
     RCLCPP_INFO(node->get_logger(), "JPEG relay: original bytes, at most %d fps, one frame in flight", fps);
     auto next = vision_cpp::Clock::now();
     auto last_frame = next;
+    bool received_frame = false;
     while (!stop.load()) {
       Image::ConstSharedPtr frame;
       {
@@ -62,14 +63,17 @@ int main(int argc, char ** argv) {
           });
         if (stop.load()) {break;}
         if (vision_cpp::Clock::now() < next || !latest) {
-          if (vision_cpp::Clock::now() - last_frame > std::chrono::seconds(5)) {
-            throw std::runtime_error("No camera JPEG for 5 seconds");
+          const auto timeout = std::chrono::seconds(received_frame ? 5 : 15);
+          if (vision_cpp::Clock::now() - last_frame > timeout) {
+            throw std::runtime_error(received_frame ? "No camera JPEG for 5 seconds" :
+              "Camera/DDS startup timed out after 15 seconds");
           }
           continue;
         }
         frame = std::move(latest);
       }
       last_frame = vision_cpp::Clock::now();
+      received_frame = true;
       next = last_frame + std::chrono::nanoseconds(1000000000 / fps);
       if (frame->data.size() < 4 || frame->data[0] != 0xff || frame->data[1] != 0xd8) {
         throw std::runtime_error("Camera topic did not contain JPEG");

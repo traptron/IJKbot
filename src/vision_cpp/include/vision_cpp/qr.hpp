@@ -9,14 +9,19 @@ struct Detection {
   std::string text;
   std::vector<cv::Point> corners;
   cv::Mat image;
+  std::string method;
 };
 class QrDecoder {
 public:
-  std::optional<Detection> decode(const Bytes & jpeg);
+  // Exhaustive for a triggered photo; streaming rotates costly retries across fresh frames.
+  std::optional<Detection> decode(const Bytes & jpeg, bool exhaustive = true);
   Bytes annotate(const Detection & detection);
 private:
   cv::wechat_qrcode::WeChatQRCode wechat_;
   cv::QRCodeDetector fallback_;
+  unsigned retry_ = 0;
+  unsigned search_frame_ = 0;
+  int preferred_ = 0;
 };
 class Confirmation {
 public:

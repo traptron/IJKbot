@@ -7,6 +7,8 @@
 #include <cstring>
 #include <fcntl.h>
 #include <linux/videodev2.h>
+#include <linux/v4l2-subdev.h>
+#include <linux/media-bus-format.h>
 #include <poll.h>
 #include <spawn.h>
 #include <stdexcept>
@@ -49,7 +51,7 @@ bool ready(int fd, short events, const std::atomic_bool & stop) {
 }
 class V4l2 {
 public:
-  explicit V4l2(const Options & options) {
+  explicit V4l2(const Options & options) : height_(options.height) {
     try {
       fd_ = open(options.device.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
       if (fd_ < 0) {fail("Open camera");}
@@ -62,21 +64,26 @@ public:
       }
       v4l2_format format{};
       format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-      format.fmt.pix.width = kWidth;
-      format.fmt.pix.height = kHeight;
+      format.fmt.pix.width = options.width;
+      format.fmt.pix.height = options.height;
       format.fmt.pix.pixelformat = V4L2_PIX_FMT_SGBRG10P;
       format.fmt.pix.field = V4L2_FIELD_NONE;
-      checked(fd_, VIDIOC_S_FMT, &format, "S_FMT");
-      if (format.fmt.pix.width != kWidth || format.fmt.pix.height != kHeight ||
-        format.fmt.pix.pixelformat != V4L2_PIX_FMT_SGBRG10P ||
-        format.fmt.pix.bytesperline < 800)
-      {
-        throw std::runtime_error("Expected 640x480 packed GBRG10 camera format");
-      }
-      stride_ = format.fmt.pix.bytesperline;
       // These are the same sensor settings as the original Python publisher.
       const int subfd = open(options.subdevice.c_str(), O_RDWR | O_CLOEXEC);
       if (subfd < 0) {fail("Open camera controls");}
+      v4l2_subdev_format sensor{};
+      sensor.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+      sensor.pad = 0;
+      sensor.format.width = options.width;
+      sensor.format.height = options.height;
+      sensor.format.code = MEDIA_BUS_FMT_SGBRG10_1X10;
+      const bool format_ok = control(subfd, VIDIOC_SUBDEV_S_FMT, &sensor) == 0;
+      if (!format_ok || sensor.format.width != static_cast<unsigned>(options.width) ||
+        sensor.format.height != static_cast<unsigned>(options.height))
+      {
+        close(subfd);
+        throw std::runtime_error("Sensor rejected requested capture resolution");
+      }
       v4l2_control exposure{V4L2_CID_EXPOSURE, options.exposure};
       v4l2_control gain{V4L2_CID_ANALOGUE_GAIN, options.gain};
       const bool controls_ok = control(subfd, VIDIOC_S_CTRL, &exposure) == 0 &&
@@ -84,6 +91,15 @@ public:
       const int saved_errno = errno;
       close(subfd);
       if (!controls_ok) {errno = saved_errno; fail("Set camera exposure/gain");}
+      checked(fd_, VIDIOC_S_FMT, &format, "S_FMT");
+      if (format.fmt.pix.width != static_cast<unsigned>(options.width) ||
+        format.fmt.pix.height != static_cast<unsigned>(options.height) ||
+        format.fmt.pix.pixelformat != V4L2_PIX_FMT_SGBRG10P ||
+        format.fmt.pix.bytesperline < static_cast<unsigned>(options.width * 5 / 4))
+      {
+        throw std::runtime_error("Capture resolution/packed GBRG10 format mismatch");
+      }
+      stride_ = format.fmt.pix.bytesperline;
       v4l2_requestbuffers request{};
       request.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
       request.memory = V4L2_MEMORY_MMAP;
@@ -128,9 +144,9 @@ public:
     }
     bool found = false;
     for (auto it = completed.rbegin(); it != completed.rend(); ++it) {
-      if (!(it->flags & V4L2_BUF_FLAG_ERROR) && it->bytesused >= stride_ * kHeight) {
+      if (!(it->flags & V4L2_BUF_FLAG_ERROR) && it->bytesused >= stride_ * height_) {
         const auto * data = static_cast<const uint8_t *>(buffers_[it->index].address);
-        raw.assign(data, data + stride_ * kHeight);
+        raw.assign(data, data + stride_ * height_);
         found = true;
         break;
       }
@@ -160,11 +176,15 @@ private:
   int fd_ = -1;
   bool streaming_ = false;
   size_t stride_ = 800;
+  int height_;
   std::vector<Mapping> buffers_;
 };
 }  // namespace
 
 void Options::validate() const {
+  if (width < 64 || width > 2592 || width % 4 || height < 64 || height > 1944 || height % 2) {
+    throw std::invalid_argument("Capture width must be 64..2592, multiple of 4; height 64..1944, even");
+  }
   if (fps < 1 || fps > 15 || quality < 1 || quality > 100) {
     throw std::invalid_argument("fps must be 1..15; jpeg_quality must be 1..100");
   }
@@ -179,10 +199,14 @@ void Options::validate() const {
   {throw std::invalid_argument("Invalid camera_name");}
 }
 
-Encoder::Encoder(int quality) : quality_(quality), bayer_(kHeight, kWidth, CV_8U),
+Encoder::Encoder(int quality, int width, int height) : quality_(quality), width_(width), height_(height),
   lookup_(1, 256, CV_8UC3)
 {
   if (quality < 1 || quality > 100) {throw std::invalid_argument("Invalid JPEG quality");}
+  Options options;
+  options.width = width; options.height = height;
+  options.validate();
+  bayer_.create(height, width, CV_8U);
 }
 cv::Mat Encoder::correct_color(const cv::Mat & bgr) {
   const auto means = cv::mean(bgr);
@@ -218,14 +242,15 @@ cv::Mat Encoder::correct_color(const cv::Mat & bgr) {
   return balanced_;
 }
 Bytes Encoder::encode(const uint8_t * raw, size_t bytes, size_t stride) {
-  if (!raw || stride < 800 || bytes != stride * kHeight) {
-    throw std::invalid_argument("Incomplete packed 640x480 GBRG10 frame");
+  if (stride == 0) {stride = static_cast<size_t>(width_) * 5 / 4;}
+  if (!raw || stride < static_cast<size_t>(width_) * 5 / 4 || bytes != stride * height_) {
+    throw std::invalid_argument("Incomplete packed GBRG10 frame");
   }
-  for (int row = 0; row < kHeight; ++row) {
+  for (int row = 0; row < height_; ++row) {
     auto * target = bayer_.ptr<uint8_t>(row);
     const auto * source = raw + row * stride;
     // The legacy path uses the high eight bits of each RAW10 sample; preserve it.
-    for (int group = 0; group < kWidth / 4; ++group) {
+    for (int group = 0; group < width_ / 4; ++group) {
       std::memcpy(target + group * 4, source + group * 5, 4);
     }
   }
@@ -338,7 +363,8 @@ void capture(const Options & options, const std::atomic_bool & stop, const Sink 
     if (!options.mock && !options.camera_name.empty()) {
       command.push_back("camera-name=" + options.camera_name);
     }
-    const std::vector<std::string> tail{"!", "video/x-raw,width=640,height=480,framerate=" +
+    const std::vector<std::string> tail{"!", "video/x-raw,width=" + std::to_string(options.width) +
+      ",height=" + std::to_string(options.height) + ",framerate=" +
       std::to_string(options.fps) + "/1", "!", "videoconvert", "!", "video/x-raw,format=I420",
       "!", "jpegenc", "quality=" + std::to_string(options.quality), "!", "fdsink", "fd=1"};
     command.insert(command.end(), tail.begin(), tail.end());
@@ -347,7 +373,7 @@ void capture(const Options & options, const std::atomic_bool & stop, const Sink 
     return;
   }
   V4l2 camera(options);
-  Encoder encoder(options.quality);
+  Encoder encoder(options.quality, options.width, options.height);
   Bytes raw;
   auto last_frame = Clock::now();
   auto next = Clock::time_point::min();

@@ -20,6 +20,8 @@ struct Options {
   int quality = 85;
   int exposure = 2500;
   int gain = 320;
+  int width = kWidth;
+  int height = kHeight;
   std::string device = "/dev/video0";
   std::string subdevice = "/dev/v4l-subdev0";
   std::string backend = "v4l2_raw";
@@ -31,11 +33,11 @@ struct Options {
 // Preserve the legacy demosaic, white balance, gamma and saturation processing.
 class Encoder {
 public:
-  explicit Encoder(int quality = 85);
-  Bytes encode(const uint8_t * raw, size_t bytes, size_t stride = 800);
+  explicit Encoder(int quality = 85, int width = kWidth, int height = kHeight);
+  Bytes encode(const uint8_t * raw, size_t bytes, size_t stride = 0);
   cv::Mat correct_color(const cv::Mat & bgr);
 private:
-  int quality_;
+  int quality_, width_, height_;
   cv::Mat bayer_, bgr_, balanced_, gray_, hsv_, lookup_;
 };
 
