@@ -84,14 +84,33 @@ def test_rviz_default_view_config():
     assert any('QR' in name for name in display_names if name)
 
 
-def test_stop_all_offline():
+@pytest.mark.parametrize('filename', ['nav2_default_view.rviz', 'nav2_view.rviz'])
+def test_lidar_display_does_not_draw_large_squares_under_wheels(filename):
+    with open(os.path.join(REPO_DIR, 'src', 'nav2', 'rviz', filename)) as source:
+        displays = yaml.safe_load(source)['Visualization Manager']['Displays']
+    scans = [display for display in displays
+             if display.get('Class') == 'rviz_default_plugins/LaserScan']
+    assert scans
+    for display in scans:
+        assert display['Topic']['Value'] == '/scan'  # Use wheel-filtered endpoints.
+        assert 0 < display['Size (m)'] <= 0.005
+
+
+def test_stop_all_offline(tmp_path):
     """Verify stop_all.sh handles unreachable host gracefully without hanging."""
+    # Never let this test stop the operator's live ROS nodes or GUI processes.
+    for command in ('ssh', 'pkill', 'pgrep', 'ros2'):
+        stub = tmp_path / command
+        stub.write_text('#!/bin/sh\nexit 1\n')
+        stub.chmod(0o755)
+    environment = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ['PATH'])
     script_path = os.path.join(SCRIPTS_DIR, 'stop_all.sh')
     proc = subprocess.run(
         [script_path, '--host', '192.0.2.1', '--no-vel'],
         capture_output=True,
         text=True,
-        timeout=10
+        timeout=10,
+        env=environment,
     )
     assert proc.returncode == 0
     assert "ВСЕ СИСТЕМЫ УСПЕШНО ОСТАНОВЛЕНЫ" in proc.stdout

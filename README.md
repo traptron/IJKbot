@@ -275,6 +275,21 @@ source install/setup.bash
 ros2 launch bringup robot.launch.py lidar_serial_port:=/dev/serial/by-id/<rplidar-device>
 ```
 
+RViz показывает `/scan` точками размером 5 мм: прежние квадраты размером 5 см
+визуально накрывали колёса даже при корректном вырезании измерений. Проверка
+фильтра на роботе не публикует команд движения или тестовых сканов:
+
+```bash
+ROS_DOMAIN_ID=42 python3 scripts/check_wheel_filter.py --seconds 5
+```
+
+Скрипт сопоставляет `/scan_raw` и `/scan` по времени, переводит точки через
+реальный TF в `base_footprint` и проверяет границы из YAML. Успех: есть парные
+сканы, `wheel_remaining=0`, `outside_removed=0`. Если отражений от колёс нет,
+это не считается проверкой удаления на реальных попаданиях. Проверка
+2026-09-28: 48 парных сканов, 174 попадания в колёса удалены, 3501 точка
+снаружи сохранена. Геометрия маски, TF и параметры безопасности Nav2 не менялись.
+
 Для построения карты вместе с RPLIDAR, одометрией и TF запустите отдельный online SLAM режим вместо `system.launch.py` со статическим map server:
 ```bash
 ros2 launch bringup mapping.launch.py lidar_serial_port:=/dev/serial/by-id/<rplidar-device>
