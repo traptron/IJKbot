@@ -10,18 +10,38 @@
   <xacro:property name="chassis_length" value="0.220"/>
   <xacro:property name="chassis_width" value="0.160"/>
   <xacro:property name="chassis_height" value="0.080"/>
+  <xacro:property name="front_bumper_x" value="${-0.07 + chassis_length / 2.0}"/>
+  <xacro:property name="lidar_front_offset" value="0.050"/>
+  <xacro:property name="lidar_height" value="0.045"/>
+  <xacro:property name="rpi_camera_height" value="0.110"/>
   <xacro:property name="caster_offset_x" value="-0.140"/>
   <xacro:property name="caster_offset_y" value="0.060"/>
 
   <!-- Базовый фрейм проекции на пол -->
   <link name="base_footprint"/>
 
-  <!-- RPLIDAR A2M8 в центре переднего бампера -->
+  <!-- RPLIDAR A2M8: 50 мм перед передним бампером, плоскость сканирования 45 мм над полом -->
   <link name="lidar_link"/>
   <joint name="lidar_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="lidar_link"/>
-    <origin xyz="0.085 0 0.055" rpy="0 0 3.141592653589793"/>
+    <origin xyz="${front_bumper_x + lidar_front_offset} 0 ${lidar_height}" rpy="0 0 3.141592653589793"/>
+  </joint>
+
+  <!-- Объектив CSI-камеры RPi над лидаром: 110 мм над полом -->
+  <link name="rpi_camera_link"/>
+  <joint name="rpi_camera_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="rpi_camera_link"/>
+    <origin xyz="${front_bumper_x + lidar_front_offset} 0 ${rpi_camera_height}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Оптические оси ROS: Z вперёд, X вправо, Y вниз -->
+  <link name="camera_optical_frame"/>
+  <joint name="rpi_camera_optical_joint" type="fixed">
+    <parent link="rpi_camera_link"/>
+    <child link="camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
   </joint>
 
   <!-- Основной фрейм робота (центр ведущей оси) -->

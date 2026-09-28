@@ -53,6 +53,10 @@ TEST(Camera, FullResolutionPackedAndPaddedStride) {
   EXPECT_EQ(contiguous, encoder.encode(padded.data(), padded.size(), packed_stride + 16));
   const auto image = cv::imdecode(contiguous, cv::IMREAD_COLOR);
   EXPECT_EQ(image.cols, width); EXPECT_EQ(image.rows, height);
+  vision_cpp::Encoder monochrome(95, width, height, true);
+  const auto gray = cv::imdecode(monochrome.encode(raw.data(), raw.size()), cv::IMREAD_UNCHANGED);
+  EXPECT_EQ(gray.type(), CV_8UC1);
+  EXPECT_EQ(gray.cols, width); EXPECT_EQ(gray.rows, height);
 }
 TEST(Transport, ClosedPipeAndMissingChildFailCleanly) {
   EXPECT_THROW(vision_cpp::ChildPipe({"/ijkbot/nonexistent/camera"}), std::runtime_error);
@@ -166,4 +170,31 @@ TEST(Qr, TexturedFullResolutionSceneDoesNotProduceText) {
   ASSERT_TRUE(cv::imencode(".jpg", noise, jpeg, {cv::IMWRITE_JPEG_QUALITY, 95}));
   vision_cpp::QrDecoder decoder;
   for (int i = 0; i < 4; ++i) {EXPECT_FALSE(decoder.decode(jpeg, false));}
+}
+TEST(Qr, FullResolutionQrSurvivesLargerFinderLikeDecoy) {
+  cv::Mat frame(972, 1296, CV_8UC1, cv::Scalar(255));
+  cv::Mat code;
+  const std::string text = "patient behind a finder-shaped decoy";
+  cv::QRCodeEncoder::create()->encode(text, code);
+  cv::copyMakeBorder(code, code, 4, 4, 4, 4, cv::BORDER_CONSTANT, 255);
+  cv::resize(code, code, {400, 400}, 0, 0, cv::INTER_NEAREST);
+  code.copyTo(frame(cv::Rect(700, 250, 400, 400)));
+  for (const auto & origin : {cv::Point(70, 70), cv::Point(280, 70), cv::Point(70, 280)}) {
+    cv::rectangle(frame, cv::Rect(origin.x, origin.y, 80, 80), cv::Scalar(0), cv::FILLED);
+    cv::rectangle(frame, cv::Rect(origin.x + 12, origin.y + 12, 56, 56), cv::Scalar(255), cv::FILLED);
+    cv::rectangle(frame, cv::Rect(origin.x + 25, origin.y + 25, 30, 30), cv::Scalar(0), cv::FILLED);
+  }
+  vision_cpp::Bytes jpeg;
+  ASSERT_TRUE(cv::imencode(".jpg", frame, jpeg, {cv::IMWRITE_JPEG_QUALITY, 95}));
+  vision_cpp::QrDecoder decoder;
+  std::optional<vision_cpp::Detection> detection;
+  for (int attempt = 0; attempt < 6 && !detection; ++attempt) {
+    detection = decoder.decode(jpeg, false);
+  }
+  ASSERT_TRUE(detection);
+  EXPECT_EQ(detection->text, text);
+  for (const auto & corner : detection->corners) {
+    EXPECT_GE(corner.x, 690); EXPECT_LE(corner.x, 1110);
+    EXPECT_GE(corner.y, 240); EXPECT_LE(corner.y, 660);
+  }
 }

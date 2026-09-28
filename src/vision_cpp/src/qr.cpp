@@ -9,7 +9,8 @@ namespace {
 // Dense QR payloads can defeat QRCodeDetector's geometric grouping. Their three
 // nested finder squares are still visible; locate those with ordinary OpenCV
 // contours, retaining original pixels (including quiet-zone padding) for decoding.
-std::optional<cv::Rect> finder_region(const cv::Mat & gray) {
+std::vector<cv::Rect> finder_regions(const cv::Mat & gray) {
+  std::vector<cv::Rect> regions;
   for (bool adaptive : {false, true}) {
     cv::Mat binary;
     if (adaptive) {
@@ -56,13 +57,19 @@ std::optional<cv::Rect> finder_region(const cv::Mat & gray) {
           const std::vector<cv::Point2f> corners{a, b, c, b + c - a};
           const auto box = cv::boundingRect(corners);
           const int margin = std::max(12, static_cast<int>(largest * 1.2));
-          return cv::Rect(box.x - margin, box.y - margin, box.width + 2 * margin,
-            box.height + 2 * margin) & cv::Rect(0, 0, gray.cols, gray.rows);
+          const auto region = cv::Rect(box.x - margin, box.y - margin,
+            box.width + 2 * margin, box.height + 2 * margin) & cv::Rect(0, 0, gray.cols, gray.rows);
+          if (region.empty()) {continue;}
+          const bool duplicate = std::any_of(regions.begin(), regions.end(), [&region](const auto & existing) {
+              return (region & existing).area() > 0.8 * std::min(region.area(), existing.area());
+            });
+          if (!duplicate) {regions.push_back(region);}
+          if (regions.size() == 8) {return regions;}
         }
       }
     }
   }
-  return std::nullopt;
+  return regions;
 }
 }  // namespace
 std::optional<std::string> Confirmation::observe(const std::string & text) {
@@ -76,16 +83,15 @@ std::optional<Detection> QrDecoder::decode(const Bytes & jpeg, bool exhaustive) 
   if (jpeg.empty()) {return std::nullopt;}
   auto original = cv::imdecode(jpeg, cv::IMREAD_COLOR);
   if (original.empty()) {return std::nullopt;}
-  auto image = original;
-  cv::Point origin;
+  std::vector<cv::Rect> regions{cv::Rect(0, 0, original.cols, original.rows)};
   // Model-free WeChat spends tens of seconds scanning a large, noisy scene.
   // Locate a candidate cheaply, then crop ORIGINAL pixels for all text decoding.
   // The smaller image is used only for geometry, never to decode the payload.
   if (std::max(original.cols, original.rows) > 800) {
     cv::Mat gray_full, locator, candidate;
     cv::cvtColor(original, gray_full, cv::COLOR_BGR2GRAY);
-    auto region = finder_region(gray_full);
-    if (!region) {
+    regions = finder_regions(gray_full);
+    if (regions.empty()) {
       const double ratio = 640.0 / std::max(original.cols, original.rows);
       cv::resize(gray_full, locator, {}, ratio, ratio, cv::INTER_AREA);
       bool found = fallback_.detect(locator, candidate);
@@ -98,18 +104,10 @@ std::optional<Detection> QrDecoder::decode(const Bytes & jpeg, bool exhaustive) 
       if (!found) {return std::nullopt;}
       const auto box = cv::boundingRect(candidate);
       const int margin = std::max(12, std::max(box.width, box.height) / 8);
-      region = cv::Rect(box.x - margin, box.y - margin,
-        box.width + 2 * margin, box.height + 2 * margin) & cv::Rect(0, 0, original.cols, original.rows);
+      regions.push_back(cv::Rect(box.x - margin, box.y - margin,
+        box.width + 2 * margin, box.height + 2 * margin) & cv::Rect(0, 0, original.cols, original.rows));
     }
-    if (region->empty()) {return std::nullopt;}
-    origin = region->tl();
-    image = original(*region);
   }
-  std::string text;
-  cv::Mat points;
-  int selected_scale = 1;
-  cv::Mat gray;
-  cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
   const std::vector<std::string> methods{"gray", "otsu", "adaptive", "clahe", "nearest2", "nearest4"};
   std::vector<int> attempts{preferred_};
   if (preferred_ != 0) {attempts.push_back(0);}
@@ -121,69 +119,80 @@ std::optional<Detection> QrDecoder::decode(const Bytes & jpeg, bool exhaustive) 
     const int method = 1 + static_cast<int>(retry_++ % 5);
     if (method != preferred_) {attempts.push_back(method);}
   }
-  int selected_method = 0;
-  // Preserve WeChat first and the 2x/4x nearest-neighbour small-code fallbacks.
-  // Never downsample the recognition input. Binary variants supplement the original.
-  for (int method : attempts) {
-    int scale = method == 4 ? 2 : (method == 5 ? 4 : 1);
-    if (scale > 1 && image.total() * scale * scale > 6000000U) {continue;}
-    cv::Mat input;
-    if (method == 0) {input = gray;}
-    if (method == 1) {cv::threshold(gray, input, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);}
-    if (method == 2) {
-      cv::adaptiveThreshold(gray, input, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 7);
-    }
-    if (method == 3) {cv::createCLAHE(2.0, {8, 8})->apply(gray, input);}
-    if (scale > 1) {cv::resize(gray, input, {}, scale, scale, cv::INTER_NEAREST);}
-    for (int detector = 0; detector < 2 && text.empty(); ++detector) {
-      points.release();
-      try {
-        if (detector == 0) {
-          std::vector<cv::Mat> bounds;
-          auto texts = wechat_.detectAndDecode(input, bounds);
-          for (size_t i = 0; i < texts.size(); ++i) {
-            if (!texts[i].empty()) {
-              text = texts[i];
-              if (i < bounds.size()) {points = bounds[i];}
-              break;
+  for (const auto & region : regions) {
+    if (region.empty()) {continue;}
+    const auto image = original(region);
+    const auto origin = region.tl();
+    std::string text;
+    cv::Mat points;
+    int selected_scale = 1;
+    cv::Mat gray;
+    cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+    int selected_method = 0;
+    // Preserve WeChat first and the 2x/4x nearest-neighbour small-code fallbacks.
+    // Never downsample the recognition input. Binary variants supplement the original.
+    for (int method : attempts) {
+      int scale = method == 4 ? 2 : (method == 5 ? 4 : 1);
+      if (scale > 1 && image.total() * scale * scale > 6000000U) {continue;}
+      cv::Mat input;
+      if (method == 0) {input = gray;}
+      if (method == 1) {cv::threshold(gray, input, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);}
+      if (method == 2) {
+        cv::adaptiveThreshold(gray, input, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 7);
+      }
+      if (method == 3) {cv::createCLAHE(2.0, {8, 8})->apply(gray, input);}
+      if (scale > 1) {cv::resize(gray, input, {}, scale, scale, cv::INTER_NEAREST);}
+      for (int detector = 0; detector < 2 && text.empty(); ++detector) {
+        points.release();
+        try {
+          if (detector == 0) {
+            std::vector<cv::Mat> bounds;
+            auto texts = wechat_.detectAndDecode(input, bounds);
+            for (size_t i = 0; i < texts.size(); ++i) {
+              if (!texts[i].empty()) {
+                text = texts[i];
+                if (i < bounds.size()) {points = bounds[i];}
+                break;
+              }
             }
-          }
-        } else {text = fallback_.detectAndDecode(input, points);}
-      } catch (const cv::Exception &) {text.clear(); points.release();}
-      if (!text.empty()) {selected_scale = scale; selected_method = method; break;}
+          } else {text = fallback_.detectAndDecode(input, points);}
+        } catch (const cv::Exception &) {text.clear(); points.release();}
+        if (!text.empty()) {selected_scale = scale; selected_method = method; break;}
+      }
+      if (!text.empty()) {break;}
     }
-    if (!text.empty()) {break;}
-  }
-  if (text.empty()) {return std::nullopt;}
-  preferred_ = selected_method;
-  // Model-free WeChat can report the full input as its bounds. Refine the
-  // evidence polygon with OpenCV's geometric detector without decoding twice.
-  if (!points.empty()) {
-    cv::Mat flattened;
-    points.reshape(1, static_cast<int>(points.total() * points.channels() / 2)).convertTo(flattened, CV_32F);
-    const auto last_x = (image.cols * selected_scale) - 1;
-    const auto last_y = (image.rows * selected_scale) - 1;
-    if (flattened.rows == 4 && flattened.at<float>(0, 0) == 0 &&
-      flattened.at<float>(0, 1) == 0 && flattened.at<float>(2, 0) == last_x &&
-      flattened.at<float>(2, 1) == last_y)
-    {
-      cv::Mat refined;
-      try {
-        if (fallback_.detect(image, refined)) {points = refined; selected_scale = 1;}
-      } catch (const cv::Exception &) { /* Keep WeChat bounds if refinement fails. */ }
+    if (text.empty()) {continue;}
+    preferred_ = selected_method;
+    // Model-free WeChat can report the full input as its bounds. Refine the
+    // evidence polygon with OpenCV's geometric detector without decoding twice.
+    if (!points.empty()) {
+      cv::Mat flattened;
+      points.reshape(1, static_cast<int>(points.total() * points.channels() / 2)).convertTo(flattened, CV_32F);
+      const auto last_x = (image.cols * selected_scale) - 1;
+      const auto last_y = (image.rows * selected_scale) - 1;
+      if (flattened.rows == 4 && flattened.at<float>(0, 0) == 0 &&
+        flattened.at<float>(0, 1) == 0 && flattened.at<float>(2, 0) == last_x &&
+        flattened.at<float>(2, 1) == last_y)
+      {
+        cv::Mat refined;
+        try {
+          if (fallback_.detect(image, refined)) {points = refined; selected_scale = 1;}
+        } catch (const cv::Exception &) { /* Keep WeChat bounds if refinement fails. */ }
+      }
     }
-  }
-  Detection result{text, {}, original, methods[selected_method]};
-  if (!points.empty()) {
-    cv::Mat coordinates;
-    points.reshape(1, static_cast<int>(points.total() * points.channels() / 2)).convertTo(coordinates, CV_32F);
-    for (int i = 0; i < coordinates.rows; ++i) {
-      result.corners.emplace_back(
-        origin.x + static_cast<int>(std::nearbyint(coordinates.at<float>(i, 0) / selected_scale)),
-        origin.y + static_cast<int>(std::nearbyint(coordinates.at<float>(i, 1) / selected_scale)));
+    Detection result{text, {}, original, methods[selected_method]};
+    if (!points.empty()) {
+      cv::Mat coordinates;
+      points.reshape(1, static_cast<int>(points.total() * points.channels() / 2)).convertTo(coordinates, CV_32F);
+      for (int i = 0; i < coordinates.rows; ++i) {
+        result.corners.emplace_back(
+          origin.x + static_cast<int>(std::nearbyint(coordinates.at<float>(i, 0) / selected_scale)),
+          origin.y + static_cast<int>(std::nearbyint(coordinates.at<float>(i, 1) / selected_scale)));
+      }
     }
+    return result;
   }
-  return result;
+  return std::nullopt;
 }
 Bytes QrDecoder::annotate(const Detection & detection) {
   auto image = detection.image.clone();

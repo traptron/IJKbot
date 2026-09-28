@@ -20,6 +20,8 @@ public:
     options.width = declare_parameter("width", 640);
     options.height = declare_parameter("height", 480);
     options.mock = declare_parameter("mock_hardware", false);
+    options.monochrome = declare_parameter("monochrome", false);
+    monochrome_ = options.monochrome;
     options.backend = declare_parameter("backend", "v4l2_raw");
     options.device = declare_parameter("device", "/dev/video0");
     options.subdevice = declare_parameter("subdevice", "/dev/v4l-subdev0");
@@ -51,7 +53,8 @@ public:
           }
         });
     }
-    RCLCPP_INFO(get_logger(), "Native CSI: JPEG %dx%d Q=%d, at most %d fps -> %s",
+    RCLCPP_INFO(get_logger(), "Native CSI: %s JPEG %dx%d Q=%d, at most %d fps -> %s",
+      monochrome_ ? "monochrome" : "color",
       options.width, options.height, options.quality, options.fps,
       qr_publisher_ ? qr_topic.c_str() : topic.c_str());
     if (qr_publisher_) {
@@ -105,11 +108,13 @@ private:
       }
       next = vision_cpp::Clock::now() + std::chrono::nanoseconds(1000000000 / preview_fps_);
       try {
-        auto full = cv::imdecode(source->data, cv::IMREAD_COLOR);
+        auto full = cv::imdecode(source->data,
+          monochrome_ ? cv::IMREAD_GRAYSCALE : cv::IMREAD_COLOR);
         if (full.empty()) {continue;}
         // Preview alone is resized. Recognition receives the untouched full-resolution JPEG.
         const double scale = std::min(640.0 / full.cols, 480.0 / full.rows);
-        cv::Mat reduced, canvas(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+        cv::Mat reduced, canvas(480, 640, monochrome_ ? CV_8UC1 : CV_8UC3,
+          cv::Scalar(0, 0, 0));
         cv::resize(full, reduced, {}, scale, scale, cv::INTER_AREA);
         reduced.copyTo(canvas(cv::Rect((640 - reduced.cols) / 2, (480 - reduced.rows) / 2,
           reduced.cols, reduced.rows)));
@@ -131,6 +136,7 @@ private:
   std::condition_variable preview_wake_;
   sensor_msgs::msg::CompressedImage::ConstSharedPtr preview_pending_;
   int preview_fps_, preview_quality_;
+  bool monochrome_ = false;
   std::string frame_id_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr publisher_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr qr_publisher_;

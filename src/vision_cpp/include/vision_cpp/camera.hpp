@@ -27,17 +27,20 @@ struct Options {
   std::string backend = "v4l2_raw";
   std::string camera_name;
   bool mock = false;
+  bool monochrome = false;
   void validate() const;
 };
 
 // Preserve the legacy demosaic, white balance, gamma and saturation processing.
 class Encoder {
 public:
-  explicit Encoder(int quality = 85, int width = kWidth, int height = kHeight);
+  explicit Encoder(int quality = 85, int width = kWidth, int height = kHeight,
+    bool monochrome = false);
   Bytes encode(const uint8_t * raw, size_t bytes, size_t stride = 0);
   cv::Mat correct_color(const cv::Mat & bgr);
 private:
   int quality_, width_, height_;
+  bool monochrome_;
   cv::Mat bayer_, bgr_, balanced_, gray_, hsv_, lookup_;
 };
 

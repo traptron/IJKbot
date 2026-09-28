@@ -80,13 +80,16 @@ public:
         if (state_ == state) {return;}
         state_ = state;
         ++epoch_;
-        if (!allowed()) {confirmation_.reset(); last_stamp_.reset(); pending_.reset(); forced_ = false;}
+        if (!allowed()) {
+          confirmation_.reset(); last_success_ = {}; last_stamp_.reset();
+          pending_.reset(); forced_ = false;
+        }
       });
     timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] {
         std::lock_guard<std::mutex> guard(mutex_);
         if (completed_) {return;}
         if (last_received_ != Steady::time_point{} && Steady::now() - last_received_ > confirmation_timeout_) {
-          confirmation_.reset(); last_stamp_.reset();
+          confirmation_.reset(); last_success_ = {}; last_stamp_.reset();
           ++epoch_;  // Reject a decode still running after capture has gone stale.
           std_msgs::msg::Bool message;
           message.data = false;
@@ -152,7 +155,7 @@ private:
         if (!force && stamp != std::make_pair(0, 0U) && last_stamp_ == stamp) {continue;}
         if (last_frame_ == Steady::time_point{} || received - last_frame_ > confirmation_timeout_ ||
           (last_publication_ != Steady::time_point{} && received - last_publication_ >= std::chrono::seconds(1)))
-        {confirmation_.reset(); last_publication_ = {};}
+        {confirmation_.reset(); last_success_ = {}; last_publication_ = {};}
         last_stamp_ = stamp;
         last_frame_ = received;
       }
@@ -180,7 +183,15 @@ private:
       std_msgs::msg::Bool found;
       found.data = detection.has_value();
       detected_pub_->publish(found);
-      auto confirmed = confirmation_.observe(detection ? detection->text : "");
+      if (!detection) {continue;}
+      // Intermittent misses must not erase genuine reads from distinct frames.
+      // Expire the candidate if successful reads are too far apart.
+      const auto observed_at = Steady::now();
+      if (last_success_ != Steady::time_point{} &&
+        observed_at - last_success_ > confirmation_timeout_)
+      {confirmation_.reset();}
+      last_success_ = observed_at;
+      auto confirmed = confirmation_.observe(detection->text);
       if (force && detection) {confirmed = detection->text;}
       if (!confirmed) {continue;}
       std_msgs::msg::String status;
@@ -216,7 +227,7 @@ private:
   std::condition_variable wake_;
   std::thread worker_;
   Image::ConstSharedPtr latest_, pending_;
-  Steady::time_point last_frame_{}, last_publication_{}, pending_time_{};
+  Steady::time_point last_frame_{}, last_publication_{}, last_success_{}, pending_time_{};
   Steady::time_point last_received_{};
   Steady::duration decode_period_{}, confirmation_timeout_{};
   double decode_duty_cycle_;

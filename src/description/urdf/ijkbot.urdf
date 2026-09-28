@@ -6,12 +6,26 @@
 <robot name="ijkbot">
   <!-- Базовый фрейм проекции на пол -->
   <link name="base_footprint"/>
-  <!-- Лидар по центру переднего бампера: 45 мм выступа и 55 мм над полом -->
+  <!-- RPLIDAR A2M8: 50 мм перед передним бампером, плоскость сканирования 45 мм над полом -->
   <link name="lidar_link"/>
   <joint name="lidar_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="lidar_link"/>
-    <origin rpy="0 0 3.141592653589793" xyz="0.08499999999999999 0 0.055"/>
+    <origin rpy="0 0 3.141592653589793" xyz="0.09 0 0.045"/>
+  </joint>
+  <!-- Объектив CSI-камеры RPi над лидаром: 110 мм над полом -->
+  <link name="rpi_camera_link"/>
+  <joint name="rpi_camera_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="rpi_camera_link"/>
+    <origin rpy="0 0 0" xyz="0.09 0 0.11"/>
+  </joint>
+  <!-- Оптические оси ROS: Z вперёд, X вправо, Y вниз -->
+  <link name="camera_optical_frame"/>
+  <joint name="rpi_camera_optical_joint" type="fixed">
+    <parent link="rpi_camera_link"/>
+    <child link="camera_optical_frame"/>
+    <origin rpy="-1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0"/>
   </joint>
   <!-- Основной фрейм робота (центр ведущей оси) -->
   <joint name="base_footprint_to_base_link" type="fixed">

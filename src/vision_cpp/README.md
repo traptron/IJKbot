@@ -10,7 +10,9 @@ See [the operator guide](../vision/README.md) for build/run commands.
 The native standalone launch now defaults to a real **1296×972** sensor mode,
 JPEG quality 95 and up to 6 capture FPS. This is not an enlarged VGA image.
 V4L2 configures both the sensor and capture device and rejects a mismatched
-resolution. The general camera executable retains its legacy 640×480 defaults.
+resolution. This launch encodes the full QR stream and preview as grayscale
+JPEG, avoiding the CSI sensor's colour cast in the displayed image. The general
+camera executable retains its legacy 640×480 colour defaults.
 
 ```bash
 # On the robot (ROS_DOMAIN_ID=42), no motor launch:
@@ -38,7 +40,9 @@ original capture or colour evidence. See the
 [OpenCV thresholding documentation](https://docs.opencv.org/4.6.0/d7/d4d/tutorial_py_thresholding.html).
 
 Before high-resolution decoding, OpenCV contours locate the three nested finder
-squares. A geometric QR locator is used as a fallback, with periodic native-size
+squares. Up to eight distinct candidate regions are tried, so a larger
+finder-like shape elsewhere in the scene does not hide the real QR. A geometric
+QR locator is used as a fallback, with periodic native-size
 searches for small patterns. A reduced image may be used for **location only**;
 the candidate is cropped from the original image with quiet-zone padding and
 all payload decoding operates on those original pixels. Evidence coordinates
@@ -53,9 +57,10 @@ retained; newer frames replace the pending one. Actual recognition FPS depends
 on scene complexity. `decode_duty_cycle:=0.7` adds a proportional cooldown after
 expensive attempts so the worker yields CPU even when decoding is slower than
 the target period. This is a scheduling target, not a hard CPU quota; photo
-triggers bypass the cooldown. `confirmation_timeout_sec:=5.0` allows slow dense-code
-observations to accumulate without the previous one-second reset. Confirmation
-still requires three distinct frame timestamps; lost capture or a disallowed
+triggers bypass the cooldown. `confirmation_timeout_sec:=15.0` allows slow dense-code
+observations to accumulate without the previous one-second reset. An
+intervening undecodable frame does not erase successful readings; confirmation
+still requires three distinct frame timestamps. Lost capture or a disallowed
 mission state resets it. Status, detected, evidence, snapshot triggers, disk
 deduplication, state filtering and one-shot completion retain their contracts.
 
@@ -65,8 +70,9 @@ For the previous sensor resolution use `width:=640 height:=480 fps:=10
 jpeg_quality:=85`. The `vision` compatibility launch still has its legacy VGA
 defaults. `csi_jpeg_stream` also accepts `--width` and `--height`.
 
-Validation includes a 1158-byte UTF-8 QR (including Cyrillic), even lighting and
-a simulated shadow, unchanged full-resolution evidence, padded RAW10 at both
+Validation includes a 1158-byte UTF-8 QR (including Cyrillic), even lighting,
+a simulated shadow and a larger finder-like decoy, unchanged full-resolution
+evidence, padded RAW10 at both
 resolutions, and ROS tests for the split streams, slow confirmations, snapshots,
 state gating, duplicate timestamps, retained results and stopping both streams.
 Synthetic fixtures do not establish readability of a particular printed code:

@@ -20,9 +20,11 @@ int main(int argc, char ** argv) {
       const std::string argument = argv[i];
       if (argument == "--raw-stdin") {stdin_raw = true;}
       else if (argument == "--mock") {options.mock = true;}
+      else if (argument == "--monochrome") {options.monochrome = true;}
       else if (argument == "--help") {
         std::cerr << "csi_jpeg_stream [--fps 10] [--quality 85] [--device /dev/video0] "
-          "[--width 640] [--height 480] [--exposure 2500] [--gain 320] [--mock] [--raw-stdin]\n";
+          "[--width 640] [--height 480] [--exposure 2500] [--gain 320] "
+          "[--mock] [--monochrome] [--raw-stdin]\n";
         return 0;
       } else {
         if (i + 1 >= argc) {throw std::invalid_argument("Missing option value");}
@@ -47,7 +49,8 @@ int main(int argc, char ** argv) {
       };
     if (stdin_raw) {
       // Deterministic offline conversion for regression tests; no camera required.
-      vision_cpp::Encoder encoder(options.quality, options.width, options.height);
+      vision_cpp::Encoder encoder(options.quality, options.width, options.height,
+        options.monochrome);
       vision_cpp::Bytes raw(static_cast<size_t>(options.width) * options.height * 5 / 4);
       while (!stopped.load()) {
         std::cin.read(reinterpret_cast<char *>(raw.data()), raw.size());

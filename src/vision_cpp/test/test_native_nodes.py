@@ -138,7 +138,15 @@ def test_native_reader_and_mock_camera():
         for stamp in (2, 3):
             frame.header.stamp.sec = stamp
             image_pub.publish(frame)
-            spin()
+            spin(0.5)
+            if stamp == 2:
+                # A failed intervening frame must not erase a valid QR read.
+                ok, empty = cv2.imencode('.jpg', np.full((400, 400), 255, np.uint8))
+                assert ok
+                missed = CompressedImage(format='jpeg', data=empty.tobytes())
+                missed.header.stamp.sec = 20
+                image_pub.publish(missed)
+                spin(0.5)
         wait_for(lambda: texts and evidence)
         assert texts == ['IJKbot native integration']
         assert detected[-1]
@@ -204,6 +212,7 @@ def test_one_shot_result_is_retained_and_camera_stops():
             '-p', 'mock_hardware:=true', '-p', 'image_topic:=/test/once/camera',
             '-p', 'stop_on_qr:=true', '-p', 'complete_topic:=/test/once/complete',
             '-p', 'width:=1296', '-p', 'height:=972',
+            '-p', 'monochrome:=true',
             '-p', 'qr_image_topic:=/test/once/full', '-p', 'preview_fps:=4',
         ])
         processes.append(camera)
@@ -224,6 +233,10 @@ def test_one_shot_result_is_retained_and_camera_stops():
         preview = cv2.imdecode(np.frombuffer(bytes(frames[-1].data), np.uint8), cv2.IMREAD_COLOR)
         assert full.shape == (972, 1296, 3)
         assert preview.shape == (480, 640, 3)
+        assert cv2.imdecode(np.frombuffer(bytes(full_frames[-1].data), np.uint8),
+                            cv2.IMREAD_UNCHANGED).ndim == 2
+        assert cv2.imdecode(np.frombuffer(bytes(frames[-1].data), np.uint8),
+                            cv2.IMREAD_UNCHANGED).ndim == 2
         qr = cv2.QRCodeEncoder_create().encode('single session result')
         qr = cv2.copyMakeBorder(qr, 4, 4, 4, 4, cv2.BORDER_CONSTANT, value=255)
         qr = cv2.resize(qr, (400, 400), interpolation=cv2.INTER_NEAREST)

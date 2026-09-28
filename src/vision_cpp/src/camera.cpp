@@ -199,7 +199,8 @@ void Options::validate() const {
   {throw std::invalid_argument("Invalid camera_name");}
 }
 
-Encoder::Encoder(int quality, int width, int height) : quality_(quality), width_(width), height_(height),
+Encoder::Encoder(int quality, int width, int height, bool monochrome) :
+  quality_(quality), width_(width), height_(height), monochrome_(monochrome),
   lookup_(1, 256, CV_8UC3)
 {
   if (quality < 1 || quality > 100) {throw std::invalid_argument("Invalid JPEG quality");}
@@ -256,8 +257,13 @@ Bytes Encoder::encode(const uint8_t * raw, size_t bytes, size_t stride) {
   }
   cv::cvtColor(bayer_, bgr_, cv::COLOR_BayerGBRG2BGR);
   Bytes jpeg;
+  cv::Mat image;
+  if (monochrome_) {
+    cv::cvtColor(bgr_, gray_, cv::COLOR_BGR2GRAY);
+    image = gray_;
+  } else {image = correct_color(bgr_);}
   // Huffman optimisation shrinks the stream without changing decoded pixels.
-  if (!cv::imencode(".jpg", correct_color(bgr_), jpeg,
+  if (!cv::imencode(".jpg", image, jpeg,
     {cv::IMWRITE_JPEG_QUALITY, quality_, cv::IMWRITE_JPEG_OPTIMIZE, 1}))
   {
     throw std::runtime_error("Camera JPEG encoding failed");
@@ -365,7 +371,8 @@ void capture(const Options & options, const std::atomic_bool & stop, const Sink 
     }
     const std::vector<std::string> tail{"!", "video/x-raw,width=" + std::to_string(options.width) +
       ",height=" + std::to_string(options.height) + ",framerate=" +
-      std::to_string(options.fps) + "/1", "!", "videoconvert", "!", "video/x-raw,format=I420",
+      std::to_string(options.fps) + "/1", "!", "videoconvert", "!",
+      options.monochrome ? "video/x-raw,format=GRAY8" : "video/x-raw,format=I420",
       "!", "jpegenc", "quality=" + std::to_string(options.quality), "!", "fdsink", "fd=1"};
     command.insert(command.end(), tail.begin(), tail.end());
     ChildPipe child(command);
@@ -373,7 +380,7 @@ void capture(const Options & options, const std::atomic_bool & stop, const Sink 
     return;
   }
   V4l2 camera(options);
-  Encoder encoder(options.quality, options.width, options.height);
+  Encoder encoder(options.quality, options.width, options.height, options.monochrome);
   Bytes raw;
   auto last_frame = Clock::now();
   auto next = Clock::time_point::min();

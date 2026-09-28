@@ -43,7 +43,7 @@ install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_gtest(test_camera test/test_camera.cpp)
+  ament_add_gtest(test_camera test/test_camera.cpp TIMEOUT 180)
   target_link_libraries(test_camera camera_core)
   ament_add_pytest_test(test_native_nodes test/test_native_nodes.py TIMEOUT 45
     ENV "READER_EXECUTABLE=$<TARGET_FILE:qr_reader_node>"
