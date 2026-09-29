@@ -56,6 +56,39 @@ class DummyLLMClient:
 
 
 class TestMissionStateMachine(unittest.TestCase):
+    def test_real_navigation_waits_for_fresh_odometry(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from brain.mission_sm import MissionROSNode
+
+        self.sm.mock_mode = False
+        self.sm.set_task_description("Пострадавший у здания Стакан")
+        send_goal = Mock()
+        check = Mock(return_value=False)
+        self.sm.ros_node = SimpleNamespace(has_fresh_odometry=check, send_nav_goal=send_goal)
+        state_before = self.sm.state
+        self.sm.start_mission()
+        self.assertEqual(self.sm.state, state_before)
+        self.assertFalse(self.sm.publish_nav2_goal())
+        send_goal.assert_not_called()
+
+        wrapper = SimpleNamespace(last_odom_received_at=None)
+        self.assertFalse(MissionROSNode.has_fresh_odometry(wrapper))
+        wrapper.last_odom_received_at = time.monotonic()
+        self.assertTrue(MissionROSNode.has_fresh_odometry(wrapper))
+        wrapper.last_odom_received_at -= 1.0
+        self.assertFalse(MissionROSNode.has_fresh_odometry(wrapper))
+
+        direct = SimpleNamespace(sm=self.sm, has_fresh_odometry=Mock(return_value=False),
+                                 cancel_nav_goal=Mock())
+        MissionROSNode.send_nav_goal(direct, 1.0, 2.0, 0.0)
+        direct.cancel_nav_goal.assert_not_called()
+
+        check.return_value = True
+        self.sm.start_mission()
+        self.assertEqual(self.sm.state, MissionState.NAVIGATING_TO_LANDMARK)
+        send_goal.assert_called_once()
+
     def test_real_search_requires_detection(self):
         sm = MissionStateMachine(llm_client=DummyLLMClient(), mock_mode=False)
         sm.state = MissionState.SEARCHING_VICTIM

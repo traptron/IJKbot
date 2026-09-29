@@ -673,6 +673,8 @@ class MissionStateMachine:
             if not self.current_waypoint:
                 self._log("WARN", "Целевая путевая точка еще не определена. Сначала выполните анализ задания LLM.")
                 return False
+            if not self._navigation_odometry_ready():
+                return False
 
             self._publish_goal_pose(self.current_waypoint)
             yaw_deg = int(math.degrees(self.current_waypoint.yaw)) % 360
@@ -684,9 +686,19 @@ class MissionStateMachine:
             )
             return True
 
+    def _navigation_odometry_ready(self) -> bool:
+        """Не отправлять реальные цели Nav2 по устаревшей позе робота."""
+        check = getattr(self.ros_node, "has_fresh_odometry", None)
+        if not self.mock_mode and callable(check) and not check():
+            self._log("ERROR", "Нет свежей одометрии /odom: цель Nav2 не отправлена")
+            return False
+        return True
+
     def start_mission(self) -> None:
         """Старт выполнения миссии по кнопке судей/оператора."""
         with self.lock:
+            if not self._navigation_odometry_ready():
+                return
             if self.state not in [MissionState.READY_TO_START, MissionState.PREPARATION]:
                 self._log("WARN", f"Повторный старт миссии из состояния {self.state}: сброс и перезапуск...")
                 self._cancel_nav_goal()
@@ -1229,6 +1241,7 @@ class MissionROSNode:
 
         self._nav_goal_seq: int = 0
         self._nav_goal_pending: bool = False
+        self.last_odom_received_at: Optional[float] = None
 
         if ROS2_AVAILABLE:
             try:
@@ -1277,6 +1290,11 @@ class MissionROSNode:
             except Exception as e:
                 print(f"[ROS2] Ошибка запуска ROS 2 ноды: {e}")
 
+    def has_fresh_odometry(self, max_age: float = 0.5) -> bool:
+        """Проверить, что колёсная одометрия поступает в реальном времени."""
+        received_at = self.last_odom_received_at
+        return received_at is not None and time.monotonic() - received_at <= max_age
+
     def update_pose_from_tf(self) -> bool:
         """Определение позы робота на карте через TF2 lookup_transform('map', 'base_footprint')."""
         if not ROS2_AVAILABLE or not self.node or self.tf_buffer is None:
@@ -1322,6 +1340,7 @@ class MissionROSNode:
         with self.sm.lock:
             if self.sm.mock_mode:
                 return
+        self.last_odom_received_at = time.monotonic()
 
         # Попытка получить координаты из TF2 map -> base_footprint
         if self.update_pose_from_tf():
@@ -1435,6 +1454,10 @@ class MissionROSNode:
 
     def send_nav_goal(self, x: float, y: float, yaw: float) -> None:
         """Отправка цели в Nav2 через ActionClient NavigateToPose или fallback в топик /goal_pose."""
+        check = getattr(self, "has_fresh_odometry", None)
+        if not self.sm.mock_mode and callable(check) and not check():
+            self.sm._log("ERROR", "Нет свежей одометрии /odom: цель Nav2 не отправлена")
+            return
         with self.sm.lock:
             self.cancel_nav_goal()
             self.goal_status = None
