@@ -2,7 +2,7 @@
 # Native JPEG-only SSH bridge and standalone QR reader; does not start motors.
 # Source ROS 2 and install/setup.bash before running this script.
 set -euo pipefail
-PI_TARGET="${1:-${PI_USER:-otmorozki}@${PI_HOST:-172.22.35.154}}"
+PI_TARGET="${1:-${PI_USER:-otmorozki}@${PI_HOST:-10.34.243.154}}"
 SSH_SOCKET="${2:-/tmp/ijkbot-camera-new.sock}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 BRIDGE_PID=""

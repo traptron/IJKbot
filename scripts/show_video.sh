@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Preview existing Pi JPEGs; never opens the camera or starts motors.
 set -euo pipefail
-robot_host="${1:-otmorozki@10.18.233.154}"
+robot_host="${1:-otmorozki@10.34.243.154}"
 preview_fps="${2:-4}"
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ijkbot-preview-ssh.sock"

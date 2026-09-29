@@ -280,7 +280,7 @@ class SystemLauncher:
         self.is_running: bool = False
         self.log_lines: List[str] = []
         self.lock = threading.Lock()
-        self.ssh_host: str = os.environ.get("ROBOT_IP", os.environ.get("PI_HOST", "172.22.35.154"))
+        self.ssh_host: str = os.environ.get("ROBOT_IP", os.environ.get("PI_HOST", "10.34.243.154"))
         self.ssh_user: str = "otmorozki"
 
     def is_alive(self) -> bool:

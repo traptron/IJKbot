@@ -22,7 +22,7 @@ from vision.qr_decoder import annotate_qr_jpeg, decode_jpeg
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--host', default='otmorozki@172.22.35.154')
+    parser.add_argument('--host', default='otmorozki@10.34.243.154')
     parser.add_argument('--socket', default='/tmp/ijkbot-camera-new.sock')
     parser.add_argument('--remote-script',
                         default='/home/otmorozki/IJKbot/scripts/csi_jpeg_stream.py')
