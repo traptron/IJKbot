@@ -211,7 +211,7 @@ def test_one_shot_result_is_retained_and_camera_stops():
             os.environ['CAMERA_EXECUTABLE'], '--ros-args',
             '-p', 'mock_hardware:=true', '-p', 'image_topic:=/test/once/camera',
             '-p', 'stop_on_qr:=true', '-p', 'complete_topic:=/test/once/complete',
-            '-p', 'width:=1296', '-p', 'height:=972',
+            '-p', 'width:=1920', '-p', 'height:=1080',
             '-p', 'monochrome:=true',
             '-p', 'qr_image_topic:=/test/once/full', '-p', 'preview_fps:=4',
         ])
@@ -231,7 +231,7 @@ def test_one_shot_result_is_retained_and_camera_stops():
         assert full_frames
         full = cv2.imdecode(np.frombuffer(bytes(full_frames[-1].data), np.uint8), cv2.IMREAD_COLOR)
         preview = cv2.imdecode(np.frombuffer(bytes(frames[-1].data), np.uint8), cv2.IMREAD_COLOR)
-        assert full.shape == (972, 1296, 3)
+        assert full.shape == (1080, 1920, 3)
         assert preview.shape == (480, 640, 3)
         assert cv2.imdecode(np.frombuffer(bytes(full_frames[-1].data), np.uint8),
                             cv2.IMREAD_UNCHANGED).ndim == 2

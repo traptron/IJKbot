@@ -241,7 +241,7 @@ class TestMissionStateMachine(unittest.TestCase):
         Сквозной тест полного цикла миссии:
         1. Ввод задания и распознавание LLM
         2. Старт и движение к первой целевой ячейке
-        3. Круговой пошаговый осмотр (30° / 1.0с) и считывание QR-кода
+        3. Осмотр сектора 90° с остановкой 3.0с и считывание QR-кода
         4. Регламентное 5-секундное удержание в ячейке пострадавшего
         5. Автоматическая эвакуация в стартовую ячейку [0.4, 0.4]
         6. Успешное завершение миссии и сохранение протокола.
@@ -261,7 +261,9 @@ class TestMissionStateMachine(unittest.TestCase):
         self.sm.step(0.1)
         self.assertEqual(self.sm.state, MissionState.SEARCHING_VICTIM)
 
-        # 3. Круговой осмотр ячейки (12x30°). При обнаружении QR -> переход в WAIT_5_SECONDS
+        # 3. Осмотр сектора 90°. При обнаружении QR -> переход в WAIT_5_SECONDS
+        self.sm.spin_phase = "CHECK"
+        self.sm.robot_yaw = self.sm.scan_center_yaw
         self.sm.qr_code_data = "ПОСТРАДАВШИЙ #1\nСостояние: Средней тяжести"
         self.sm.step(0.1)
         self.assertEqual(self.sm.state, MissionState.WAIT_5_SECONDS)
@@ -302,33 +304,35 @@ class TestMissionStateMachine(unittest.TestCase):
         self.sm.step(0.1)
         self.assertEqual(self.sm.state, MissionState.SEARCHING_VICTIM)
 
-        # Завершение всех 12 шагов осмотра без QR
-        self.sm.spin_step = 11
+        # Завершение всех 4 направлений осмотра без QR
+        self.sm.spin_step = 3
+        self.sm.mock_mode = False
         self.sm.spin_phase = "CHECK"
         self.sm.qr_code_data = None
-        self.sm.step(0.1)
+        self.sm.step(1.1)
 
         # Робот должен перейти к следующей ячейке Cell 2
         self.assertEqual(self.sm.state, MissionState.NAVIGATING_TO_LANDMARK)
         self.assertEqual(self.sm.current_waypoint_idx, 1)
         self.assertEqual(self.sm.current_waypoint.name, "Cell 2")
 
-        # Прибытие во вторую ячейку и завершение 12 шагов без QR
+        # Прибытие во вторую ячейку и завершение 4 направлений без QR
         self.sm.robot_x = 2.0
         self.sm.robot_y = 1.2
         self.sm.step(0.1)
         self.assertEqual(self.sm.state, MissionState.SEARCHING_VICTIM)
-        self.sm.spin_step = 11
+        self.sm.spin_step = 3
+        self.sm.mock_mode = False
         self.sm.spin_phase = "CHECK"
         self.sm.qr_code_data = None
-        self.sm.step(0.1)
+        self.sm.step(1.1)
 
         # Все точки исчерпаны -> автоматический возврат домой
         self.assertEqual(self.sm.state, MissionState.RETURNING_HOME)
         self.assertEqual(self.sm.current_waypoint, START_WAYPOINT)
 
     def test_spin_and_scan_phases(self):
-        """Проверка фаз ROTATE (30°) -> PAUSE (1.0с) -> CHECK."""
+        """Первое направление сектора -> PAUSE (2.0с) -> CHECK."""
         self.sm.state = MissionState.SEARCHING_VICTIM
         self.sm.spin_step = 0
         self.sm.spin_phase = "ROTATE"
@@ -336,17 +340,103 @@ class TestMissionStateMachine(unittest.TestCase):
         self.sm.spin_start_yaw = 0.0
         self.sm.robot_yaw = 0.0
 
-        # Поворот на 30 градусов (0.50 рад)
-        self.sm.robot_yaw = 0.52
+        # Первое направление: -45° относительно биссектрисы.
+        self.sm.robot_yaw = -math.pi / 4
         self.sm.step(0.1)
         self.assertEqual(self.sm.spin_phase, "PAUSE")
         self.assertEqual(self.sm.spin_timer, 0.0)
 
-        # Пауза стабилизации 1.0 сек
-        self.sm.step(0.5)
+        # Пауза стабилизации 2.0 сек
+        self.sm.step(1.0)
         self.assertEqual(self.sm.spin_phase, "PAUSE")
-        self.sm.step(0.6)
+        self.sm.step(1.0)
         self.assertEqual(self.sm.spin_phase, "CHECK")
+
+    def test_scan_bisector_uses_actual_pose_and_landmark_centre(self):
+        self.sm.command_interpretation = CommandInterpretation(
+            target_landmark_id='yellow_building', search_strategy='scan_adjacent_cells',
+            reasoning='test', confidence=1.0, source='test', latency_sec=0.0)
+        self.sm.current_waypoint = Waypoint(0.4, 1.2, 2.0, (0, 1), 'view')
+        self.sm.robot_x, self.sm.robot_y = 0.5, 1.1
+        # Centre of the two yellow-building cells is (1.2, 2.4).
+        self.assertAlmostEqual(self.sm._landmark_bearing(), math.atan2(1.3, 0.7))
+        self.sm.robot_x, self.sm.robot_y = 2.0, 3.6
+        self.assertAlmostEqual(self.sm._landmark_bearing(), math.atan2(-1.2, -0.8))
+
+    def test_scan_four_views_stay_in_sector_across_pi_wrap(self):
+        from types import SimpleNamespace
+        for centre in (0.0, math.radians(170), math.radians(-170)):
+            with self.subTest(centre=centre):
+                sm = MissionStateMachine(llm_client=self.mock_llm, mock_mode=False)
+                sm.state = MissionState.SEARCHING_VICTIM
+                sm.current_waypoint = Waypoint(1.0, 1.0, centre, (1, 1), 'view')
+                sm.waypoints_queue = [sm.current_waypoint]
+                sm.scan_center_yaw = centre
+                sm.robot_yaw = sm._yaw_error(centre + math.pi, 0.0)
+                commands, photos, photo_times = [], [], []
+                elapsed = 0.0
+                def velocity(v, w):
+                    self.assertEqual(v, 0.0)
+                    self.assertLessEqual(abs(w), 0.4)
+                    commands.append(w)
+                sm.ros_node = SimpleNamespace(send_cmd_vel=velocity)
+                sm._trigger_photo_snapshot = lambda: (photos.append(sm.robot_yaw), photo_times.append(elapsed))
+                for _ in range(700):
+                    elapsed += 0.1
+                    sm._handle_spin_and_scan(0.1)
+                    if sm.state != MissionState.SEARCHING_VICTIM:
+                        break
+                    if commands:
+                        sm.robot_yaw = sm._yaw_error(sm.robot_yaw + commands[-1] * 0.1, 0.0)
+                self.assertEqual(sm.state, MissionState.RETURNING_HOME)
+                self.assertEqual(len(photos), 4)
+                for yaw, offset in zip(photos, sm.SCAN_OFFSETS):
+                    self.assertLessEqual(abs(sm._yaw_error(yaw, centre)), math.pi / 4)
+                    self.assertLess(abs(sm._yaw_error(yaw, centre + offset)), sm.SCAN_YAW_TOLERANCE)
+                self.assertTrue(all(b - a >= 3.0 for a, b in zip(photo_times, photo_times[1:])))
+
+    def test_scan_check_wait_is_doubled(self):
+        self.sm.mock_mode = False
+        self.sm.state = MissionState.SEARCHING_VICTIM
+        self.sm.spin_phase = 'CHECK'
+        self.sm.robot_yaw = 0.0
+        self.sm._handle_spin_and_scan(0.5)
+        self.assertEqual(self.sm.spin_phase, 'CHECK')
+        self.sm._handle_spin_and_scan(0.49)
+        self.assertEqual(self.sm.spin_step, 0)
+        self.sm._handle_spin_and_scan(0.02)
+        self.assertEqual(self.sm.spin_step, 1)
+        self.assertEqual(self.sm.spin_phase, 'ROTATE')
+
+    def test_scan_timeout_does_not_take_photo_without_alignment(self):
+        from unittest.mock import Mock
+        self.sm.mock_mode = False
+        self.sm.state = MissionState.SEARCHING_VICTIM
+        self.sm.robot_yaw = math.pi
+        photo = Mock()
+        self.sm._trigger_photo_snapshot = photo
+        self.sm._handle_spin_and_scan(1.6)
+        self.assertEqual(self.sm.spin_phase, 'ROTATE')
+        self.sm._handle_spin_and_scan(11.0)
+        self.assertEqual(self.sm.state, MissionState.PAUSED)
+        photo.assert_not_called()
+
+    def test_qr_is_rejected_while_turning_or_outside_landmark_sector(self):
+        from types import SimpleNamespace
+        from brain.mission_sm import MissionROSNode
+        self.sm.state = MissionState.SEARCHING_VICTIM
+        wrapper = SimpleNamespace(sm=self.sm)
+        self.sm.spin_phase = 'ROTATE'
+        MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='outside during turn'))
+        self.assertFalse(self.sm.qr_scanned)
+        self.sm.spin_phase = 'CHECK'
+        self.sm.robot_yaw = math.pi
+        MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='outside sector'))
+        self.assertIsNone(self.sm.qr_code_data)
+        self.sm.robot_yaw = 0.0
+        MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='valid sector'))
+        self.assertEqual(self.sm.state, MissionState.WAIT_5_SECONDS)
+        self.assertEqual(self.sm.qr_code_data, 'valid sector')
 
     def test_mission_watchdog_timeout(self):
         """Проверка сторожевого таймера 250 сек (возврат домой при остатке < 50 сек)."""

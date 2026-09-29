@@ -41,7 +41,7 @@ TEST(Camera, FullResolutionPackedAndPaddedStride) {
   vision_cpp::Options options;
   options.width = 1297;
   EXPECT_THROW(options.validate(), std::invalid_argument);
-  constexpr int width = 1296, height = 972, packed_stride = width * 5 / 4;
+  constexpr int width = 1920, height = 1080, packed_stride = width * 5 / 4;
   vision_cpp::Encoder encoder(95, width, height);
   vision_cpp::Bytes raw(packed_stride * height, 100);
   auto contiguous = encoder.encode(raw.data(), raw.size());
@@ -132,7 +132,7 @@ TEST(Qr, DenseUtf8PayloadAtFullResolution) {
   cv::resize(code, code, {side, side}, 0, 0, cv::INTER_NEAREST);
   for (int scene : {0, 1, 2}) {
     const bool shadow = scene == 1;
-    cv::Mat frame(972, 1296, CV_8UC1, cv::Scalar(240));
+    cv::Mat frame(1080, 1920, CV_8UC1, cv::Scalar(240));
     code.copyTo(frame(cv::Rect(180, 80, side, side)));
     if (shadow) {
       for (int y = 0; y < frame.rows; ++y) {
@@ -154,9 +154,9 @@ TEST(Qr, DenseUtf8PayloadAtFullResolution) {
     for (int attempt = 0; attempt < 6 && !detection; ++attempt) {detection = decoder.decode(jpeg, false);}
     ASSERT_TRUE(detection) << "scene=" << scene;
     EXPECT_EQ(detection->text, text);
-    EXPECT_EQ(detection->image.cols, 1296); EXPECT_EQ(detection->image.rows, 972);
+    EXPECT_EQ(detection->image.cols, 1920); EXPECT_EQ(detection->image.rows, 1080);
     const auto evidence = cv::imdecode(decoder.annotate(*detection), cv::IMREAD_COLOR);
-    EXPECT_EQ(evidence.cols, 1296); EXPECT_EQ(evidence.rows, 972);
+    EXPECT_EQ(evidence.cols, 1920); EXPECT_EQ(evidence.rows, 1080);
     std::cout << "Dense QR " << text.size() << " bytes, scene=" << scene << ", "
       << std::chrono::duration<double, std::milli>(vision_cpp::Clock::now() - started).count()
       << " ms, method=" << detection->method << '\n';

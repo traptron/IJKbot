@@ -7,12 +7,12 @@ See [the operator guide](../vision/README.md) for build/run commands.
 
 ## Dense QR capture and independent preview
 
-The native standalone launch now defaults to a real **1296×972** sensor mode,
+The native standalone launch now defaults to a real **1920×1080 (1080p)** sensor mode,
 JPEG quality 95 and up to 6 capture FPS. This is not an enlarged VGA image.
 V4L2 configures both the sensor and capture device and rejects a mismatched
 resolution. This launch encodes the full QR stream and preview as grayscale
 JPEG, avoiding the CSI sensor's colour cast in the displayed image. The general
-camera executable retains its legacy 640×480 colour defaults.
+camera executable also defaults to 1080p capture with an independent VGA preview.
 
 ```bash
 # On the robot (ROS_DOMAIN_ID=42), no motor launch:
@@ -67,13 +67,14 @@ deduplication, state filtering and one-shot completion retain their contracts.
 Other native launch controls: `width`, `height`, `fps`, `jpeg_quality`,
 `preview_fps`, `preview_quality`, `confirm_frames`, `qr_image_topic`.
 For the previous sensor resolution use `width:=640 height:=480 fps:=10
-jpeg_quality:=85`. The `vision` compatibility launch still has its legacy VGA
-defaults. `csi_jpeg_stream` also accepts `--width` and `--height`.
+jpeg_quality:=85`. The `vision` compatibility launch routes its default C++ implementation through
+the same 1080p pipeline. Explicit `implementation:=vision` selects the legacy
+Python VGA rollback. `csi_jpeg_stream` also accepts `--width` and `--height`.
 
 Validation includes a 1158-byte UTF-8 QR (including Cyrillic), even lighting,
 a simulated shadow and a larger finder-like decoy, unchanged full-resolution
 evidence, padded RAW10 at both
-resolutions, and ROS tests for the split streams, slow confirmations, snapshots,
+resolutions (including 1080p), and ROS tests for the split streams, slow confirmations, snapshots,
 state gating, duplicate timestamps, retained results and stopping both streams.
 Synthetic fixtures do not establish readability of a particular printed code:
 focus, motion and pixels per QR module still require a physical test. JPEG Q95

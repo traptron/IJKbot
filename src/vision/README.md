@@ -46,7 +46,9 @@ ros2 launch vision rpi_qr.launch.py
 Пакет C++ можно запускать без Python-пакета `vision`:
 `ros2 launch vision_cpp rpi_qr.launch.py`. Старые Python-ноды сохранены для
 сравнения и отката: `ros2 launch vision rpi_qr.launch.py implementation:=vision`.
-Аргументы `fps:=10 jpeg_quality:=85` управляют потоком и в обычном launch.
+По умолчанию C++ захватывает 1920×1080 (1080p), JPEG Q95, до 6 кадров/с.
+Аргументы `width`, `height`, `fps` и `jpeg_quality` позволяют изменить режим.
+Сенсор должен поддерживать запрошенное разрешение; увеличения VGA программно нет.
 
 Этот запуск не требует состояния миссии, не сохраняет фотографии на диск
 и не запускает моторы. Параллельный запуск RealSense с тем же топиком камеры
@@ -54,7 +56,8 @@ ros2 launch vision rpi_qr.launch.py
 
 Топики:
 
-- `/camera/color/image_raw/compressed` — JPEG `sensor_msgs/CompressedImage`.
+- `/camera/qr/image/compressed` — полный JPEG 1920×1080 для распознавания на Pi.
+- `/camera/color/image_raw/compressed` — JPEG-превью 640×480 для Wi-Fi.
 - `/victim_status` — подтверждённый исходный текст QR (`std_msgs/String`).
 - `/vision/qr/detected` — найден ли QR в обрабатываемом кадре.
 - `/vision/qr/image/compressed` — подтверждённый кадр с рамкой QR.
@@ -66,7 +69,8 @@ ros2 topic echo /victim_status
 Для нескольких камер передайте `camera_name:=...`, соответствующий имени
 libcamera. `confirm_frames:=3` задаёт число подтверждений. Параметр
 `enable_reader:=false` запускает только захват: существующий декодер на
-ноутбуке может получать этот же сжатый топик.
+ноутбуке может получать сжатое VGA-превью. Для распознавания в 1080p
+декодер запускается на Pi и подписывается на `/camera/qr/image/compressed`.
 
 Проверка без камеры:
 

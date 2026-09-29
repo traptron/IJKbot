@@ -11,7 +11,7 @@ def generate_launch_description():
     arguments = [DeclareLaunchArgument(name, default_value=value) for name, value in (
         ('fps', '6'), ('jpeg_quality', '95'), ('mock_hardware', 'false'),
         ('monochrome', 'true'),
-        ('width', '1296'), ('height', '972'), ('preview_fps', '4'), ('preview_quality', '85'),
+        ('width', '1920'), ('height', '1080'), ('preview_fps', '4'), ('preview_quality', '85'),
         ('qr_image_topic', '/camera/qr/image/compressed'), ('max_decode_fps', '3.0'),
         ('decode_duty_cycle', '0.7'),
         ('confirmation_timeout_sec', '15.0'),

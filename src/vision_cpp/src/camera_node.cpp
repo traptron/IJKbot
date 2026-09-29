@@ -13,12 +13,12 @@ class CameraNode : public rclcpp::Node {
 public:
   CameraNode() : Node("rpi_camera_node") {
     vision_cpp::Options options;
-    options.fps = declare_parameter("fps", 10);
-    options.quality = declare_parameter("jpeg_quality", 85);
+    options.fps = declare_parameter("fps", 6);
+    options.quality = declare_parameter("jpeg_quality", 95);
     options.exposure = declare_parameter("exposure", 2500);
     options.gain = declare_parameter("analogue_gain", 320);
-    options.width = declare_parameter("width", 640);
-    options.height = declare_parameter("height", 480);
+    options.width = declare_parameter("width", 1920);
+    options.height = declare_parameter("height", 1080);
     options.mock = declare_parameter("mock_hardware", false);
     options.monochrome = declare_parameter("monochrome", false);
     monochrome_ = options.monochrome;
@@ -31,7 +31,7 @@ public:
     const auto topic = declare_parameter("image_topic", "/camera/color/image_raw/compressed");
     publisher_ = create_publisher<sensor_msgs::msg::CompressedImage>(topic,
       rclcpp::SensorDataQoS().keep_last(1));
-    const auto qr_topic = declare_parameter("qr_image_topic", "");
+    const auto qr_topic = declare_parameter("qr_image_topic", "/camera/qr/image/compressed");
     preview_fps_ = declare_parameter("preview_fps", 4);
     preview_quality_ = declare_parameter("preview_quality", 85);
     if (preview_fps_ < 1 || preview_fps_ > 15 || preview_quality_ < 1 || preview_quality_ > 100) {
