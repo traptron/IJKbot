@@ -23,6 +23,7 @@ from brain.llm_client import (
     load_arena,
     validate_nav2_goal,
     default_nav2_goals,
+    get_target_waypoints,
     STATIC_TARGET_IDS,
 )
 
@@ -95,6 +96,28 @@ class TestCommandInterpretationModel(unittest.TestCase):
 class TestNavigationGoals(unittest.TestCase):
     def setUp(self):
         self.arena = load_arena()
+
+    def test_corner_inspection_cells(self):
+        """Точки поиска совпадают с заданными ячейками у углов ориентиров."""
+        expected_cells = {
+            "yellow_building": [(0, 1), (0, 4), (2, 4), (2, 1)],
+            "blue_building": [(2, 0), (4, 0), (4, 2), (2, 2)],
+            "river": [(2, 4), (2, 2), (4, 2)],
+            "parking": [(0, 1), (1, 0), (2, 0), (2, 1)],
+        }
+        cell_size = self.arena["cell_size_m"]
+        for landmark, cells in expected_cells.items():
+            with self.subTest(landmark=landmark):
+                goals = default_nav2_goals(landmark, self.arena)
+                self.assertEqual(len(goals), len(cells))
+                self.assertEqual(get_target_waypoints(landmark, self.arena), goals)
+                for goal, (col, row) in zip(goals, cells):
+                    self.assertAlmostEqual(goal["x"], (col + 0.5) * cell_size)
+                    self.assertAlmostEqual(goal["y"], (row + 0.5) * cell_size)
+                    self.assertNotIn([col, row], self.arena["blocked_cells"])
+                    self.assertEqual(validate_nav2_goal(goal, landmark, self.arena), goal)
+        self.assertEqual(default_nav2_goals("yellow_building_debris", self.arena),
+                         default_nav2_goals("parking", self.arena))
 
     def test_accepts_configured_approach_pose(self):
         goal = validate_nav2_goal(

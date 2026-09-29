@@ -417,6 +417,20 @@ class TestMissionStateMachine(unittest.TestCase):
         self.assertIn("yellow_building_debris", LANDMARK_WAYPOINTS)
         self.assertEqual(LANDMARK_WAYPOINTS["yellow_building_debris"].cell, (0, 1))
 
+    def test_static_waypoint_fallback_matches_first_inspection_goal(self):
+        """Запасная точка автомата совпадает с началом маршрута из карты."""
+        from brain.llm_client import default_nav2_goal, load_arena
+
+        arena = load_arena()
+        for landmark in ("yellow_building", "blue_building", "river", "parking", "yellow_building_debris"):
+            with self.subTest(landmark=landmark):
+                fallback = LANDMARK_WAYPOINTS[landmark]
+                goal = default_nav2_goal(landmark, arena)
+                self.assertAlmostEqual(fallback.x, goal["x"])
+                self.assertAlmostEqual(fallback.y, goal["y"])
+                self.assertAlmostEqual(fallback.yaw, goal["yaw"], places=5)
+                self.assertEqual(fallback.cell, (int(goal["x"] / 0.8), int(goal["y"] / 0.8)))
+
     def test_llm_tokens_captured(self):
         """Проверка фиксации сгенерированных токенов от LLM в конечном автомате."""
         self.sm.set_task_description("Пострадавший возле моста")

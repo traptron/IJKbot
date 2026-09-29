@@ -154,7 +154,7 @@ class LogEntry:
 ARENA_CELL_SIZE = 0.8  # метров
 ARENA_GRID_DIM = 5     # 5x5 ячеек
 
-# Статичные элементы арены (по регламенту: 0:0, 1:1, 1:2, 1:3, 3:2, 3:3, 3:4, 4:3)
+# Статичные элементы арены (по регламенту: 0:0, 1:1, 1:2, 1:3, 3:1, 3:3, 3:4, 4:3)
 STATIC_ARENA_CELLS: Dict[Tuple[int, int], Dict[str, Any]] = {
     (0, 0): {
         "title": "СТАРТ",
@@ -247,10 +247,10 @@ LANDMARK_WAYPOINTS: Dict[str, Waypoint] = {
     ),
     # Статичные элементы арены
     "blue_building": Waypoint(
-        x=2.0, y=1.2, yaw=0.0, cell=(2, 1), name="Синее здание"
+        x=2.0, y=0.4, yaw=math.pi / 4, cell=(2, 0), name="Синее здание"
     ),
     "yellow_building": Waypoint(
-        x=2.0, y=2.0, yaw=math.pi, cell=(2, 2), name="Жёлтое здание"
+        x=0.4, y=1.2, yaw=math.atan2(1.2, 0.8), cell=(0, 1), name="Жёлтое здание"
     ),
     "parking": Waypoint(
         x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Остановка / парковка"
@@ -259,7 +259,7 @@ LANDMARK_WAYPOINTS: Dict[str, Waypoint] = {
         x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Обломки жёлтого здания"
     ),
     "river": Waypoint(
-        x=2.0, y=2.8, yaw=0.0, cell=(2, 3), name="Река"
+        x=2.0, y=3.6, yaw=-math.pi / 4, cell=(2, 4), name="Река"
     ),
     "start": Waypoint(
         x=0.4, y=0.4, yaw=0.0, cell=(0, 0), name="Пункт сбора (Старт)"
@@ -1901,7 +1901,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-emerald-700 border border-emerald-400 inline-block"></span> 0:0 Старт</span>')
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-amber-800 border border-amber-400 inline-block"></span> 1:1 Остановка/Парковка/Обломки</span>')
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-yellow-800 border border-yellow-400 inline-block"></span> 1:2, 1:3 Жёлтое зд.</span>')
-                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-blue-900 border border-blue-400 inline-block"></span> 3:2 Синее зд.</span>')
+                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-blue-900 border border-blue-400 inline-block"></span> 3:1 Синее зд.</span>')
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-sky-900 border border-sky-400 inline-block"></span> 3:3 Река</span>')
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-zinc-700 border border-zinc-400 inline-block"></span> 3:4, 4:3 Мосты</span>')
 
