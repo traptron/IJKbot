@@ -32,13 +32,9 @@ LOG_DIR="${REPO_DIR}/log"
 mkdir -p "${LOG_DIR}"
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
-if [[ -z "${RMW_IMPLEMENTATION:-}" ]]; then
-    if [[ -f "/opt/ros/jazzy/lib/librmw_cyclonedds_cpp.so" ]]; then
-        export RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
-    else
-        export RMW_IMPLEMENTATION="rmw_fastrtps_cpp"
-    fi
-fi
+export RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
+PI_HOST="${PI_HOST:-${ROBOT_IP:-tokmachka.local}}"
+CYCLONE_CONFIG_FILE=""
 
 # Параметры по умолчанию
 LLM_HOST="${LLM_HOST:-http://localhost:11434}"
@@ -71,6 +67,7 @@ print_help() {
     echo "  LLM_HOST             Адрес сервиса Ollama (дефолт: http://localhost:11434)"
     echo "  LLM_MODEL            Имя модели Ollama (дефолт: qwen3.5:9b)"
     echo "  ROS_DOMAIN_ID        ID ROS-домена (дефолт: 42)"
+    echo "  PI_HOST / ROBOT_IP   Адрес робота для CycloneDDS (дефолт: tokmachka.local)"
     echo ""
     echo "Примеры:"
     echo "  $0                   Стандартный запуск на Ноутбуке 1 (судейский дашборд)"
@@ -168,22 +165,52 @@ cleanup() {
         fi
     fi
 
-    # Завершение дочерних нод
-    pkill -2 -f 'dashboard_app' 2>/dev/null || true
-    pkill -2 -f 'qr_reader_node' 2>/dev/null || true
-    sleep 0.3
-    pkill -9 -f 'dashboard_app' 2>/dev/null || true
-    pkill -9 -f 'qr_reader_node' 2>/dev/null || true
+    # Завершение дочерних нод только после запуска этого стека.
+    if [[ -n "${LAUNCH_PID}" ]]; then
+        pkill -2 -f 'dashboard_app' 2>/dev/null || true
+        pkill -2 -f 'qr_reader_node' 2>/dev/null || true
+        sleep 0.3
+        pkill -9 -f 'dashboard_app' 2>/dev/null || true
+        pkill -9 -f 'qr_reader_node' 2>/dev/null || true
+    fi
+
+    if [[ -n "${CYCLONE_CONFIG_FILE}" ]]; then
+        rm -f "${CYCLONE_CONFIG_FILE}"
+    fi
 
     echo -e "${GREEN}[OK] Все процессы Ноутбука 1 корректно остановлены.${NC}"
 }
 trap cleanup SIGINT SIGTERM EXIT
+
+# Привязать DDS к сетевому интерфейсу робота и добавить unicast peer.
+PI_ADDR="$(getent ahostsv4 "${PI_HOST}" 2>/dev/null | awk 'NR == 1 { print $1 }')"
+SRC_IP=""
+if [[ -n "${PI_ADDR}" ]]; then
+    SRC_IP="$(ip -4 route get "${PI_ADDR}" 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+else
+    echo -e "${YELLOW}[WARN] Не удалось определить адрес ${PI_HOST}; CycloneDDS использует multicast.${NC}"
+fi
+CYCLONE_CONFIG_FILE="$(mktemp "${TMPDIR:-/tmp}/cyclonedds_laptop1.XXXXXX.xml")" || exit 1
+cat > "${CYCLONE_CONFIG_FILE}" <<EOF
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config">
+    <Domain id="any">
+        <General>
+            <AllowMulticast>true</AllowMulticast>
+$(if [[ -n "${SRC_IP}" ]]; then printf '            <NetworkInterfaceAddress>%s</NetworkInterfaceAddress>' "${SRC_IP}"; fi)
+        </General>
+$(if [[ -n "${PI_ADDR}" ]]; then printf '        <Discovery><Peers><Peer address="%s"/></Peers></Discovery>' "${PI_ADDR}"; fi)
+    </Domain>
+</CycloneDDS>
+EOF
+export CYCLONEDDS_URI="file://${CYCLONE_CONFIG_FILE}"
 
 echo -e "${CYAN}${BOLD}================================================================${NC}"
 echo -e "${CYAN}${BOLD}       IJKbot — Запуск судейского ИИ & дашборда (Ноутбук 1)     ${NC}"
 echo -e "${CYAN}${BOLD}================================================================${NC}"
 echo -e "${BLUE}ROS_DOMAIN_ID:${NC}     ${BOLD}${ROS_DOMAIN_ID}${NC}"
 echo -e "${BLUE}RMW:${NC}               ${RMW_IMPLEMENTATION}"
+echo -e "${BLUE}CycloneDDS peer:${NC}   ${PI_ADDR:-multicast} (интерфейс: ${SRC_IP:-auto})"
 echo -e "${BLUE}Ollama LLM:${NC}        ${BOLD}${LLM_HOST}${NC} (модель: ${LLM_MODEL})"
 echo -e "${BLUE}NiceGUI Dashboard:${NC} http://${HOST}:${PORT}"
 echo -e "${BLUE}Режим симуляции:${NC}   $([[ "${MOCK}" == "true" ]] && echo "${YELLOW}ВКЛЮЧЕН (MOCK)${NC}" || echo "${GREEN}ВЫКЛЮЧЕН (реальный робот)${NC}")"
@@ -202,6 +229,11 @@ if [[ ! -f "${SETUP_BASH}" ]]; then
     exit 1
 fi
 echo -e "${GREEN}[OK] Окружение пакетов найдено (${SETUP_BASH}).${NC}"
+if [[ ! -f "/opt/ros/jazzy/lib/librmw_cyclonedds_cpp.so" && ! -x "${HOME}/.pixi/bin/pixi" && ! -x "/home/lev/.pixi/bin/pixi" ]]; then
+    echo -e "${RED}[ERROR] rmw_cyclonedds_cpp не установлен на ноутбуке 1.${NC}" >&2
+    echo -e "${YELLOW}Установите: sudo apt install ros-jazzy-rmw-cyclonedds-cpp${NC}" >&2
+    exit 1
+fi
 
 # ==============================================================================
 # ШАГ 2: Проверка доступности Ollama LLM
