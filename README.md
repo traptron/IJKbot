@@ -66,7 +66,7 @@
 
 ```mermaid
 flowchart LR
-    subgraph Robot["Робот: Raspberry Pi 4B (192.168.1.10)"]
+    subgraph Robot["Робот: Raspberry Pi 4B (192.168.0.191)"]
         Sensors["Intel RealSense D435<br/>(USB 3.0)"]
         DriverNode["driver::diff_drive_node<br/>(C++17)"]
         Servos["2× Feetech STS3215<br/>(/dev/ttySTS, 1M baud)"]

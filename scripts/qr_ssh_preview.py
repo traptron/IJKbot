@@ -6,6 +6,7 @@ vision workspace; a passwordless SSH control socket or SSH key is required.
 """
 
 import argparse
+import os
 import subprocess
 import threading
 import time
@@ -22,7 +23,8 @@ from vision.qr_decoder import annotate_qr_jpeg, decode_jpeg
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--host', default='otmorozki@10.34.243.154')
+    default_host = f"{os.environ.get('PI_USER', 'otmorozki')}@{os.environ.get('PI_HOST', os.environ.get('ROBOT_IP', '192.168.0.191'))}"
+    parser.add_argument('--host', default=default_host)
     parser.add_argument('--socket', default='/tmp/ijkbot-camera-new.sock')
     parser.add_argument('--remote-script',
                         default='/home/otmorozki/IJKbot/scripts/csi_jpeg_stream.py')

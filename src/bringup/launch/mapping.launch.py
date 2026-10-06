@@ -77,6 +77,7 @@ def generate_launch_description():
                 'base_frame': 'base_footprint',
                 'odom_frame': 'odom',
                 'map_frame': 'map',
+                'min_laser_range': 0.18,
             },
         ],
     )

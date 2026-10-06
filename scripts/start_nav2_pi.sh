@@ -25,7 +25,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
-PRIMARY_HOST="10.34.243.154"
+PRIMARY_HOST="192.168.0.191"
 DEFAULT_BACKUP="192.168.1.10"
 PI_HOST="${PI_HOST:-${ROBOT_IP:-${PRIMARY_HOST}}}"
 if [[ "${PI_HOST}" == "${DEFAULT_BACKUP}" ]]; then
@@ -356,7 +356,7 @@ if [[ "${HOST_UNREACHABLE}" == "true" ]]; then
     echo -e "${RED}[FAIL] Робот ${PI_HOST} не отвечает по сети (SSH/Ping недоступен)!${NC}"
     if [[ "${FORCE_START}" != "true" ]]; then
         echo -e "${YELLOW}Подсказка:${NC}"
-        echo -e "  - Проверьте подключение к точке доступа Wi-Fi (сети телефона 172.22.35.0/24)."
+        echo -e "  - Проверьте подключение к Wi-Fi (подсеть 192.168.0.0/24)."
         echo -e "  - Проверьте IP: возможно робот на арене соревнований (192.168.1.10)?"
         echo -e "  - Для запуска с альтернативным IP используйте: $0 --host 192.168.1.10"
         echo -e "  - Для локального прогона используйте: $0 --local"

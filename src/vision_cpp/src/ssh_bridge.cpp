@@ -7,7 +7,7 @@
 class Bridge : public rclcpp::Node {
 public:
   Bridge() : Node("qr_ssh_bridge") {
-    const auto host = declare_parameter("host", "otmorozki@10.34.243.154");
+    const auto host = declare_parameter("host", "otmorozki@192.168.0.191");
     const auto socket = declare_parameter("socket", "/tmp/ijkbot-camera-new.sock");
     const auto remote = declare_parameter("remote_executable",
       "/home/otmorozki/IJKbot/install/vision_cpp/lib/vision_cpp/csi_jpeg_stream");
