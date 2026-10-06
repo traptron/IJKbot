@@ -4,7 +4,7 @@ mission_sm.py — Главный модуль координации мисси�
 для мобильного робота IJKbot (Хакатон «Эвакуация», Кубок РТК Высшая Лига).
 
 Объединяет все подсистемы робота в единый процесс:
-1. LLM интерпретатор судейских заданий (Qwen 2.5 7B через Ollama)
+1. LLM интерпретатор судейских заданий (Qwen 3.5 9B через Ollama)
 2. Навигация Nav2 / одометрия к ориентирам полигона
 3. Компьютерное зрение: детекция пострадавшего человека
 4. Удержание робота в ячейке не менее 5 секунд по регламенту
@@ -154,7 +154,7 @@ class LogEntry:
 ARENA_CELL_SIZE = 0.8  # метров
 ARENA_GRID_DIM = 5     # 5x5 ячеек
 
-# Статичные элементы арены (по регламенту: 0:0, 1:1, 1:2, 1:3, 3:2, 3:3, 3:4, 4:3)
+# Статичные элементы арены (по регламенту: 0:0, 1:1, 1:2, 1:3, 3:1, 3:3, 3:4, 4:3)
 STATIC_ARENA_CELLS: Dict[Tuple[int, int], Dict[str, Any]] = {
     (0, 0): {
         "title": "СТАРТ",
@@ -167,7 +167,7 @@ STATIC_ARENA_CELLS: Dict[Tuple[int, int], Dict[str, Any]] = {
     (1, 1): {
         "title": "ОСТАНОВКА",
         "subtitle": "Парковка",
-        "detail": "Обломки жёлтого зд.",
+        "detail": "ОБЛОМКИ ЖЁЛТОГО ЗДАНИЯ",
         "fill": "#78350f",
         "stroke": "#f59e0b",
         "text_color": "#fbbf24",
@@ -247,16 +247,19 @@ LANDMARK_WAYPOINTS: Dict[str, Waypoint] = {
     ),
     # Статичные элементы арены
     "blue_building": Waypoint(
-        x=2.0, y=1.2, yaw=0.0, cell=(2, 1), name="Синее здание"
+        x=2.0, y=0.4, yaw=math.pi / 4, cell=(2, 0), name="Синее здание"
     ),
     "yellow_building": Waypoint(
-        x=2.0, y=2.0, yaw=math.pi, cell=(2, 2), name="Жёлтое здание"
+        x=0.4, y=1.2, yaw=math.atan2(1.2, 0.8), cell=(0, 1), name="Жёлтое здание"
     ),
     "parking": Waypoint(
         x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Остановка / парковка"
     ),
+    "yellow_building_debris": Waypoint(
+        x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Обломки жёлтого здания"
+    ),
     "river": Waypoint(
-        x=2.0, y=2.8, yaw=0.0, cell=(2, 3), name="Река"
+        x=2.0, y=3.6, yaw=-math.pi / 4, cell=(2, 4), name="Река"
     ),
     "start": Waypoint(
         x=0.4, y=0.4, yaw=0.0, cell=(0, 0), name="Пункт сбора (Старт)"
@@ -277,7 +280,7 @@ class SystemLauncher:
         self.is_running: bool = False
         self.log_lines: List[str] = []
         self.lock = threading.Lock()
-        self.ssh_host: str = "192.168.1.10"
+        self.ssh_host: str = os.environ.get("ROBOT_IP", os.environ.get("PI_HOST", "192.168.0.191"))
         self.ssh_user: str = "otmorozki"
 
     def is_alive(self) -> bool:
@@ -300,7 +303,7 @@ class SystemLauncher:
         if not mock_hardware and not use_ssh:
             return False, (
                 "Локальный запуск реального стека на ноутбуке заблокирован (отсутствует /dev/ttyUSB0). "
-                "Включите переключатель SSH для запуска на роботе (192.168.1.10) или запустите стек на роботе раздельно."
+                "Включите переключатель SSH для запуска на роботе или запустите стек на роботе раздельно."
             )
         return True, ""
 
@@ -400,6 +403,11 @@ class MissionStateMachine:
     Управляет жизненным циклом попытки, логированием и взаимодействием подсистем.
     """
 
+    SCAN_OFFSETS = tuple(math.radians(deg) for deg in (-45, -15, 15, 45))
+    SCAN_SETTLE_SECONDS = 2.0
+    SCAN_CHECK_SECONDS = 1.0
+    SCAN_YAW_TOLERANCE = math.radians(1.0)
+
     def __init__(self, llm_client: Optional[LLMClient] = None, mock_mode: bool = True):
         self.lock = threading.RLock()
         self.state = MissionState.PREPARATION
@@ -449,11 +457,12 @@ class MissionStateMachine:
         self.waypoints_queue: List[Waypoint] = []
         self.current_waypoint_idx: int = 0
 
-        # Состояние кругового пошагового осмотра ячейки (12 шагов по 30 градусов = 360°)
-        self.spin_step: int = 0  # 0..11
+        # Состояние пошагового осмотра сектора 90° в сторону ориентира (4 направления)
+        self.spin_step: int = 0  # 0..3
         self.spin_phase: str = "ROTATE"  # "ROTATE", "PAUSE", "CHECK"
         self.spin_timer: float = 0.0
         self.spin_start_yaw: float = 0.0
+        self.scan_center_yaw: float = 0.0
 
         # Состояние зрения и QR-кода
         self.victim_detected: bool = False
@@ -530,7 +539,7 @@ class MissionStateMachine:
 
     def parse_task_with_llm(self, on_token: Optional[Callable[[str], None]] = None) -> CommandInterpretation:
         """
-        Запуск анализа задания моделью Qwen 2.5 7B.
+        Запуск анализа задания моделью Qwen 3.5 9B.
         """
         with self.lock:
             if not self.current_task_text:
@@ -541,8 +550,8 @@ class MissionStateMachine:
             self.command_interpretation = None
             self.llm_parsed = False
             self.is_streaming = True
-            self.streaming_tokens = "Инициализация Qwen 2.5 7B и получение токенов...\n"
-            self._log("LLM", "Запуск инференса языковой модели Qwen 2.5 7B...")
+            self.streaming_tokens = "Инициализация Qwen 3.5 9B и получение токенов...\n"
+            self._log("LLM", "Запуск инференса языковой модели Qwen 3.5 9B...")
 
         first_token = [True]
         def _token_handler(token: str):
@@ -670,6 +679,8 @@ class MissionStateMachine:
             if not self.current_waypoint:
                 self._log("WARN", "Целевая путевая точка еще не определена. Сначала выполните анализ задания LLM.")
                 return False
+            if not self._navigation_odometry_ready():
+                return False
 
             self._publish_goal_pose(self.current_waypoint)
             yaw_deg = int(math.degrees(self.current_waypoint.yaw)) % 360
@@ -681,12 +692,25 @@ class MissionStateMachine:
             )
             return True
 
+    def _navigation_odometry_ready(self) -> bool:
+        """Не отправлять реальные цели Nav2 по устаревшей позе робота."""
+        check = getattr(self.ros_node, "has_fresh_odometry", None)
+        if not self.mock_mode and callable(check) and not check():
+            self._log("ERROR", "Нет свежей одометрии /odom: цель Nav2 не отправлена")
+            return False
+        return True
+
     def start_mission(self) -> None:
         """Старт выполнения миссии по кнопке судей/оператора."""
         with self.lock:
-            if self.state not in [MissionState.READY_TO_START, MissionState.PREPARATION]:
-                self._log("WARN", f"Попытка старта из недопустимого состояния {self.state}")
+            if not self._navigation_odometry_ready():
                 return
+            if self.state not in [MissionState.READY_TO_START, MissionState.PREPARATION]:
+                self._log("WARN", f"Повторный старт миссии из состояния {self.state}: сброс и перезапуск...")
+                self._cancel_nav_goal()
+                self.victim_found = False
+                self.qr_scanned = False
+                self.evacuated_home = False
 
             if not self.command_interpretation:
                 if self.current_task_text:
@@ -708,10 +732,12 @@ class MissionStateMachine:
 
             self.state = MissionState.NAVIGATING_TO_LANDMARK
             total_wp = len(self.waypoints_queue) if self.waypoints_queue else 1
-            self._log("STATE", f"СТАРТ МИССИИ! Движение к точке [1/{total_wp}]: {self.current_waypoint.name}")
+            wp_name = self.current_waypoint.name if self.current_waypoint else "Цель"
+            self._log("STATE", f"СТАРТ МИССИИ! Движение к точке [1/{total_wp}]: {wp_name}")
 
             # Публикация цели Nav2 в ROS 2
-            self._publish_goal_pose(self.current_waypoint)
+            if self.current_waypoint:
+                self._publish_goal_pose(self.current_waypoint)
 
     def _cancel_nav_goal(self) -> None:
         """Явная отмена активной цели Nav2 при смене состояний миссии."""
@@ -839,7 +865,7 @@ class MissionStateMachine:
                     self._log(
                         "NAV",
                         f"Робот прибыл в ячейку [{self.current_waypoint_idx + 1}/{total_wp}] «{self.current_waypoint.name}». "
-                        f"Начало кругового сканирования (12 шагов по 30° с паузой 1.0с)..."
+                        f"Начало осмотра сектора 90° к ориентиру (4 направления, остановка 3.0с)..."
                     )
                     self.state = MissionState.SEARCHING_VICTIM
                     self._cancel_nav_goal()
@@ -847,6 +873,9 @@ class MissionStateMachine:
                     self.spin_phase = "ROTATE"
                     self.spin_timer = 0.0
                     self.spin_start_yaw = self.robot_yaw
+                    self.scan_center_yaw = self._landmark_bearing()
+                    self.qr_code_data = None
+                    self._log("VISION", f"Биссектриса сектора: {math.degrees(self.scan_center_yaw):.1f}° в map")
                     self._publish_zero_velocity()
 
             elif self.state == MissionState.SEARCHING_VICTIM:
@@ -885,31 +914,64 @@ class MissionStateMachine:
     # ------------------------------------------------------------------------
     # Обработчики конкретных состояний
     # ------------------------------------------------------------------------
+    @staticmethod
+    def _yaw_error(target: float, actual: float) -> float:
+        return (target - actual + math.pi) % (2 * math.pi) - math.pi
+
+    def _landmark_bearing(self) -> float:
+        """Aim from the actual arrival pose to the semantic landmark's centre."""
+        from brain.llm_client import load_arena
+        arena = getattr(self.llm_client, 'arena', None) or load_arena()
+        target = self.command_interpretation.target_landmark_id if self.command_interpretation else ''
+        cells = arena.get('objects', {}).get(target, {}).get('cells', [])
+        if cells:
+            size = float(arena.get('cell_size_m', ARENA_CELL_SIZE))
+            x = sum((cell[0] + 0.5) * size for cell in cells) / len(cells)
+            y = sum((cell[1] + 0.5) * size for cell in cells) / len(cells)
+            if math.hypot(x - self.robot_x, y - self.robot_y) > 1e-6:
+                return math.atan2(y - self.robot_y, x - self.robot_x)
+        # For a landmark without mapped cells, the approach pose supplies its viewing bearing.
+        return self.current_waypoint.yaw if self.current_waypoint else self.robot_yaw
+
+    def _scan_view_ready(self) -> bool:
+        """Only accept a view after alignment, inside the landmark's sector."""
+        return self.spin_phase == 'CHECK' and self._scan_in_sector()
+
+    def _scan_in_sector(self) -> bool:
+        return abs(self._yaw_error(self.robot_yaw, self.scan_center_yaw)) <= math.pi / 4
+
     def _handle_spin_and_scan(self, dt: float) -> None:
         """
-        Круговой пошаговый осмотр ячейки:
-        12 дискретных шагов по 30 градусов (12 * 30° = 360°).
+        Пошаговый осмотр сектора 90° с биссектрисой в сторону ориентира.
+        Четыре направления: -45°, -15°, +15°, +45° относительно биссектрисы.
         Каждый шаг:
-          1. ROTATE: поворот на месте на 30° со скоростью 0.4 рад/с.
-          2. PAUSE: полная остановка на 1.0 сек для стабилизации камеры RealSense D435.
-          3. CHECK: проверка считывания QR-кода.
+          1. ROTATE: наведение по обратной связи yaw, не быстрее 0.4 рад/с.
+          2. PAUSE: полная остановка на 2.0 сек для стабилизации камеры.
+          3. CHECK: снимок и ожидание QR до 1.0 сек.
              - Если QR считан: переход в WAIT_5_SECONDS.
              - Если нет: следующий шаг (spin_step += 1).
-        Если все 12 шагов завершены без QR: переход к следующей ячейке из waypoints_queue.
+        Если все направления проверены без QR: следующая ячейка из waypoints_queue.
         Если все ячейки исчерпаны: возврат на базу [0.4, 0.4].
         """
         TURN_SPEED = 0.4  # рад/с
         total_wp = len(self.waypoints_queue) if self.waypoints_queue else 1
+        # If the chassis drifts outside the sector, realign before taking another photo.
+        if self.spin_phase in ('PAUSE', 'CHECK') and not self._scan_in_sector():
+            self._publish_zero_velocity()
+            self.spin_phase = 'ROTATE'
+            self.spin_timer = 0.0
+            self.qr_code_data = None
+            return
 
-        # Проверка: если в любой момент во время сканирования пришел QR-код
-        if self.qr_code_data and not self.qr_scanned:
+        # Принимать QR только после наведения внутри сектора осмотра
+        if self.qr_code_data and not self.qr_scanned and self._scan_view_ready():
             self.victim_detected = True
             self.victim_found = True
             self.qr_scanned = True
             self._log(
                 "QR",
                 f"QR-код успешно считан в ячейке [{self.current_waypoint_idx + 1}/{total_wp}] "
-                f"(шаг {self.spin_step + 1}/12):\n{self.qr_code_data}"
+                f"(шаг {self.spin_step + 1}/4):\n{self.qr_code_data}"
             )
             self.state = MissionState.WAIT_5_SECONDS
             self.wait_timer_start = time.time()
@@ -919,37 +981,48 @@ class MissionStateMachine:
 
         if self.spin_phase == "ROTATE":
             self.spin_timer += dt
+            # Aim just inside each boundary so feedback convergence cannot stall outside it.
+            edge = math.pi / 4 - self.SCAN_YAW_TOLERANCE / 2
+            offset = max(-edge, min(edge, self.SCAN_OFFSETS[self.spin_step]))
+            target = self.scan_center_yaw + offset
+            error = self._yaw_error(target, self.robot_yaw)
+            speed = max(-TURN_SPEED, min(TURN_SPEED, 1.5 * error))
             if self.mock_mode:
-                self.robot_yaw = (self.robot_yaw + TURN_SPEED * dt) % (2 * math.pi)
-            else:
-                if self.ros_node:
-                    self.ros_node.send_cmd_vel(0.0, TURN_SPEED)
-
-            yaw_diff = abs((self.robot_yaw - self.spin_start_yaw + math.pi) % (2 * math.pi) - math.pi)
-
-            # 30 градусов = ~0.5236 рад. Поворот завершен по углу (>= 0.50 рад) или по таймауту (1.5с)
-            if yaw_diff >= 0.50 or self.spin_timer >= 1.5:
+                change = math.copysign(min(abs(error), abs(speed) * dt), error)
+                self.robot_yaw = self._yaw_error(self.robot_yaw + change, 0.0)
+                error = self._yaw_error(target, self.robot_yaw)
+            # Угол подтверждается обратной связью, таймаут не заменяет достижение цели.
+            nominal_error = self._yaw_error(
+                self.scan_center_yaw + self.SCAN_OFFSETS[self.spin_step], self.robot_yaw)
+            if (abs(error) <= self.SCAN_YAW_TOLERANCE and
+                    abs(nominal_error) <= self.SCAN_YAW_TOLERANCE and self._scan_in_sector()):
                 self._publish_zero_velocity()
                 self.spin_phase = "PAUSE"
                 self.spin_timer = 0.0
-                deg_turned = (self.spin_step + 1) * 30
                 self._log(
                     "VISION",
                     f"Ячейка [{self.current_waypoint_idx + 1}/{total_wp}], "
-                    f"шаг {self.spin_step + 1}/12 ({deg_turned}°): поворот 30° завершен. Стабилизация камеры 1.0с..."
+                    f"направление {self.spin_step + 1}/4: наведение завершено. Стабилизация камеры 2.0с..."
                 )
+            elif self.spin_timer >= 12.0:
+                self._publish_zero_velocity()
+                self.spin_timer = 0.0
+                self._log("ERROR", "Не удалось навестись в сектор ориентира за 12с. Осмотр приостановлен.")
+                self.toggle_pause()
+            elif not self.mock_mode and self.ros_node:
+                self.ros_node.send_cmd_vel(0.0, speed)
 
         elif self.spin_phase == "PAUSE":
             self._publish_zero_velocity()
             self.spin_timer += dt
-            if self.spin_timer >= 1.0:
+            if self.spin_timer >= self.SCAN_SETTLE_SECONDS:
                 self.spin_phase = "CHECK"
                 self.spin_timer = 0.0
-                deg_turned = (self.spin_step + 1) * 30
+                deg_turned = math.degrees(self.SCAN_OFFSETS[self.spin_step])
                 self._log(
                     "VISION",
                     f"Ячейка [{self.current_waypoint_idx + 1}/{total_wp}], "
-                    f"шаг {self.spin_step + 1}/12 ({deg_turned}°): остановка 1.0с выдержана. Делаем снимок и проверяем QR..."
+                    f"шаг {self.spin_step + 1}/4 ({deg_turned}°): остановка 2.0с выдержана. Делаем снимок и проверяем QR..."
                 )
                 self._trigger_photo_snapshot()
 
@@ -975,7 +1048,7 @@ class MissionStateMachine:
                 self._log(
                     "QR",
                     f"QR-код успешно считан в ячейке [{self.current_waypoint_idx + 1}/{total_wp}] "
-                    f"(шаг {self.spin_step + 1}/12):\n{self.qr_code_data}"
+                    f"(шаг {self.spin_step + 1}/4):\n{self.qr_code_data}"
                 )
                 self.state = MissionState.WAIT_5_SECONDS
                 self.wait_timer_start = time.time()
@@ -983,17 +1056,17 @@ class MissionStateMachine:
                 self._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
                 return
 
-            # Даем ноде QR-детектора 0.5с на обработку снимка перед переходом к следующему повороту
-            if self.spin_timer < 0.5 and not self.mock_mode:
+            # Даем ноде QR-детектора 1.0с на обработку снимка перед переходом к следующему повороту
+            if self.spin_timer < self.SCAN_CHECK_SECONDS and not self.mock_mode:
                 return
 
             # QR не обнаружен — переход к следующему шагу осмотра
             self.spin_step += 1
-            if self.spin_step >= 12:
+            if self.spin_step >= len(self.SCAN_OFFSETS):
                 self._log(
                     "VISION",
                     f"В ячейке [{self.current_waypoint_idx + 1}/{total_wp}] "
-                    f"({self.current_waypoint.name}) QR-код не обнаружен за полный оборот 360°."
+                    f"({self.current_waypoint.name}) QR-код не обнаружен в секторе 90° к ориентиру."
                 )
                 if self.current_waypoint_idx + 1 < len(self.waypoints_queue):
                     self.current_waypoint_idx += 1
@@ -1038,12 +1111,12 @@ class MissionStateMachine:
         if not self.qr_scanned:
             self.qr_scanned = True
             self._log("QR", f"Данные с QR-кода состояния успешно считаны:\n{self.qr_code_data}")
-
-            # Направляем робота домой в стартовую ячейку [0, 0]
-            self.current_waypoint = START_WAYPOINT
-            self.state = MissionState.RETURNING_HOME
-            self._log("NAV", "Начало эвакуации пострадавшего в пункт сбора (ячейка [0, 0])...")
-            self._publish_goal_pose(START_WAYPOINT)
+            self.victim_found = True
+            self.victim_detected = True
+            self.state = MissionState.WAIT_5_SECONDS
+            self.wait_timer_start = time.time()
+            self._publish_zero_velocity()
+            self._log("STATE", "QR получен: остановка на 5 секунд перед возвратом в стартовую ячейку")
 
     def _handle_mission_completion(self) -> None:
         """Фиксация успешной эвакуации и завершения миссии."""
@@ -1105,15 +1178,26 @@ class MissionStateMachine:
             return False
         dist = math.hypot(wp.x - self.robot_x, wp.y - self.robot_y)
         yaw_diff = abs((wp.yaw - self.robot_yaw + math.pi) % (2 * math.pi) - math.pi)
-        tol_dist = 0.08 if self.mock_mode else 0.18
-        tol_yaw = 0.25 if self.mock_mode else 0.35
+        tol_dist = 0.06 if self.mock_mode else 0.15
+        tol_yaw = 0.20 if self.mock_mode else 0.35
 
         # Проверка завершения цели через ActionClient Nav2
         action_succeeded = False
         if not self.mock_mode and self.ros_node and getattr(self.ros_node, "goal_status", None) == GoalStatus.STATUS_SUCCEEDED:
-            if dist < tol_dist * 2.5:
+            if dist < 0.25:
                 action_succeeded = True
             self.ros_node.goal_status = None
+
+        # Для ячеек поиска (где выполняется осмотр сектора 90°), подъезда к пострадавшему
+        # и эвакуации на базу [0.4, 0.4] конечная ориентация робота не имеет значения:
+        # Nav2 RegulatedPurePursuitController отслеживает только (x, y) геометрию пути
+        # и не разворачивает робота в произвольный угол целевой точки на финише.
+        if self.state in [
+            MissionState.NAVIGATING_TO_LANDMARK,
+            MissionState.APPROACHING_VICTIM,
+            MissionState.RETURNING_HOME,
+        ]:
+            return dist < tol_dist or action_succeeded
 
         return (dist < tol_dist and yaw_diff < tol_yaw) or action_succeeded
 
@@ -1210,6 +1294,7 @@ class MissionROSNode:
 
         self._nav_goal_seq: int = 0
         self._nav_goal_pending: bool = False
+        self.last_odom_received_at: Optional[float] = None
 
         if ROS2_AVAILABLE:
             try:
@@ -1258,6 +1343,11 @@ class MissionROSNode:
             except Exception as e:
                 print(f"[ROS2] Ошибка запуска ROS 2 ноды: {e}")
 
+    def has_fresh_odometry(self, max_age: float = 0.5) -> bool:
+        """Проверить, что колёсная одометрия поступает в реальном времени."""
+        received_at = self.last_odom_received_at
+        return received_at is not None and time.monotonic() - received_at <= max_age
+
     def update_pose_from_tf(self) -> bool:
         """Определение позы робота на карте через TF2 lookup_transform('map', 'base_footprint')."""
         if not ROS2_AVAILABLE or not self.node or self.tf_buffer is None:
@@ -1303,6 +1393,7 @@ class MissionROSNode:
         with self.sm.lock:
             if self.sm.mock_mode:
                 return
+        self.last_odom_received_at = time.monotonic()
 
         # Попытка получить координаты из TF2 map -> base_footprint
         if self.update_pose_from_tf():
@@ -1358,9 +1449,10 @@ class MissionROSNode:
                 self.sm._log('QR', f'Получен текст QR:\n{msg.data}')
             self.sm.latest_qr_text = msg.data
             self.sm.latest_qr_received_at = self.sm._now_str()
-            if self.sm.state in [MissionState.SEARCHING_VICTIM, MissionState.READING_QR]:
+            if (self.sm.state == MissionState.READING_QR or
+                    (self.sm.state == MissionState.SEARCHING_VICTIM and self.sm._scan_view_ready())):
                 self.sm.qr_code_data = msg.data
-                if not self.sm.qr_scanned and self.sm.state == MissionState.SEARCHING_VICTIM:
+                if not self.sm.qr_scanned:
                     self.sm.victim_detected = True
                     self.sm.victim_found = True
                     self.sm.qr_scanned = True
@@ -1416,6 +1508,10 @@ class MissionROSNode:
 
     def send_nav_goal(self, x: float, y: float, yaw: float) -> None:
         """Отправка цели в Nav2 через ActionClient NavigateToPose или fallback в топик /goal_pose."""
+        check = getattr(self, "has_fresh_odometry", None)
+        if not self.sm.mock_mode and callable(check) and not check():
+            self.sm._log("ERROR", "Нет свежей одометрии /odom: цель Nav2 не отправлена")
+            return
         with self.sm.lock:
             self.cancel_nav_goal()
             self.goal_status = None
@@ -1610,7 +1706,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                     launch_status_badge = ui.badge("ОСТАНОВЛЕН", color="gray-600").classes("px-3 py-1 text-xs font-bold rounded uppercase")
 
                 with ui.row().classes("items-center gap-3"):
-                    ssh_switch = ui.switch("Запуск по SSH на робота (192.168.1.10)", value=False).classes("text-xs text-slate-300")
+                    ssh_switch = ui.switch(f"Запуск по SSH на робота ({sm.system_launcher.ssh_host})", value=False).classes("text-xs text-slate-300")
 
                     def handle_launch_system():
                         safe, reason = sm.system_launcher.check_safe_to_launch(
@@ -1707,7 +1803,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                             return
                         sm.set_task_description(text)
                         llm_parse_btn.props("loading")
-                        sm.streaming_tokens = "Инициализация Qwen 2.5 7B и получение токенов...\n"
+                        sm.streaming_tokens = "Инициализация Qwen 3.5 9B и получение токенов...\n"
                         first_chunk = [True]
 
                         def on_token_cb(token: str):
@@ -1738,10 +1834,15 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
                     # 2. Шаг 2: СТАРТ МИССИИ / ПЛАНЕРА
                     def handle_start():
-                        sm.set_task_description(task_input.value or "")
+                        text = task_input.value or ""
+                        if text:
+                            sm.set_task_description(text)
                         if not sm.command_interpretation:
-                            ui.notify("Сначала нажмите «1. Распознать (LLM)» для определения ориентира!", type="warning")
-                            return
+                            try:
+                                sm.parse_task_with_llm()
+                            except Exception as ex:
+                                ui.notify(f"Ошибка LLM анализа: {ex}", type="negative")
+                                return
                         sm.start_mission()
                         ui.notify("МИССИЯ ЗАПУЩЕНА! Цель передана в Nav2, робот следует к ячейке поиска.", type="positive")
 
@@ -1837,7 +1938,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
         with ui.row().classes("w-full gap-4 items-start"):
 
             # ЛЕВАЯ КОЛОНКА: ВЕКТОРНАЯ КАРТА ПОЛИГОНА 5x5
-            with ui.column().classes("w-7/12 gap-4"):
+            with ui.column().classes("w-7/4 gap-4"):
                 with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
                     with ui.row().classes("w-full justify-between items-center mb-2"):
                         with ui.row().classes("items-center gap-2"):
@@ -1854,19 +1955,19 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-emerald-700 border border-emerald-400 inline-block"></span> 0:0 Старт</span>')
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-amber-800 border border-amber-400 inline-block"></span> 1:1 Остановка/Парковка/Обломки</span>')
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-yellow-800 border border-yellow-400 inline-block"></span> 1:2, 1:3 Жёлтое зд.</span>')
-                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-blue-900 border border-blue-400 inline-block"></span> 3:2 Синее зд.</span>')
+                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-blue-900 border border-blue-400 inline-block"></span> 3:1 Синее зд.</span>')
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-sky-900 border border-sky-400 inline-block"></span> 3:3 Река</span>')
                         ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-zinc-700 border border-zinc-400 inline-block"></span> 3:4, 4:3 Мосты</span>')
 
             # ПРАВАЯ КОЛОНКА: КАРТОЧКА LLM И КАРТОЧКА QR-КОДА
-            with ui.column().classes("w-5/12 gap-4"):
+            with ui.column().classes("w-5/4 gap-4"):
 
                 # Карточка анализа LLM
                 with ui.card().classes("w-full bg-slate-800/90 border border-slate-700 rounded-xl p-4 shadow-lg flex flex-col gap-2.5"):
                     with ui.row().classes("w-full justify-between items-center mb-1"):
                         with ui.row().classes("items-center gap-2"):
                             ui.icon("psychology", size="1.4rem").classes("text-blue-400")
-                            ui.label("Результат анализа LLM (Qwen 2.5 7B)").classes("text-base font-semibold text-slate-100")
+                            ui.label("Результат анализа LLM (Qwen 3.5 9B)").classes("text-base font-semibold text-slate-100")
                         llm_tokens_badge = ui.badge("0 токенов", color="slate-700").classes("text-xs font-mono px-2 py-0.5 rounded")
 
                     # 0. Настройки подключения к Ollama (на другом ПК / ноутбуке)
@@ -1881,12 +1982,12 @@ def build_judge_dashboard(sm: MissionStateMachine):
                             llm_model_input = ui.input(
                                 label="Модель",
                                 value=sm.llm_client.model,
-                                placeholder="qwen2.5:7b"
+                                placeholder="qwen3.5:9b"
                             ).props("dense").classes("text-xs w-32 font-mono")
 
                         def check_llm_connection():
                             h = llm_host_input.value or "http://localhost:11434"
-                            m = llm_model_input.value or "qwen2.5:7b"
+                            m = llm_model_input.value or "qwen3.5:9b"
                             ok = sm.set_llm_config(h, m)
                             if ok:
                                 llm_conn_badge.text = "СВЯЗЬ: OK"
@@ -1937,7 +2038,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                             with ui.row().classes("items-center gap-1.5"):
                                 ui.icon("terminal", size="1.1rem").classes("text-emerald-400")
                                 ui.label("Все сгенерированные токены от LLM (JSON):").classes("text-xs font-bold text-emerald-400")
-                            ui.label("Qwen 2.5 7B [Raw Tokens]").classes("text-[10px] font-mono text-slate-500")
+                            ui.label("Qwen 3.5 9B [Raw Tokens]").classes("text-[10px] font-mono text-slate-500")
 
                         tokens_display = ui.code("Ожидание запуска генерации...", language="json").classes(
                             "w-full max-h-48 overflow-y-auto font-mono text-xs bg-slate-950 p-2 rounded-lg border border-slate-800 text-emerald-300 select-all"
@@ -1948,7 +2049,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
                     with ui.row().classes("w-full justify-between items-center mb-1"):
                         with ui.row().classes("items-center gap-2"):
                             ui.icon("radar", size="1.4rem").classes("text-amber-400")
-                            ui.label("Круговой осмотр ячейки (12×30°)").classes("text-base font-semibold text-slate-200")
+                            ui.label("Осмотр ориентира: сектор 90°").classes("text-base font-semibold text-slate-200")
                         scan_step_badge = ui.badge("НЕАКТИВЕН", color="gray-700").classes("text-xs")
                     scan_info_label = ui.label("Осмотр запускается при прибытии в целевую ячейку").classes("text-xs font-mono text-slate-300")
                     hold_timer_label = ui.label("Удержание в ячейке: —").classes("text-xs font-mono text-cyan-300")
@@ -2072,6 +2173,10 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         f'<text x="{cx}" y="{cy - 2}" fill="{text_col}" font-size="9" font-weight="bold" font-family="sans-serif" text-anchor="middle">{st["title"]}</text>'
                         f'<text x="{cx}" y="{cy + 12}" fill="{text_col}" font-size="7.5" font-family="sans-serif" text-anchor="middle" opacity="0.95">{st["subtitle"]}</text>'
                     )
+                    if st.get("detail"):
+                        svg_parts.append(
+                            f'<text x="{cx}" y="{cy + 25}" fill="{text_col}" font-size="6.5" font-weight="bold" font-family="sans-serif" text-anchor="middle" opacity="0.95" textLength="78" lengthAdjust="spacingAndGlyphs">{st["detail"]}</text>'
+                        )
                 else:
                     # Обычная проходимая ячейка полигона
                     fill = "#1e293b"
@@ -2161,9 +2266,6 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
     def update_dashboard():
         nonlocal last_rendered_log_count
-
-        # Шаг автомата состояний
-        sm.step(dt=0.1)
 
         # 1. Бейдж состояния
         st = sm.state
@@ -2258,11 +2360,11 @@ def build_judge_dashboard(sm: MissionStateMachine):
                 tokens_display.content = sm.command_interpretation.raw_text
                 llm_tokens_badge.text = f"{sm.command_interpretation.token_count} токенов"
 
-        # 4b. Карточка кругового осмотра ячейки (12×30°) и удержания
+        # 4b. Карточка осмотра сектора 90° и удержания
         if sm.state == MissionState.SEARCHING_VICTIM:
-            phase_ru = {"ROTATE": "Поворот 30°", "PAUSE": "Стабилизация 1.0с", "CHECK": "Анализ QR"}.get(sm.spin_phase, sm.spin_phase)
-            deg = (sm.spin_step + 1) * 30
-            scan_step_badge.text = f"ШАГ {sm.spin_step + 1}/12 ({deg}°)"
+            phase_ru = {"ROTATE": "Наведение в секторе", "PAUSE": "Стабилизация 2.0с", "CHECK": "Анализ QR"}.get(sm.spin_phase, sm.spin_phase)
+            deg = round(math.degrees(sm.SCAN_OFFSETS[min(sm.spin_step, 3)]))
+            scan_step_badge.text = f"ШАГ {sm.spin_step + 1}/4 ({deg}°)"
             scan_step_badge.classes(replace="text-xs bg-amber-600 text-black font-bold animate-pulse")
             scan_info_label.text = f"Фаза: {phase_ru} | Время фазы: {sm.spin_timer:.1f}с"
         elif sm.state == MissionState.WAIT_5_SECONDS:
@@ -2367,7 +2469,7 @@ def main(args=None):
     parser.add_argument("--mock", action="store_true", default=True, help="Запуск в режиме симуляции (по умолчанию True)")
     parser.add_argument("--no-mock", dest="mock", action="store_false", help="Запуск с реальным ROS 2 железом")
     parser.add_argument("--llm-host", type=str, default=os.environ.get("OLLAMA_HOST", "http://localhost:11434"), help="URL хоста Ollama (по умолчанию http://localhost:11434)")
-    parser.add_argument("--llm-model", type=str, default=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"), help="Имя модели Ollama")
+    parser.add_argument("--llm-model", type=str, default=os.environ.get("OLLAMA_MODEL", "qwen3.5:9b"), help="Имя модели Ollama")
     parser.add_argument("--headless", action="store_true", help="Запуск без Web GUI (только ROS 2)")
 
     clean_args = []
@@ -2422,18 +2524,36 @@ def main(args=None):
         except KeyboardInterrupt:
             print("Остановка по сигналу.")
     else:
+        # Миссия не должна зависеть от открытой вкладки судейского интерфейса.
+        stop_mission_loop = threading.Event()
+
+        def run_mission_loop() -> None:
+            while not stop_mission_loop.is_set():
+                try:
+                    sm.step(0.1)
+                except Exception as error:
+                    sm._log('ERROR', f'Ошибка цикла миссии: {error}')
+                stop_mission_loop.wait(0.1)
+
+        mission_thread = threading.Thread(target=run_mission_loop, daemon=True)
+        mission_thread.start()
+
         @ui.page('/')
         def index():
             build_judge_dashboard(sm)
 
-        ui.run(
-            host=parsed_args.host,
-            port=parsed_args.port,
-            title="IJKbot — Центр Управления Миссией",
-            favicon="🤖",
-            reload=False,
-            show=False
-        )
+        try:
+            ui.run(
+                host=parsed_args.host,
+                port=parsed_args.port,
+                title="IJKbot — Центр Управления Миссией",
+                favicon="🤖",
+                reload=False,
+                show=False
+            )
+        finally:
+            stop_mission_loop.set()
+            mission_thread.join(timeout=2.0)
 
 
 if __name__ in {"__main__", "__mp_main__"}:

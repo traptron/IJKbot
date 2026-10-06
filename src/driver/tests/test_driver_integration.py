@@ -2,6 +2,7 @@
 
 import math
 import os
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -16,14 +17,33 @@ from nav_msgs.msg import Odometry
 from tf2_msgs.msg import TFMessage
 
 
+def get_driver_executable():
+    if "DRIVER_EXECUTABLE" in os.environ and os.path.exists(os.environ["DRIVER_EXECUTABLE"]):
+        return os.environ["DRIVER_EXECUTABLE"]
+    which_path = shutil.which("diff_drive_node")
+    if which_path and os.path.exists(which_path):
+        return which_path
+    repo_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    candidate = os.path.join(repo_dir, "install", "driver", "lib", "driver", "diff_drive_node")
+    if os.path.exists(candidate):
+        return candidate
+    build_candidate = os.path.join(repo_dir, "build", "driver", "diff_drive_node")
+    if os.path.exists(build_candidate):
+        return build_candidate
+    return None
+
+
 @pytest.fixture
 def driver(monkeypatch, request):
+    driver_exe = get_driver_executable()
+    if not driver_exe:
+        pytest.skip("diff_drive_node executable not found")
     namespace = "test_" + uuid.uuid4().hex[:10]
     with tempfile.TemporaryDirectory(prefix="ijkbot_ros_") as logs:
         monkeypatch.setenv("ROS_LOG_DIR", logs)
         environment = dict(os.environ, ROS_LOG_DIR=logs)
         missing_uart = getattr(request, "param", False)
-        arguments = [os.environ["DRIVER_EXECUTABLE"], "--ros-args", "-r", f"__ns:=/{namespace}"]
+        arguments = [driver_exe, "--ros-args", "-r", f"__ns:=/{namespace}"]
         if missing_uart:
             arguments.extend(["-p", "mock_hardware:=false", "-p", f"serial_port:={logs}/absent_uart"])
         with open(f"{logs}/driver.log", "w+") as output:
@@ -31,12 +51,16 @@ def driver(monkeypatch, request):
                 arguments,
                 env=environment, stdout=output, stderr=subprocess.STDOUT,
             )
+            ctx = rclpy.Context()
+            ctx.init()
             try:
-                rclpy.init()
-                node = rclpy.create_node("test_observer", namespace=namespace)
+                node = rclpy.create_node("test_observer", namespace=namespace, context=ctx)
+                executor = rclpy.executors.SingleThreadedExecutor(context=ctx)
+                executor.add_node(node)
             except Exception:
                 process.terminate()
                 process.wait(timeout=3)
+                ctx.try_shutdown()
                 raise
             odometry = []
             diagnostics = []
@@ -54,7 +78,7 @@ def driver(monkeypatch, request):
                     if command is not None and time.monotonic() >= next_publish:
                         publisher.publish(command)
                         next_publish = time.monotonic() + 0.04
-                    rclpy.spin_once(node, timeout_sec=0.01)
+                    executor.spin_once(timeout_sec=0.01)
 
             try:
                 spin(1.5)
@@ -69,8 +93,10 @@ def driver(monkeypatch, request):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=3)
+                executor.remove_node(node)
+                executor.shutdown()
                 node.destroy_node()
-                rclpy.shutdown()
+                ctx.try_shutdown()
                 output.seek(0)
                 print(output.read())
 
@@ -143,9 +169,12 @@ def test_missing_uart_keeps_node_alive_and_motion_locked(driver):
     "serial_timeout_ms:=0", "serial_timeout_ms:=101",
 ])
 def test_unsafe_parameters_are_rejected(parameter):
+    driver_exe = get_driver_executable()
+    if not driver_exe:
+        pytest.skip("diff_drive_node executable not found")
     with tempfile.TemporaryDirectory(prefix="ijkbot_ros_") as logs:
         result = subprocess.run(
-            [os.environ["DRIVER_EXECUTABLE"], "--ros-args", "-p", parameter],
+            [driver_exe, "--ros-args", "-p", parameter],
             env=dict(os.environ, ROS_LOG_DIR=logs), capture_output=True, text=True, timeout=5,
         )
         assert result.returncode != 0

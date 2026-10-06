@@ -53,7 +53,7 @@
 | **Межосевое расстояние $B$** | $140\text{ мм}$ ($0.140\text{ м}$) | Расстояние от ведущей оси до оси задних кастеров |
 | **Опоры шасси** | 2× задних пассивных кастера | Обеспечивают устойчивость дифференциальной платформы |
 | **Приводы** | 2× Feetech STS3215 | ID 1 — Левый, ID 2 — Правый, шина UART 1 000 000 бод |
-| **Преобразователь UART** | Waveshare USB-to-UART | Фиксированный порт `/dev/ttyUSB0` (драйвер `cp210x` / `ch341`) |
+| **Преобразователь UART** | Waveshare USB-to-UART | Фиксированный порт `/dev/ttySTS` (драйвер `cp210x` / `ch341`) |
 | **Сенсор технического зрения** | Intel RealSense D435 | Высота оптического центра $157.5\text{ мм}$, наклон $0.0^\circ$, USB 3.0 |
 | **Бортовой аккумулятор** | 4S LiPo 14.8В 5000 мАч | Раздельное питание логики и силовой шины сервоприводов |
 | **Лимиты скорости** | $V_{max} = 0.25\text{ м/с}$, $\omega_{max} = 1.0\text{ рад/с}$ | Программно зафиксированы в `nav2_params.yaml` и `params.yaml` |
@@ -66,10 +66,10 @@
 
 ```mermaid
 flowchart LR
-    subgraph Robot["Робот: Raspberry Pi 4B (192.168.1.10)"]
+    subgraph Robot["Робот: Raspberry Pi 4B (192.168.0.191)"]
         Sensors["Intel RealSense D435<br/>(USB 3.0)"]
         DriverNode["driver::diff_drive_node<br/>(C++17)"]
-        Servos["2× Feetech STS3215<br/>(/dev/ttyUSB0, 1M baud)"]
+        Servos["2× Feetech STS3215<br/>(/dev/ttySTS, 1M baud)"]
         Nav2Stack["nav2 (Controller + Planner)"]
         Sensors -->|RGB/Depth| Nav2Stack
         DriverNode -->|RS-485/UART| Servos
@@ -80,7 +80,7 @@ flowchart LR
     end
 
     subgraph Laptop["Ноутбук оператора (192.168.1.20)"]
-        Ollama["Ollama: qwen2.5:7b-instruct-q4_K_M<br/>(GPU RTX 5060)"]
+        Ollama["Ollama: qwen3.5:9b<br/>(GPU RTX 5060)"]
         VisionNode["vision::qr_reader_node<br/>(WeChatQRCode)"]
         BrainNode["brain::mission_sm & NiceGUI<br/>(Web Dashboard :8080)"]
         RViz["RViz2 Navigation View"]
@@ -93,7 +93,7 @@ flowchart LR
 ```
 
 - **Raspberry Pi 4B (Борт, IP `192.168.1.10`)**: Ubuntu 24.04.5 LTS, нативный ROS 2 Jazzy. Выполняет низкоуровневое управление моторами, фильтрацию одометрии, генерацию виртуального лидара (`depthimage_to_laserscan`) и локальный расчет траекторий Nav2.
-- **Ноутбук (Внебортовой GPU-сервер, IP `192.168.1.20`)**: NVIDIA GeForce RTX 5060 (8 ГБ VRAM), Ollama с моделью `qwen2.5:7b-instruct-q4_K_M`, нейросетевой декодер `WeChatQRCode`, веб-интерфейс оператора NiceGUI (порт 8080).
+- **Ноутбук (Внебортовой GPU-сервер, IP `192.168.1.20`)**: NVIDIA GeForce RTX 5060 (8 ГБ VRAM), Ollama с моделью `qwen3.5:9b`, нейросетевой декодер `WeChatQRCode`, веб-интерфейс оператора NiceGUI (порт 8080).
 - **Синхронизация времени**: Демон `chrony` синхронизирует часы ноутбука и Pi 4B с точностью $|\Delta t| < 5.0$ мс (предотвращает ошибки `extrapolation into the future` в TF2).
 - **Трафик по радиоканалу**: Передача сырых `sensor_msgs/Image` и `PointCloud2` запрещена. Используется исключительно JPEG-сжатие `image_transport/compressed` ($640\times 480$, 15 FPS).
 
@@ -193,24 +193,24 @@ stateDiagram-v2
    ```
 
 3. **Комплексный запуск систем (Однокнопочный старт)**:
-   ```bash
-   ./scripts/start_all_laptop2.sh
-   ```
-   Скрипт автоматически:
-   - Проверит сеть и пинг до Raspberry Pi;
-   - Проверит синхронизацию времени Chrony;
-   - Запустит сенсоры RealSense и C++ драйвер моторов на Pi по SSH;
-   - Запустит стек Nav2 на Pi по SSH;
-   - Откроет предварительно настроенное окно RViz2 на ноутбуке.
+   - **Ноутбук 1 (Судейский ИИ, дашборд и зрение)**:
+     ```bash
+     ./scripts/start_all_laptop1.sh
+     ```
+     Скрипт проверяет сервер Ollama, модель Qwen 3.5, порт 8080, запускает `laptop.launch.py` и автоматически открывает браузер.
+   - **Ноутбук 2 (Операторская станция, робот и навигация)**:
+     ```bash
+     ./scripts/start_all_laptop2.sh
+     ```
+     Скрипт проверяет сеть, Chrony, запускает базовый стек и Nav2 на Pi по SSH и поднимает RViz2.
 
 4. **Запуск миссии**:
-   - Откройте веб-интерфейс дашборда по адресу: [http://localhost:8080](http://localhost:8080)
-   - Введите текст задания судей в поле ввода (или отправьте голосовую расшифровку) и нажмите кнопку **«Распознать задание»**.
+   - В веб-интерфейсе дашборда [http://localhost:8080](http://localhost:8080) введите текст задания судей в поле ввода (или отправьте голосовую расшифровку) и нажмите **«Распознать задание»**.
    - Убедитесь, что LLM выбрала целевую ячейку, и нажмите зелёную кнопку **«СТАРТ МИССИИ»**.
 
 5. **Экстренная остановка**:
    - В интерфейсе: красная кнопка **«E-STOP»**.
-   - В консоли: нажмите `Ctrl+C` в окне `start_all_laptop2.sh` или выполните:
+   - В консоли: нажмите `Ctrl+C` в окне запуска или выполните:
    ```bash
    ./scripts/stop_all.sh
    ```
@@ -221,8 +221,9 @@ stateDiagram-v2
 
 | Скрипт | Назначение | Пример использования |
 |---|---|---|
-| [`start_all_laptop2.sh`](file:///home/lev/IJKbot/scripts/start_all_laptop2.sh) | Главный оркестратор запуска | `./scripts/start_all_laptop2.sh --mode tmux` |
-| [`stop_all.sh`](file:///home/lev/IJKbot/scripts/stop_all.sh) | Остановка всех процессов на ПК и Pi | `./scripts/stop_all.sh --host 192.168.1.10` |
+| [`start_all_laptop1.sh`](file:///home/lev/IJKbot/scripts/start_all_laptop1.sh) | Запуск судейского ИИ, NiceGUI дашборда и QR-детекции | `./scripts/start_all_laptop1.sh` |
+| [`start_all_laptop2.sh`](file:///home/lev/IJKbot/scripts/start_all_laptop2.sh) | Главный оркестратор оператора (Pi SSH + Nav2 + RViz2) | `./scripts/start_all_laptop2.sh --mode tmux` |
+| [`stop_all.sh`](file:///home/lev/IJKbot/scripts/stop_all.sh) | Остановка всех процессов на Ноутбуках и Pi | `./scripts/stop_all.sh --host 192.168.1.10` |
 | [`teleop.sh`](file:///home/lev/IJKbot/scripts/teleop.sh) | Ручное телеуправление с клавиатуры | `./scripts/teleop.sh --speed 0.15` |
 | [`start_rviz.sh`](file:///home/lev/IJKbot/scripts/start_rviz.sh) | Запуск RViz2 с соревновательным профилем | `./scripts/start_rviz.sh` |
 | [`check_clock_sync.py`](file:///home/lev/IJKbot/scripts/check_clock_sync.py) | Проверка точности Chrony | `./scripts/check_clock_sync.py --threshold-ms 5.0` |
@@ -257,8 +258,46 @@ stateDiagram-v2
 
 ## 8. Диагностика и устранение неполадок (Troubleshooting)
 
-### Проблема 1: Ошибка доступа к порту `/dev/ttyUSB0`
-- **Симптом**: Драйвер падает с `Permission denied` или `Cannot open /dev/ttyUSB0`.
+### RPLIDAR A2M8 и online-картографирование
+Установите официальный ROS 2 драйвер Slamtec в workspace и пересоберите пакеты:
+```bash
+cd ~/IJKbot/src
+git clone https://github.com/Slamtec/sllidar_ros2.git
+cd ..
+source /opt/ros/jazzy/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --packages-up-to bringup
+source install/setup.bash
+```
+
+`robot.launch.py` запускает A2M8 (115200 бод, режим `Standard`); исходный скан доступен в `/scan_raw`, очищенный от отражений колёс — в `/scan`. Для установленного лидара включено отражение лево/право (`inverted: true`), а поворот крепления на 180° задан в TF `lidar_link`. Стандартный пакет `ros-jazzy-laser-filters` удаляет точки только внутри двух объёмов колёс в `base_footprint`; размеры с запасом 5 мм заданы в `src/bringup/config/lidar_self_filter.yaml`. Скан RealSense публикуется отдельно в `/depth/scan`. Порт по умолчанию `/dev/ttyUSB0`, так как `/dev/ttySTS` зарезервирован за UART приводов. При необходимости задайте стабильный порт устройства:
+```bash
+ros2 launch bringup robot.launch.py lidar_serial_port:=/dev/serial/by-id/<rplidar-device>
+```
+
+RViz показывает `/scan` точками размером 5 мм: прежние квадраты размером 5 см
+визуально накрывали колёса даже при корректном вырезании измерений. Проверка
+фильтра на роботе не публикует команд движения или тестовых сканов:
+
+```bash
+ROS_DOMAIN_ID=42 python3 scripts/check_wheel_filter.py --seconds 5
+```
+
+Скрипт сопоставляет `/scan_raw` и `/scan` по времени, переводит точки через
+реальный TF в `base_footprint` и проверяет границы из YAML. Успех: есть парные
+сканы, `wheel_remaining=0`, `outside_removed=0`. Если отражений от колёс нет,
+это не считается проверкой удаления на реальных попаданиях. Проверка
+2026-09-28: 48 парных сканов, 174 попадания в колёса удалены, 3501 точка
+снаружи сохранена. Геометрия маски, TF и параметры безопасности Nav2 не менялись.
+
+Для построения карты вместе с RPLIDAR, одометрией и TF запустите отдельный online SLAM режим вместо `system.launch.py` со статическим map server:
+```bash
+ros2 launch bringup mapping.launch.py lidar_serial_port:=/dev/serial/by-id/<rplidar-device>
+```
+`slam_toolbox` использует `/scan`, `odom`, `base_footprint` и публикует карту в `map`. Не запускайте одновременно этот режим и статический `map→odom` из Nav2.
+
+### Проблема 1: Ошибка доступа к порту `/dev/ttySTS`
+- **Симптом**: Драйвер падает с `Permission denied` или `Cannot open /dev/ttySTS`.
 - **Решение**: Убедитесь, что пользователь входит в группу `dialout`, и примените udev-правило:
   ```bash
   sudo usermod -aG dialout $USER
@@ -287,7 +326,7 @@ stateDiagram-v2
 - **Решение**: Проверьте статус сервиса Ollama и наличие модели:
   ```bash
   curl http://localhost:11434/api/tags
-  ollama run qwen2.5:7b-instruct-q4_K_M "Hello"
+  ollama run qwen3.5:9b "Hello"
   ```
 
 ---
@@ -309,3 +348,20 @@ colcon build --symlink-install
 # Запуск полного комплекта тестов
 /home/lev/ros2_jazzy/.pixi/envs/default/bin/pytest tests/ src/brain/test_mission_sm.py src/brain/test_trial_planner.py src/vision/test/
 ```
+
+### Осмотр ориентира после прибытия
+
+Осмотр ограничен сектором 90°: его биссектриса направлена от фактической позиции
+робота к центру ячеек ориентира в `arena.json`. Для ориентира без известных
+координат используется направление заданной точки осмотра. Четыре направления:
+−45°, −15°, +15°, +45°; крайние цели смещены на 0,5° внутрь сектора для устойчивого
+наведения по yaw. На каждом направлении робот стоит 2 секунды до снимка и ещё
+1 секунду ожидает QR. Полный круговой обзор отключён. Если за 12 секунд угол не
+достигнут, миссия приостанавливается вместо съёмки в неверном направлении.
+
+Штатный C++ запуск камеры захватывает 1920×1080, JPEG Q95, до 6 кадров/с.
+Распознавание на роботе получает полный кадр `/camera/qr/image/compressed`,
+а сетевое превью `/camera/color/image_raw/compressed` остаётся 640×480.
+Сенсор должен подтвердить запрошенный режим: неподдерживаемый размер вызывает
+ошибку, программного увеличения VGA до 1080p нет. Изменения проверяются в моках;
+читаемость печатного QR и поддержка режима камерой требуют проверки на роботе.

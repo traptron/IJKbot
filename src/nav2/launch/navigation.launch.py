@@ -112,7 +112,13 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[configured_params]
+        parameters=[
+            configured_params,
+            {
+                'use_sim_time': use_sim_time,
+                'yaml_filename': map_yaml_file
+            }
+        ]
     )
 
     # Режим А (по умолчанию): навигация чисто по идеальной колесной одометрии
@@ -135,41 +141,23 @@ def generate_launch_description():
         condition=UnlessCondition(use_amcl)
     )
 
-    loc_lifecycle_manager_odom = Node(
-        package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='lifecycle_manager_localization',
-        output='screen',
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'autostart': autostart,
-            'node_names': ['map_server'],
-            'bond_timeout': 10.0
-        }],
-        condition=UnlessCondition(use_amcl)
-    )
-
     # Режим Б: AMCL (если явно указано use_amcl:=true)
     amcl_node = Node(
         package='nav2_amcl',
         executable='amcl',
         name='amcl',
         output='screen',
-        parameters=[configured_params],
-        condition=IfCondition(use_amcl)
-    )
-
-    loc_lifecycle_manager_amcl = Node(
-        package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='lifecycle_manager_localization',
-        output='screen',
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'autostart': autostart,
-            'node_names': ['map_server', 'amcl'],
-            'bond_timeout': 10.0
-        }],
+        parameters=[
+            configured_params,
+            {
+                'use_sim_time': use_sim_time,
+                'set_initial_pose': True,
+                'initial_pose.x': initial_x,
+                'initial_pose.y': initial_y,
+                'initial_pose.z': 0.0,
+                'initial_pose.yaw': initial_yaw
+            }
+        ],
         condition=IfCondition(use_amcl)
     )
 
@@ -178,9 +166,7 @@ def generate_launch_description():
         actions=[
             map_server_node,
             static_tf_map_to_odom,
-            loc_lifecycle_manager_odom,
-            amcl_node,
-            loc_lifecycle_manager_amcl
+            amcl_node
         ]
     )
 
@@ -232,7 +218,67 @@ def generate_launch_description():
         remappings=[('goal_pose', LaunchConfiguration('goal_pose_topic'))]
     )
 
-    nav_lifecycle_manager = Node(
+    # Единый Lifecycle Manager: управляет последовательным поднятием всего стека.
+    # Последовательность строго определена:
+    # 1. map_server (загружает статическую карту)
+    # 2. amcl (подключается к карте и начинает публиковать TF map -> odom)
+    # 3. controller_server, velocity_smoother, planner_server, behavior_server, bt_navigator
+    # Благодаря единому менеджеру, global_costmap в planner_server никогда не падает по таймауту ожидания TF map!
+    
+    lifecycle_manager_amcl = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_navigation',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'autostart': autostart,
+            'node_names': [
+                'map_server',
+                'amcl',
+                'controller_server',
+                'velocity_smoother',
+                'planner_server',
+                'behavior_server',
+                'bt_navigator'
+            ],
+            'bond_timeout': 30.0,
+            'attempt_respawn_reconnection': True
+        }],
+        condition=IfCondition(use_amcl)
+    )
+
+    lifecycle_manager_odom = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_navigation',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'autostart': autostart,
+            'node_names': [
+                'map_server',
+                'controller_server',
+                'velocity_smoother',
+                'planner_server',
+                'behavior_server',
+                'bt_navigator'
+            ],
+            'bond_timeout': 30.0,
+            'attempt_respawn_reconnection': True
+        }],
+        condition=UnlessCondition(use_amcl)
+    )
+
+    lifecycle_manager_localization_group = GroupAction(
+        condition=IfCondition(use_localization),
+        actions=[
+            lifecycle_manager_amcl,
+            lifecycle_manager_odom
+        ]
+    )
+
+    lifecycle_manager_slam = Node(
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',
         name='lifecycle_manager_navigation',
@@ -247,8 +293,10 @@ def generate_launch_description():
                 'behavior_server',
                 'bt_navigator'
             ],
-            'bond_timeout': 10.0
-        }]
+            'bond_timeout': 30.0,
+            'attempt_respawn_reconnection': True
+        }],
+        condition=UnlessCondition(use_localization)
     )
 
     declare_twist_mux_config = DeclareLaunchArgument(
@@ -297,7 +345,8 @@ def generate_launch_description():
         planner_node,
         behavior_server_node,
         bt_navigator_node,
-        nav_lifecycle_manager,
+        lifecycle_manager_localization_group,
+        lifecycle_manager_slam,
 
         # Арбитраж скоростей (/cmd_vel)
         twist_mux_node

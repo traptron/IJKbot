@@ -6,11 +6,13 @@ test_llm.py — Набор модульных и интеграционных т
 1. Корректность перечисления и метаданных ориентиров (7 допустимых ID).
 2. Валидацию Pydantic/dataclass структуры CommandInterpretation.
 3. 100% точность детерминированного эвристического fallback-парсера по ключевым словам.
-4. Интеграцию с локальной Ollama (Qwen 2.5 7B) на реальных судейских формулировках.
+4. Интеграцию с локальной Ollama (Qwen 3.5 9B) на реальных судейских формулировках.
 5. Соблюдение ограничения по формату вывода (Strict JSON Mode).
 """
 
 import unittest
+import json
+from unittest.mock import patch
 from typing import List, Tuple
 from brain.llm_client import (
     LandmarkID,
@@ -20,6 +22,9 @@ from brain.llm_client import (
     LLMClient,
     load_arena,
     validate_nav2_goal,
+    default_nav2_goals,
+    get_target_waypoints,
+    STATIC_TARGET_IDS,
 )
 
 
@@ -46,7 +51,7 @@ class TestLandmarkDefinitions(unittest.TestCase):
 
     def test_map_objects_are_not_regulation_landmarks(self):
         self.assertEqual(set(MAP_OBJECT_DETAILS), {
-            "start", "parking", "yellow_building", "blue_building", "river"
+            "start", "parking", "yellow_building_debris", "yellow_building", "blue_building", "river"
         })
 
     def test_landmark_details_coverage(self):
@@ -64,7 +69,7 @@ class TestCommandInterpretationModel(unittest.TestCase):
 
     def test_valid_interpretation(self):
         cmd = CommandInterpretation(
-            target_landmark_id="smoke_tower",
+            target_landmark_id="river",
             search_strategy="inspect_perimeter",
             reasoning="Обнаружен дым.",
             confidence=0.98,
@@ -73,11 +78,11 @@ class TestCommandInterpretationModel(unittest.TestCase):
         )
         self.assertTrue(cmd.is_valid())
         d = cmd.to_dict()
-        self.assertEqual(d["target_landmark_id"], "smoke_tower")
+        self.assertEqual(d["target_landmark_id"], "river")
         self.assertEqual(d["confidence"], 0.98)
 
         json_str = cmd.to_json()
-        self.assertIn('"target_landmark_id": "smoke_tower"', json_str)
+        self.assertIn('"target_landmark_id": "river"', json_str)
 
     def test_invalid_interpretation(self):
         cmd = CommandInterpretation(
@@ -91,6 +96,28 @@ class TestCommandInterpretationModel(unittest.TestCase):
 class TestNavigationGoals(unittest.TestCase):
     def setUp(self):
         self.arena = load_arena()
+
+    def test_corner_inspection_cells(self):
+        """Точки поиска совпадают с заданными ячейками у углов ориентиров."""
+        expected_cells = {
+            "yellow_building": [(0, 1), (0, 4), (2, 4), (2, 1)],
+            "blue_building": [(2, 0), (4, 0), (4, 2), (2, 2)],
+            "river": [(2, 4), (2, 2), (4, 2)],
+            "parking": [(0, 1), (1, 0), (2, 0), (2, 1)],
+        }
+        cell_size = self.arena["cell_size_m"]
+        for landmark, cells in expected_cells.items():
+            with self.subTest(landmark=landmark):
+                goals = default_nav2_goals(landmark, self.arena)
+                self.assertEqual(len(goals), len(cells))
+                self.assertEqual(get_target_waypoints(landmark, self.arena), goals)
+                for goal, (col, row) in zip(goals, cells):
+                    self.assertAlmostEqual(goal["x"], (col + 0.5) * cell_size)
+                    self.assertAlmostEqual(goal["y"], (row + 0.5) * cell_size)
+                    self.assertNotIn([col, row], self.arena["blocked_cells"])
+                    self.assertEqual(validate_nav2_goal(goal, landmark, self.arena), goal)
+        self.assertEqual(default_nav2_goals("yellow_building_debris", self.arena),
+                         default_nav2_goals("parking", self.arena))
 
     def test_accepts_configured_approach_pose(self):
         goal = validate_nav2_goal(
@@ -128,20 +155,14 @@ class TestHeuristicFallback(unittest.TestCase):
     def test_fallback_accuracy_on_standard_cases(self):
         """Проверка точности fallback-парсера на различных формулировках."""
         cases: List[Tuple[str, str]] = [
-            ("Человек лежит возле горящего здания Стакан, валит густой дым", "smoke_tower"),
-            ("Около круглой башни с динамической имитацией очага возгорания", "smoke_tower"),
-            ("В руинах двухсекционного панельного дома замечен пострадавший", "panel_house"),
-            ("Обрушившийся многоквартирный панельный дом, под плитами человек", "panel_house"),
-            ("Пострадавший находится прямо под мостовым переходом", "bridges"),
-            ("Въезд на эстакаду с защитными бортиками заблокирован человеком", "bridges"),
-            ("Возле опрокинутого бензовоза разлив топлива, требуется помощь", "tanker_truck"),
-            ("Аварийная автоцистерна на боку, рядом лежит пострадавший", "tanker_truck"),
-            ("Проезд заблокирован поваленной березой, под ветками силуэт", "fallen_tree"),
-            ("Упавшее дерево перекрыло дорогу к пострадавшему", "fallen_tree"),
-            ("Затор из легковых машин в масштабе 1:32 блокирует проезд", "car_jam"),
-            ("В автомобильной пробке обнаружен человек", "car_jam"),
-            ("Завал из фрагментов поливинилхлорида (ПВХ)", "debris_pvc"),
-            ("Строительный мусор и обломки пластиковых конструкций", "debris_pvc"),
+            ("Бензовоз опрокинулся около реки. Искать рядом с ним.", "river"),
+            ("Дерево свалилось на голубой дом. Искать рядом с деревом.", "blue_building"),
+            ("Бензовоз рядом с жёлтым зданием", "yellow_building"),
+            ("Дерево лежит у остановки", "parking"),
+            ("Человек у бензовоза возле мостов", "bridges"),
+            ("На парковке синие машины", "parking"),
+            ("У синего здания упала берёза", "blue_building"),
+            ("Бензовоз на берегу реки", "river"),
         ]
 
         for prompt, expected_id in cases:
@@ -155,96 +176,103 @@ class TestHeuristicFallback(unittest.TestCase):
                 self.assertTrue(result.is_valid())
                 self.assertGreater(result.confidence, 0.5)
 
+    def test_fallback_requires_llm_for_yellow_building_debris(self):
+        with self.assertRaisesRegex(ValueError, "требует распознавания локальной LLM"):
+            self.client.fallback_heuristic_parse("Пострадавший у обломков жёлтого здания")
+
+    def test_llm_selects_yellow_building_debris_and_uses_cell_1_1_route(self):
+        answer = json.dumps(dict(
+            target_landmark_id="yellow_building_debris",
+            search_strategy="inspect",
+            reasoning="Обломки жёлтого здания указаны как отдельный ориентир.",
+            local_object_id=None,
+        ), ensure_ascii=False)
+        with patch.object(self.client, "_query_ollama", return_value=answer):
+            result = self.client.interpret("Найти пострадавшего у обломков жёлтого здания", use_fallback=False)
+
+        self.assertEqual(result.target_landmark_id, "yellow_building_debris")
+        self.assertEqual(self.client.arena["objects"]["yellow_building_debris"]["cells"], [[1, 1]])
+        self.assertEqual(result.nav2_goals, default_nav2_goals("yellow_building_debris", self.client.arena))
+        self.assertIn("yellow_building_debris", self.client.navigation_prompt())
+        self.assertIn("выбирай yellow_building_debris", self.client.navigation_prompt())
+
+
+class TestStaticTargetRegression(unittest.TestCase):
+    TASK = ("Пострадавший находится рядом с бензовозом, который опрокинулся набок около реки. "
+            "Поиск необходимо продолжить в непосредственной близости от этого объекта")
+
+    def test_timeout_returns_river_and_river_points(self):
+        client = LLMClient()
+        with patch.object(client, '_query_ollama', side_effect=TimeoutError('test timeout')):
+            result = client.interpret(self.TASK)
+        self.assertEqual(result.target_landmark_id, 'river')
+        self.assertEqual(result.source, 'heuristic_fallback')
+        self.assertEqual(result.nav2_goals, default_nav2_goals('river', client.arena))
+        self.assertIn('test timeout', json.loads(result.raw_text)['reasoning'])
+
+    def test_dynamic_llm_target_cannot_produce_dynamic_route(self):
+        client = LLMClient()
+        answer = json.dumps(dict(target_landmark_id='tanker_truck', reasoning='бензовоз',
+                                 search_strategy='inspect', nav2_goal=None))
+        with patch.object(client, '_query_ollama', return_value=answer):
+            result = client.interpret(self.TASK)
+        self.assertEqual(result.target_landmark_id, 'river')
+        self.assertEqual(result.nav2_goals, default_nav2_goals('river', client.arena))
+
+    def test_llm_coordinates_are_not_used(self):
+        client = LLMClient()
+        answer = json.dumps(dict(target_landmark_id='river', reasoning='Река',
+            search_strategy='inspect', local_object_id='tanker_truck',
+            nav2_goals=[dict(frame_id='map', x=2, y=1.2, yaw=0)]))
+        with patch.object(client, '_query_ollama', return_value=answer):
+            result = client.interpret(self.TASK, use_fallback=False)
+        self.assertEqual(result.nav2_goals, default_nav2_goals('river', client.arena))
+        self.assertEqual(result.local_object_id, 'tanker_truck')
+
+    def test_no_arbitrary_fallback_without_unique_static_target(self):
+        for text in ('Человек у бензовоза', 'Человек у реки или моста',
+                     'Не у реки', 'Синяя машина', '', 'Человек у дерева'):
+            with self.subTest(text=text):
+                client = LLMClient()
+                with patch.object(client, '_query_ollama', side_effect=TimeoutError()):
+                    with self.assertRaises(ValueError):
+                        client.interpret(text)
+
+    def test_wrong_object_pose_rejected(self):
+        client = LLMClient()
+        with self.assertRaises(ValueError):
+            validate_nav2_goal(dict(frame_id='map', x=2.8, y=3.6, yaw=0), 'river', client.arena)
+
 
 class TestOllamaLiveIntegration(unittest.TestCase):
-    """Интеграционные тесты с реальной моделью Ollama Qwen 2.5 7B."""
+    """Real inference: fallback must not conceal a model failure."""
 
     @classmethod
     def setUpClass(cls):
         cls.client = LLMClient()
-        cls.ollama_available = cls.client.is_available()
-        if cls.ollama_available:
-            cls.client.warmup()
+        if not cls.client.is_available():
+            raise unittest.SkipTest('Ollama недоступна')
 
-    def test_ollama_server_reachable(self):
-        """Проверка доступности локального сервера Ollama."""
-        self.assertTrue(
-            self.ollama_available,
-            "Сервер Ollama недоступен на localhost:11434. Проверьте запуск 'ollama serve'."
-        )
-
-    def test_llm_interpretation_smoke_tower(self):
-        """Проверка распознавания здания «Стакан»."""
-        if not self.ollama_available:
-            self.skipTest("Ollama недоступна")
-
-        prompt = "Пострадавший находится рядом со зданием Стакан, из которого валит густой дым."
-        res = self.client.interpret(prompt)
-        self.assertEqual(res.target_landmark_id, LandmarkID.SMOKE_TOWER.value)
-        self.assertTrue(res.is_valid())
-        self.assertIn("smoke", res.target_landmark_id)
-        self.assertTrue(len(res.reasoning) > 0)
-
-    def test_llm_interpretation_panel_house(self):
-        """Проверка распознавания разрушенного панельного дома."""
-        if not self.ollama_available:
-            self.skipTest("Ollama недоступна")
-
-        prompt = "Человек обнаружен под завалами плит разрушенного панельного дома."
-        res = self.client.interpret(prompt)
-        self.assertEqual(res.target_landmark_id, LandmarkID.PANEL_HOUSE.value)
-        self.assertTrue(res.is_valid())
-
-    def test_llm_interpretation_tanker_truck(self):
-        """Проверка распознавания аварийного бензовоза."""
-        if not self.ollama_available:
-            self.skipTest("Ollama недоступна")
-
-        prompt = "Около перевернутой автоцистерны с бензином лежит человек."
-        res = self.client.interpret(prompt)
-        self.assertEqual(res.target_landmark_id, LandmarkID.TANKER_TRUCK.value)
-        self.assertTrue(res.is_valid())
-
-    def test_llm_interpretation_bridges(self):
-        """Проверка распознавания мостовых переходов."""
-        if not self.ollama_available:
-            self.skipTest("Ollama недоступна")
-
-        prompt = "Пострадавший укрылся под одним из мостовых переходов."
-        res = self.client.interpret(prompt)
-        self.assertEqual(res.target_landmark_id, LandmarkID.BRIDGES.value)
-        self.assertTrue(res.is_valid())
-
-    def test_llm_interpretation_fallen_tree(self):
-        """Проверка распознавания упавшего дерева."""
-        if not self.ollama_available:
-            self.skipTest("Ollama недоступна")
-
-        prompt = "Пострадавший зажат ветками упавшей искусственной берёзы на проезжей части."
-        res = self.client.interpret(prompt)
-        self.assertEqual(res.target_landmark_id, LandmarkID.FALLEN_TREE.value)
-        self.assertTrue(res.is_valid())
-
-    def test_llm_interpretation_car_jam(self):
-        """Проверка распознавания транспортного затора."""
-        if not self.ollama_available:
-            self.skipTest("Ollama недоступна")
-
-        prompt = "В транспортном заторе из брошенных легковых автомобилей найден раненый человек."
-        res = self.client.interpret(prompt)
-        self.assertEqual(res.target_landmark_id, LandmarkID.CAR_JAM.value)
-        self.assertTrue(res.is_valid())
-
-    def test_llm_interpretation_debris_pvc(self):
-        """Проверка распознавания завала из фрагментов ПВХ."""
-        if not self.ollama_available:
-            self.skipTest("Ollama недоступна")
-
-        prompt = "Помощь требуется человеку, заблокированному завалом из фрагментов ПВХ труб."
-        res = self.client.interpret(prompt)
-        self.assertEqual(res.target_landmark_id, LandmarkID.DEBRIS_PVC.value)
-        self.assertTrue(res.is_valid())
+    def test_static_landmarks_live(self):
+        cases = [
+            (TestStaticTargetRegression.TASK, 'river', 'tanker_truck'),
+            ('Пострадавший находится рядом с деревом,свалившимся на голубой дом.'
+             'Продолжайте поиск пострадавшего рядом с упавшим деревом.', 'blue_building', 'fallen_tree'),
+            ('Бензовоз возле жёлтого здания. Ищите человека рядом с ним.', 'yellow_building', 'tanker_truck'),
+            ('Пострадавший находится у обломков жёлтого здания.', 'yellow_building_debris', None),
+            ('Пострадавший у дерева возле остановки.', 'parking', 'fallen_tree'),
+            ('Пострадавший у бензовоза возле моста.', 'bridges', 'tanker_truck'),
+            ('Не у реки, а у синего здания находится бензовоз с пострадавшим.', 'blue_building', 'tanker_truck'),
+        ]
+        for text, target, local in cases:
+            with self.subTest(text=text):
+                result = self.client.interpret(text, use_fallback=False)
+                self.assertEqual(result.source, 'llm')
+                self.assertEqual(result.target_landmark_id, target)
+                self.assertEqual(result.local_object_id, local)
+                self.assertEqual(result.nav2_goals, default_nav2_goals(target, self.client.arena))
+                self.assertIn(result.target_landmark_id, STATIC_TARGET_IDS)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main(verbosity=2)

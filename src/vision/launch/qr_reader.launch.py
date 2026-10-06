@@ -15,8 +15,9 @@ def generate_launch_description():
     default_params = os.path.join(package_share, 'config', 'qr_reader.yaml')
     return LaunchDescription([
         DeclareLaunchArgument('params_file', default_value=default_params),
+        DeclareLaunchArgument('implementation', default_value='vision_cpp'),
         Node(
-            package='vision',
+            package=LaunchConfiguration('implementation'),
             executable='qr_reader_node',
             name='qr_reader_node',
             output='screen',

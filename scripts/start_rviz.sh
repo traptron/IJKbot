@@ -29,6 +29,30 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
+# Автонастройка CycloneDDS: выбор интерфейса маршрута к роботу и добавление unicast peer
+PI_TARGET_HOST="${PI_HOST:-${ROBOT_IP:-192.168.0.191}}"
+SRC_IP=$(ip route get "${PI_TARGET_HOST}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')
+if [[ -n "${SRC_IP}" ]]; then
+    CYCLONE_XML="/tmp/cyclonedds_ijkbot.xml"
+    cat <<EOF > "${CYCLONE_XML}"
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config">
+    <Domain id="any">
+        <General>
+            <NetworkInterfaceAddress>${SRC_IP}</NetworkInterfaceAddress>
+            <AllowMulticast>true</AllowMulticast>
+        </General>
+        <Discovery>
+            <Peers>
+                <Peer address="${PI_TARGET_HOST}"/>
+            </Peers>
+        </Discovery>
+    </Domain>
+</CycloneDDS>
+EOF
+    export CYCLONEDDS_URI="file://${CYCLONE_XML}"
+fi
+
 PIXI_MANIFEST="${PIXI_PROJECT_MANIFEST:-/home/lev/ros2_jazzy/pixi.toml}"
 DEFAULT_RVIZ_CONFIG="${REPO_DIR}/src/nav2/rviz/nav2_default_view.rviz"
 FALLBACK_RVIZ_CONFIG="${REPO_DIR}/src/nav2/rviz/nav2_view.rviz"
@@ -81,14 +105,28 @@ echo -e "${CYAN}${BOLD}=========================================================
 echo -e "${BLUE}ROS_DOMAIN_ID:${NC} ${BOLD}${ROS_DOMAIN_ID}${NC}"
 echo -e "${BLUE}Pixi Manifest:${NC} ${PIXI_MANIFEST}"
 
-# Проверка наличия Pixi
+# Проверка доступного окружения запуска
 if ! command -v pixi &>/dev/null; then
-    echo -e "${RED}[ERROR] Утилита 'pixi' не найдена в PATH! Убедитесь, что pixi установлен.${NC}" >&2
-    exit 1
+    if [[ -x "${HOME}/.pixi/bin/pixi" ]]; then
+        export PATH="${HOME}/.pixi/bin:${PATH}"
+    elif [[ -x "/home/lev/.pixi/bin/pixi" ]]; then
+        export PATH="/home/lev/.pixi/bin:${PATH}"
+    fi
 fi
 
-if [[ ! -f "${PIXI_MANIFEST}" ]]; then
-    echo -e "${RED}[ERROR] Файл манифеста Pixi не найден: ${PIXI_MANIFEST}${NC}" >&2
+RVIZ_RUNNER=()
+if command -v pixi &>/dev/null && [[ -f "${PIXI_MANIFEST}" ]]; then
+    export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
+    RVIZ_RUNNER=(pixi run)
+elif [[ -f /opt/ros/jazzy/setup.bash ]]; then
+    set +u
+    source /opt/ros/jazzy/setup.bash
+    set -u
+    # Snap editor GTK modules can load an incompatible glibc into native RViz.
+    unset GTK_PATH GIO_MODULE_DIR GTK_EXE_PREFIX GTK_DATA_PREFIX
+    unset QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH
+else
+    echo -e "${RED}[ERROR] Не найдено окружение Pixi или ROS 2 Jazzy.${NC}" >&2
     exit 1
 fi
 
@@ -122,6 +160,5 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM EXIT
 
-export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
-pixi run rviz2 -d "${RVIZ_CONFIG}" "${EXTRA_ARGS[@]}"
+"${RVIZ_RUNNER[@]}" rviz2 -d "${RVIZ_CONFIG}" "${EXTRA_ARGS[@]}"
 cleanup

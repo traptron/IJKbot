@@ -19,7 +19,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
-PI_HOST="${PI_HOST:-${ROBOT_IP:-192.168.1.10}}"
+PRIMARY_HOST="192.168.0.191"
+DEFAULT_BACKUP="192.168.1.10"
+PI_HOST="${PI_HOST:-${ROBOT_IP:-${PRIMARY_HOST}}}"
+if [[ "${PI_HOST}" == "${DEFAULT_BACKUP}" ]]; then
+    BACKUP_HOST="${PRIMARY_HOST}"
+else
+    BACKUP_HOST="${DEFAULT_BACKUP}"
+fi
+HOST_SPECIFIED="false"
 PI_USER="${PI_USER:-${ROBOT_USER:-otmorozki}}"
 PIXI_MANIFEST="${PIXI_PROJECT_MANIFEST:-/home/lev/ros2_jazzy/pixi.toml}"
 SEND_ZERO_VEL=true
@@ -40,7 +48,7 @@ print_help() {
     echo "  -h, --help           Показать эту справку"
     echo ""
     echo "Переменные окружения:"
-    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: 192.168.1.10)"
+    echo "  PI_HOST / ROBOT_IP   IP-адрес Raspberry Pi (дефолт: ${PRIMARY_HOST})"
     echo "  PI_USER / ROBOT_USER SSH-пользователь (дефолт: otmorozki)"
     echo "  ROS_DOMAIN_ID        ID ROS-домена (дефолт: 42)"
 }
@@ -54,6 +62,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             PI_HOST="$2"
+            HOST_SPECIFIED="true"
             shift 2
             ;;
         --user)
@@ -108,6 +117,13 @@ echo -e "${CYAN}----------------------------------------------------------------
 # 1. Отправка нулевой скорости для немедленного торможения приводов
 if [[ "${SEND_ZERO_VEL}" == "true" ]]; then
     echo -e "${YELLOW}[1/3] Отправка нулевой скорости (/cmd_vel_emergency, /cmd_vel_sm & /cmd_vel)...${NC}"
+    if ! command -v pixi &>/dev/null; then
+        if [[ -x "${HOME}/.pixi/bin/pixi" ]]; then
+            export PATH="${HOME}/.pixi/bin:${PATH}"
+        elif [[ -x "/home/lev/.pixi/bin/pixi" ]]; then
+            export PATH="/home/lev/.pixi/bin:${PATH}"
+        fi
+    fi
     if command -v pixi &>/dev/null && [[ -f "${PIXI_MANIFEST}" ]]; then
         # Публикуем быстрым пакетным Python скриптом за <1 секунды во все 3 топика сразу
         timeout 3s pixi run --manifest-path "${PIXI_MANIFEST}" python3 -c '
@@ -175,9 +191,17 @@ else
         pkill -9 -f 'nav2_' 2>/dev/null || true;
     "
 
+    STOP_SUCCESS=false
     if timeout 4s ssh "${SSH_OPTS[@]}" "${PI_USER}@${PI_HOST}" "${ALL_KILL_CMD}" >/dev/null 2>&1; then
-        echo -e "${GREEN}[OK] Команды остановки на Raspberry Pi выполнены.${NC}"
-    else
+        echo -e "${GREEN}[OK] Команды остановки на Raspberry Pi (${PI_HOST}) выполнены.${NC}"
+        STOP_SUCCESS=true
+    elif [[ "${HOST_SPECIFIED}" != "true" && -n "${BACKUP_HOST:-}" && "${PI_HOST}" != "${BACKUP_HOST}" ]]; then
+        if timeout 4s ssh "${SSH_OPTS[@]}" "${PI_USER}@${BACKUP_HOST}" "${ALL_KILL_CMD}" >/dev/null 2>&1; then
+            echo -e "${GREEN}[OK] Команды остановки на резервном хосте (${BACKUP_HOST}) выполнены.${NC}"
+            STOP_SUCCESS=true
+        fi
+    fi
+    if [[ "${STOP_SUCCESS}" != "true" ]]; then
         echo -e "${YELLOW}[WARN] Хост ${PI_HOST} не ответил по SSH (робот выключен или недоступен).${NC}"
     fi
 fi
@@ -194,6 +218,8 @@ pkill -f teleop_twist_keyboard 2>/dev/null && echo -e "  - teleop_twist_keyboard
 
 # Остановка локальных ROS 2 нод IJKbot
 LOCAL_ROS_PATTERNS=(
+    "laptop.launch.py"
+    "dashboard_app"
     "robot.launch.py"
     "navigation.launch.py"
     "diff_drive_node"
@@ -219,8 +245,8 @@ for pat in "${LOCAL_ROS_PATTERNS[@]}"; do
     pgrep -f "${pat}" | grep -v -E "${EXCLUDE_PIDS}" | xargs -r kill -9 2>/dev/null || true
 done
 
-# Остановка фоновых скриптов запуска Ноутбука 2 (исключая текущий процесс, родителя и редактор)
-for script in "start_robot_pi.sh" "start_nav2_pi.sh" "start_rviz.sh" "teleop.sh"; do
+# Остановка фоновых скриптов запуска Ноутбука 1 и 2 (исключая текущий процесс, родителя и редактор)
+for script in "start_all_laptop1.sh" "start_all_laptop2.sh" "start_robot_pi.sh" "start_nav2_pi.sh" "start_rviz.sh" "teleop.sh"; do
     pgrep -f "bash.*${script}|/${script}" | grep -v -E "${EXCLUDE_PIDS}" | xargs -r kill -2 2>/dev/null || true
 done
 sleep 0.2

@@ -161,6 +161,14 @@ stop_on_exit() {
 }
 trap stop_on_exit EXIT INT TERM
 
+if ! command -v pixi &>/dev/null; then
+    if [[ -x "${HOME}/.pixi/bin/pixi" ]]; then
+        export PATH="${HOME}/.pixi/bin:${PATH}"
+    elif [[ -x "/home/lev/.pixi/bin/pixi" ]]; then
+        export PATH="/home/lev/.pixi/bin:${PATH}"
+    fi
+fi
+
 export PIXI_PROJECT_MANIFEST="${PIXI_MANIFEST}"
 # Запуск без exec, чтобы при выходе или сигнале bash гарантированно выполнил trap stop_on_exit
 if pixi run ros2 run teleop_twist_keyboard teleop_twist_keyboard \
