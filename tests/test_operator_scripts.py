@@ -13,6 +13,7 @@ REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(REPO_DIR, 'scripts')
 
 SCRIPTS = [
+    'start_gorod.sh',
     'start_all_laptop1.sh',
     'start_all_laptop2.sh',
     'start_robot_pi.sh',
@@ -42,6 +43,7 @@ def test_script_syntax_with_bash_n(script_name):
 
 
 @pytest.mark.parametrize("script_name", [
+    'start_gorod.sh',
     'start_all_laptop1.sh',
     'start_all_laptop2.sh',
     'start_robot_pi.sh',
@@ -198,6 +200,47 @@ def test_start_all_laptop2_help_new_options():
     assert "--local" in output
     assert "--force" in output
     assert "--no-camera" in output
+
+
+def test_start_gorod_profile_help_and_validation():
+    script_path = os.path.join(SCRIPTS_DIR, 'start_gorod.sh')
+    help_result = subprocess.run([script_path, '--help'], capture_output=True,
+                                 text=True, timeout=5)
+    assert help_result.returncode == 0
+    assert '--role vision' in help_result.stdout
+    assert '--role operator' in help_result.stdout
+    assert '--map FILE' in help_result.stdout
+    invalid = subprocess.run([script_path, '--role', 'unknown'],
+                             capture_output=True, text=True, timeout=5)
+    assert invalid.returncode != 0
+    assert 'Роль должна быть' in invalid.stderr
+
+
+def test_start_gorod_operator_passes_camera_and_localization(tmp_path):
+    launcher = tmp_path / 'start_gorod.sh'
+    with open(os.path.join(SCRIPTS_DIR, 'start_gorod.sh')) as source:
+        launcher.write_text(source.read())
+    launcher.chmod(0o755)
+    stub = tmp_path / 'start_all_laptop2.sh'
+    stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')
+    stub.chmod(0o755)
+
+    slam = subprocess.run([str(launcher), '--role', 'operator', '--pi-host',
+                           '192.0.2.1', '--mock', '--no-rviz'],
+                          capture_output=True, text=True, timeout=5)
+    assert slam.returncode == 0
+    assert '--slam' in slam.stdout
+    assert '--with-camera' in slam.stdout
+    assert '--mock' in slam.stdout
+
+    mapped = subprocess.run([str(launcher), '--role', 'operator', '--map',
+                             '/tmp/city.yaml', '--no-camera'],
+                            capture_output=True, text=True, timeout=5)
+    assert mapped.returncode == 0
+    assert '--use-amcl' in mapped.stdout
+    assert '/tmp/city.yaml' in mapped.stdout
+    assert '--no-camera' in mapped.stdout
+    assert '--slam' not in mapped.stdout
 
 
 def test_start_nav2_pi_help_new_options():

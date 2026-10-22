@@ -625,8 +625,12 @@ if [[ "${RUN_LOCAL}" == "true" ]]; then
 elif [[ "${FORCE_START}" == "true" ]]; then
     START_ROBOT_CMD="${START_ROBOT_CMD} --force"
 fi
-if [[ "${NO_CAMERA}" == "true" && "${RUN_LOCAL}" != "true" ]]; then
-    START_ROBOT_CMD="${START_ROBOT_CMD} --extra enable_camera:=false"
+if [[ "${RUN_LOCAL}" != "true" ]]; then
+    if [[ "${NO_CAMERA}" == "true" ]]; then
+        START_ROBOT_CMD="${START_ROBOT_CMD} --no-camera"
+    else
+        START_ROBOT_CMD="${START_ROBOT_CMD} --with-camera"
+    fi
 fi
 
 case "${LAUNCH_MODE}" in
