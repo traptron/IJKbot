@@ -23,7 +23,8 @@ def main():
     if not 0 < args.seconds <= 60:
         parser.error('seconds must be in (0, 60]')
     config = yaml.safe_load(Path(args.config).read_text())['scan_to_scan_filter_chain']['ros__parameters']
-    boxes = [item['params'] for name, item in config.items() if name.startswith('filter')]
+    boxes = [item['params'] for name, item in config.items()
+             if name.startswith('filter') and isinstance(item.get('params'), dict) and 'min_x' in item['params']]
     rclpy.init(args=[])
     node = rclpy.create_node('wheel_filter_check')
     buffer = Buffer()
@@ -60,7 +61,7 @@ def main():
             y = t.y + 2*(q.x*q.y + q.z*q.w)*px + (1 - 2*(q.x*q.x + q.z*q.z))*py
             z = t.z + 2*(q.x*q.z - q.y*q.w)*px + 2*(q.y*q.z + q.x*q.w)*py
             inside = any(b['min_x'] < x < b['max_x'] and b['min_y'] < y < b['max_y']
-                         and b['min_z'] < z < b['max_z'] for b in boxes)
+                         and b['min_z'] < z < b['max_z'] for b in boxes) or (before < 0.18)
             removed = not math.isfinite(after)
             totals['wheel_raw' if inside else 'outside_raw'] += 1
             if inside and not removed:

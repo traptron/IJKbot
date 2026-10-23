@@ -30,7 +30,7 @@ export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
 # Автонастройка CycloneDDS: выбор интерфейса маршрута к роботу и добавление unicast peer
-PI_TARGET_HOST="${PI_HOST:-${ROBOT_IP:-10.34.243.154}}"
+PI_TARGET_HOST="${PI_HOST:-${ROBOT_IP:-192.168.0.191}}"
 SRC_IP=$(ip route get "${PI_TARGET_HOST}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')
 if [[ -n "${SRC_IP}" ]]; then
     CYCLONE_XML="/tmp/cyclonedds_ijkbot.xml"

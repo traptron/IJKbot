@@ -30,7 +30,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
-PRIMARY_HOST="10.34.243.154"
+PRIMARY_HOST="192.168.0.191"
 DEFAULT_BACKUP="192.168.1.10"
 PI_HOST="${PI_HOST:-${ROBOT_IP:-${PRIMARY_HOST}}}"
 if [[ "${PI_HOST}" == "${DEFAULT_BACKUP}" ]]; then
@@ -203,7 +203,7 @@ if [[ "${RUN_LOCAL}" != "true" ]]; then
         echo -e "${RED}[FAIL] Робот ${PI_HOST} не отвечает по сети!${NC}"
         if [[ "${FORCE_START}" != "true" ]]; then
             echo -e "${YELLOW}Подсказка:${NC}"
-            echo -e "  - Проверьте Wi-Fi (точка доступа 172.22.35.0/24 или роутер 192.168.1.0/24)."
+            echo -e "  - Проверьте Wi-Fi (подсеть 192.168.0.0/24 или роутер 192.168.1.0/24)."
             echo -e "  - Укажите IP явно: $0 --host <IP>"
             echo -e "  - Для симуляции без робота: $0 --mock --local"
             exit 1
