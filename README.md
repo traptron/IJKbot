@@ -275,6 +275,7 @@ stateDiagram-v2
 |---|---|---|
 | [`start_all_laptop1.sh`](file:///home/lev/IJKbot/scripts/start_all_laptop1.sh) | Запуск судейского ИИ, NiceGUI дашборда и QR-детекции | `./scripts/start_all_laptop1.sh` |
 | [`start_all_laptop2.sh`](file:///home/lev/IJKbot/scripts/start_all_laptop2.sh) | Главный оркестратор оператора (Pi SSH + Nav2 + RViz2) | `./scripts/start_all_laptop2.sh --mode tmux` |
+| [`start_gorod.sh`](scripts/start_gorod.sh) | Отдельный профиль «Город»: Pi/Nav2 и распознавание дорожных знаков на двух ноутбуках; [инструкция](docs/GOROD.md) | `./scripts/start_gorod.sh --role vision` |
 | [`stop_all.sh`](file:///home/lev/IJKbot/scripts/stop_all.sh) | Остановка всех процессов на Ноутбуках и Pi | `./scripts/stop_all.sh --host 192.168.1.10` |
 | [`teleop.sh`](file:///home/lev/IJKbot/scripts/teleop.sh) | Ручное телеуправление с клавиатуры | `./scripts/teleop.sh --speed 0.15` |
 | [`start_rviz.sh`](file:///home/lev/IJKbot/scripts/start_rviz.sh) | Запуск RViz2 с соревновательным профилем | `./scripts/start_rviz.sh` |
