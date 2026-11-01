@@ -269,6 +269,15 @@ class Bridge:
         if self.executor:
             self.executor.shutdown(timeout_sec=3)
             if hasattr(self,'thread'): self.thread.join(timeout=3)
+        # Node.destroy_node does not destroy ActionClient waitables. Leaving one
+        # alive retains a DDS participant and its old network interface when the
+        # bridge is recreated after discovery on a different network.
+        if hasattr(self,'action'):
+            self.action.destroy()
+            del self.action
+        if hasattr(self,'listener'):
+            self.listener.unregister()
+            del self.listener
         if self.node:
             self.node.destroy_node()
             self.node=None
