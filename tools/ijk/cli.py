@@ -19,6 +19,7 @@ Supported profiles & tools:
 from pathlib import Path
 from typing import List, Optional
 import argparse
+import importlib.util
 import os
 import sys
 
@@ -65,6 +66,7 @@ def show_interactive_menu() -> str:
     print("  10) doctor      — Системная диагностика")
     print("  11) ops update  — Обновление и сборка (локально + Pi)")
     print("  12) stop        — Экстренная остановка всех систем")
+    print("  13) ui          — Веб-пульт управления")
     print("  0) Выход")
     print("=======================================================")
     choice = input("Выберите действие [0-13]: ").strip()
@@ -81,8 +83,26 @@ def show_interactive_menu() -> str:
         "10": "doctor",
         "11": "ops-update",
         "12": "stop",
+        "13": "ui",
     }
     return mapping.get(choice, "")
+
+
+def ensure_ui_environment(arguments: List[str], mock: bool) -> bool:
+    """Re-run the web UI inside the ROS Pixi environment when needed."""
+    required = ["aiohttp", "PIL", "pydantic"] if mock else ["aiohttp", "PIL", "pydantic", "rclpy", "geometry_msgs"]
+    missing = [name for name in required if importlib.util.find_spec(name) is None]
+    if not missing:
+        return True
+    from tools.ijk.env import find_pixi, get_pixi_manifest
+    pixi, manifest = find_pixi(), get_pixi_manifest()
+    if not pixi or not manifest or os.environ.get("IJK_UI_PIXI_REEXEC") == "1":
+        print(f"[ui] Не найдены зависимости: {', '.join(missing)}. Проверьте ROS/Pixi окружение.", file=sys.stderr)
+        return False
+    environment = os.environ.copy()
+    environment["IJK_UI_PIXI_REEXEC"] = "1"
+    os.execve(pixi, [pixi, "run", "-m", manifest, "python3", str(Path(__file__).resolve()), *arguments], environment)
+    return False
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -147,6 +167,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_ops.add_argument("--force", action="store_true", help="Принудительное выравнивание времени (timesync)")
     p_ops.add_argument("--bag", type=str, help="Путь к rosbag директории (bag-export)")
 
+    # Web control center. Global flags are also accepted after the subcommand.
+    p_ui = subparsers.add_parser("ui", help="Веб-пульт управления")
+    p_ui.add_argument("--host", dest="ui_host", default="0.0.0.0", help="Адрес веб-сервера")
+    p_ui.add_argument("--port", type=int, default=8080)
+    p_ui.add_argument("--no-browser", action="store_true")
+    p_ui.add_argument("--mock", action="store_true", default=argparse.SUPPRESS)
+    p_ui.add_argument("--local", action="store_true", default=argparse.SUPPRESS)
+    p_ui.add_argument("--no-discovery", action="store_true", default=argparse.SUPPRESS)
+
     for profile_parser in (subparsers.choices['competition'], p_showcase, p_mapping, p_nav):
         profile_parser.add_argument("--no-rviz", action="store_true", help="Не запускать RViz")
 
@@ -161,6 +190,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not command:
             print("Выход.")
             return 0
+
+    if command == "ui" and not ensure_ui_environment(list(argv) if argv is not None else sys.argv[1:], args.mock):
+        return 1
 
     config = load_config()
 
@@ -192,7 +224,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     runner = Runner(config, robot_ip=robot_ip, mock=args.mock, local=args.local)
     role = resolve_role(args.role, mock=args.mock, is_local=args.local)
 
-    if command == "competition":
+    if command == "ui":
+        from tools.ijk.web.server import start_web_server
+        start_web_server(config, host=getattr(args, "ui_host", "0.0.0.0"), port=getattr(args, "port", 8080), no_browser=getattr(args, "no_browser", False), robot_ip=robot_ip, mock=args.mock, local=args.local)
+    elif command == "competition":
         run_competition(runner, config, role=role, mock=args.mock, record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
     elif command == "showcase":
         run_showcase(runner, config, mock=args.mock, gamepad=getattr(args, "use_gamepad", True), record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))

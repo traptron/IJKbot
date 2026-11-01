@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import uuid
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -166,7 +167,7 @@ def generate_launch_description():
         package='twist_mux', executable='twist_mux', name='twist_mux',
         output='screen',
         parameters=[os.path.join(pkg_nav2, 'config', 'twist_mux.yaml')],
-        remappings=[('cmd_vel_out', '/cmd_vel')],
+        remappings=[('cmd_vel_out', '/cmd_vel_mux')],
         condition=IfCondition(LaunchConfiguration('enable_twist_mux')),
     )
 
@@ -218,6 +219,8 @@ def generate_launch_description():
         realsense_laserscan_launch,
         motor_driver_node,
         twist_mux_node,
+        Node(package='bringup', executable='robot_monitor.py', name='ijk_robot_monitor', output='screen',
+             parameters=[{'launch_session':uuid.uuid4().hex}], respawn=True, respawn_delay=.2),
         rplidar_node,
         lidar_self_filter,
     ])

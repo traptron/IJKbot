@@ -14,5 +14,8 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS scripts/robot_monitor.py DESTINATION lib/${PROJECT_NAME})
+install(FILES scripts/web_guard.py DESTINATION lib/${PROJECT_NAME})
+
 ament_package()
 

@@ -1,0 +1,5 @@
+# ROS 2 Jazzy Python packages (rclpy, tf2_ros, nav2_msgs, etc.) must come from ROS/Pixi.
+aiohttp>=3.9,<4
+Pillow>=10,<13
+PyYAML>=6,<7
+pydantic>=2,<3
