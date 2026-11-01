@@ -1,0 +1,4 @@
+hardware:
+  motors:
+    wheel_diameter: 0.075
+    wheel_separation: 0.225

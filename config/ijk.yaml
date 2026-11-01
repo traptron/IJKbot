@@ -1,0 +1,90 @@
+network:
+  default_user: "otmorozki"
+  ssh_port: 22
+  domain_id: 42
+  rmw: "rmw_cyclonedds_cpp"
+  known_hosts:
+    - "192.168.0.191"
+    - "10.197.37.154"
+    - "192.168.1.10"
+  mdns_hostname: "ijkbot.local"
+  subnet_scan_timeout_sec: 2.0
+  remote_ws: "/home/otmorozki/IJKbot"
+
+hardware:
+  lidar:
+    type: "rplidar_a2m8"
+    port: "/dev/ttyUSB0"
+    baudrate: 115200
+  motors:
+    port: "/dev/ttySTS"
+    left_id: 1
+    right_id: 2
+    wheel_diameter: 0.075
+    wheel_separation: 0.225
+  camera:
+    type: "csi"  # csi | realsense | none
+
+wifi:
+  profiles:
+    tplink:
+      ssid: "TP-Link_C1C8"
+      address: "192.168.1.10/24"
+      password: ""  # Указывается в config/ijk.local.yaml
+    dev:
+      ssid: "IJK_Lab"
+      address: null  # DHCP
+      password: ""
+
+limits:
+  max_linear_velocity: 0.25
+  max_angular_velocity: 2.0
+
+gamepad:
+  package: "DS4_teleop"
+  host: "pi"
+  remap_topic: "/cmd_vel_joy"
+
+profiles:
+  competition:
+    description: "Полный соревновательный заезд (LLM + Nav2 + QR + Dashboard)"
+    max_linear_velocity: 0.25
+    enable_brain: true
+    enable_vision: true
+    enable_nav: true
+    enable_robot: true
+    enable_lidar: true
+    use_amcl: false
+    map: "polygon_empty_4x4.yaml"
+
+  showcase:
+    description: "Презентация на ДОД: сенсоры + детекции + экран + teleop"
+    max_linear_velocity: 0.25
+    enable_brain: false
+    enable_vision: true
+    enable_nav: false
+    enable_robot: true
+    enable_lidar: true
+    teleop_source: "gamepad"
+
+  teleop:
+    description: "Ручное управление с клавиатуры или DS4"
+    max_linear_velocity: 0.35
+    allow_speed_override: true
+    enable_robot: true
+    enable_lidar: true
+
+  mapping:
+    description: "Построение карты помещения (SLAM Toolbox + RViz + Teleop)"
+    max_linear_velocity: 0.20
+    enable_robot: true
+    enable_lidar: true
+
+  navigate:
+    description: "Автономная навигация по произвольной карте без LLM"
+    max_linear_velocity: 0.25
+    enable_nav: true
+    enable_robot: true
+    enable_lidar: true
+    map: "polygon_mapping_20261030.yaml"
+
