@@ -1,3 +1,4 @@
 {
-    "cmake.sourceDirectory": "/home/chumohod/IJKbot/sts3215_driver"
+    "cmake.sourceDirectory": "/home/chumohod/IJKbot/sts3215_driver",
+    "cmake.ignoreCMakeListsMissing": true
 }
