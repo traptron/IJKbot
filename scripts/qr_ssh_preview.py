@@ -23,7 +23,7 @@ from vision.qr_decoder import annotate_qr_jpeg, decode_jpeg
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    default_host = f"{os.environ.get('PI_USER', 'otmorozki')}@{os.environ.get('PI_HOST', os.environ.get('ROBOT_IP', '192.168.0.191'))}"
+    default_host = f"{os.environ.get('PI_USER', 'otmorozki')}@{os.environ.get('PI_HOST', os.environ.get('ROBOT_IP', '10.197.37.154'))}"
     parser.add_argument('--host', default=default_host)
     parser.add_argument('--socket', default='/tmp/ijkbot-camera-new.sock')
     parser.add_argument('--remote-script',

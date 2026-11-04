@@ -142,6 +142,30 @@ def generate_launch_description():
         description='Запускать ли базовые системы робота локально (по умолчанию false для ноутбука)'
     )
 
+    declare_max_linear_velocity = DeclareLaunchArgument(
+        'max_linear_velocity',
+        default_value='0.25',
+        description='Аппаратный потолок линейной скорости в драйвере (м/с)'
+    )
+
+    declare_motors_serial_port = DeclareLaunchArgument(
+        'motors_serial_port',
+        default_value='/dev/ttySTS',
+        description='Последовательный порт драйвера моторов STS3215'
+    )
+
+    declare_wheel_diameter = DeclareLaunchArgument(
+        'wheel_diameter',
+        default_value='0.075',
+        description='Калиброванный диаметр колес (м)'
+    )
+
+    declare_wheel_separation = DeclareLaunchArgument(
+        'wheel_separation',
+        default_value='0.225',
+        description='Калиброванная колея ведущих колес (м)'
+    )
+
     # 1. Запуск базовых систем робота (Robot State Publisher, RealSense /scan, STS3215 Driver)
     robot_bringup_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -155,6 +179,10 @@ def generate_launch_description():
             'lidar_serial_port': LaunchConfiguration('lidar_serial_port'),
             'lidar_serial_baudrate': LaunchConfiguration('lidar_serial_baudrate'),
             'mock_hardware': LaunchConfiguration('mock_hardware'),
+            'max_linear_velocity': LaunchConfiguration('max_linear_velocity'),
+            'motors_serial_port': LaunchConfiguration('motors_serial_port'),
+            'wheel_diameter': LaunchConfiguration('wheel_diameter'),
+            'wheel_separation': LaunchConfiguration('wheel_separation'),
         }.items()
     )
 
@@ -166,6 +194,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_nav')),
         launch_arguments={
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'use_twist_mux': 'false',  # robot.launch.py owns the sole /cmd_vel arbiter
             'autostart': LaunchConfiguration('autostart'),
             'map': LaunchConfiguration('map'),
             'use_localization': 'true',
@@ -217,6 +246,10 @@ def generate_launch_description():
         declare_enable_brain,
         declare_enable_nav,
         declare_enable_robot,
+        declare_max_linear_velocity,
+        declare_motors_serial_port,
+        declare_wheel_diameter,
+        declare_wheel_separation,
 
         # Включение подсистем
         robot_bringup_launch,

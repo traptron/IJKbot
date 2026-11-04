@@ -35,7 +35,7 @@ export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
 # Параметры по умолчанию
-PRIMARY_HOST="192.168.0.191"
+PRIMARY_HOST="10.197.37.154"
 DEFAULT_BACKUP="192.168.1.10"
 PI_HOST="${PI_HOST:-${ROBOT_IP:-${PRIMARY_HOST}}}"
 if [[ "${PI_HOST}" == "${DEFAULT_BACKUP}" ]]; then
@@ -625,8 +625,12 @@ if [[ "${RUN_LOCAL}" == "true" ]]; then
 elif [[ "${FORCE_START}" == "true" ]]; then
     START_ROBOT_CMD="${START_ROBOT_CMD} --force"
 fi
-if [[ "${NO_CAMERA}" == "true" && "${RUN_LOCAL}" != "true" ]]; then
-    START_ROBOT_CMD="${START_ROBOT_CMD} --extra enable_camera:=false"
+if [[ "${RUN_LOCAL}" != "true" ]]; then
+    if [[ "${NO_CAMERA}" == "true" ]]; then
+        START_ROBOT_CMD="${START_ROBOT_CMD} --no-camera"
+    else
+        START_ROBOT_CMD="${START_ROBOT_CMD} --with-camera"
+    fi
 fi
 
 case "${LAUNCH_MODE}" in

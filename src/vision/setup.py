@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'qr_reader_node = vision.qr_reader_node:main',
             'rpi_camera_node = vision.rpi_camera_node:main',
+            'city_sign_node = vision.city_sign_node:main',
         ],
     },
 )

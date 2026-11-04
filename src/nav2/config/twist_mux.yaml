@@ -6,6 +6,10 @@ twist_mux:
         topic: /cmd_vel_emergency
         timeout: 0.5
         priority: 100
+      joy:
+        topic: /cmd_vel_joy
+        timeout: 0.5
+        priority: 60
       sm:
         topic: /cmd_vel_sm
         timeout: 0.5

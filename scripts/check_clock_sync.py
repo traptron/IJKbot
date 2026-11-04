@@ -192,7 +192,7 @@ def measure_direct_remote_time(
 
 
 def check_clock_sync(
-    host: str = '192.168.0.191',
+    host: str = '10.197.37.154',
     user: str = 'otmorozki',
     threshold_ms: float = 5.0,
     timeout: float = 4.0,
@@ -222,7 +222,7 @@ def check_clock_sync(
 
     candidate_hosts = [host]
     if allow_fallback:
-        fallback_host = '192.168.1.10' if host != '192.168.1.10' else '192.168.0.191'
+        fallback_host = '192.168.1.10' if host != '192.168.1.10' else '10.197.37.154'
         if fallback_host not in candidate_hosts:
             candidate_hosts.append(fallback_host)
 
@@ -330,8 +330,8 @@ def main() -> int:
     parser.add_argument(
         '--host',
         type=str,
-        default=os.environ.get('PI_HOST', os.environ.get('ROBOT_IP', '192.168.0.191')),
-        help='IP-адрес Raspberry Pi (по умолчанию 192.168.0.191)',
+        default=os.environ.get('PI_HOST', os.environ.get('ROBOT_IP', '10.197.37.154')),
+        help='IP-адрес Raspberry Pi (по умолчанию 10.197.37.154)',
     )
     parser.add_argument(
         '--user',

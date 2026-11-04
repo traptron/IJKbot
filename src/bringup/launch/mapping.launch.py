@@ -48,6 +48,10 @@ def generate_launch_description():
         default_value=os.path.join(pkg_slam, 'config', 'mapper_params_online_async.yaml'),
         description='Профиль параметров slam_toolbox'
     )
+    declare_max_linear_velocity = DeclareLaunchArgument(
+        'max_linear_velocity', default_value='0.20',
+        description='Аппаратный потолок линейной скорости при картографировании (м/с)'
+    )
 
     robot_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -60,6 +64,7 @@ def generate_launch_description():
             'lidar_serial_port': LaunchConfiguration('lidar_serial_port'),
             'lidar_serial_baudrate': LaunchConfiguration('lidar_serial_baudrate'),
             'mock_hardware': LaunchConfiguration('mock_hardware'),
+            'max_linear_velocity': LaunchConfiguration('max_linear_velocity'),
         }.items()
     )
 
@@ -112,6 +117,7 @@ def generate_launch_description():
         declare_mock_hardware,
         declare_scan_topic,
         declare_slam_params_file,
+        declare_max_linear_velocity,
         robot_launch,
         slam_node,
         configure_event,

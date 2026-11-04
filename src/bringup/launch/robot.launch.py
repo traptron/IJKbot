@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import uuid
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -9,12 +10,14 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
     pkg_bringup = get_package_share_directory('bringup')
     pkg_description = get_package_share_directory('description')
     pkg_driver = get_package_share_directory('driver')
+    pkg_nav2 = get_package_share_directory('nav2')
 
     # Аргументы запуска
     declare_enable_camera = DeclareLaunchArgument(
@@ -53,6 +56,11 @@ def generate_launch_description():
         description='Симуляция моторов без UART (false на реальном роботе)'
     )
 
+    declare_enable_twist_mux = DeclareLaunchArgument(
+        'enable_twist_mux', default_value='true',
+        description='Арбитраж команд /cmd_vel_joy, /cmd_vel_sm и /cmd_vel_emergency'
+    )
+
     declare_color_profile = DeclareLaunchArgument(
         'color_profile',
         default_value='640x480x15',
@@ -77,6 +85,30 @@ def generate_launch_description():
         description='Путь к конфигурационному файлу драйвера STS3215'
     )
 
+    declare_max_linear_velocity = DeclareLaunchArgument(
+        'max_linear_velocity',
+        default_value='0.25',
+        description='Аппаратный потолок линейной скорости в драйвере (м/с)'
+    )
+
+    declare_motors_serial_port = DeclareLaunchArgument(
+        'motors_serial_port',
+        default_value='/dev/ttySTS',
+        description='Последовательный порт драйвера моторов STS3215'
+    )
+
+    declare_wheel_diameter = DeclareLaunchArgument(
+        'wheel_diameter',
+        default_value='0.075',
+        description='Калиброванный диаметр колес (м)'
+    )
+
+    declare_wheel_separation = DeclareLaunchArgument(
+        'wheel_separation',
+        default_value='0.225',
+        description='Калиброванная колея ведущих колес (м)'
+    )
+
     enable_camera = LaunchConfiguration('enable_camera')
     enable_motors = LaunchConfiguration('enable_motors')
     enable_lidar = LaunchConfiguration('enable_lidar')
@@ -87,6 +119,10 @@ def generate_launch_description():
     depth_profile = LaunchConfiguration('depth_profile')
     scan_config_file = LaunchConfiguration('scan_config_file')
     driver_params_file = LaunchConfiguration('driver_params_file')
+    max_linear_velocity = LaunchConfiguration('max_linear_velocity')
+    motors_serial_port = LaunchConfiguration('motors_serial_port')
+    wheel_diameter = LaunchConfiguration('wheel_diameter')
+    wheel_separation = LaunchConfiguration('wheel_separation')
 
     # 1. Описание робота и публикация TF-дерева (Robot State Publisher)
     rsp_launch = IncludeLaunchDescription(
@@ -116,9 +152,23 @@ def generate_launch_description():
         output='screen',
         parameters=[
             driver_params_file,
-            {'mock_hardware': mock_hardware}
+            {
+                'mock_hardware': ParameterValue(mock_hardware, value_type=bool),
+                'max_linear_velocity': ParameterValue(max_linear_velocity, value_type=float),
+                'serial_port': motors_serial_port,
+                'wheel_diameter': ParameterValue(wheel_diameter, value_type=float),
+                'wheel_separation': ParameterValue(wheel_separation, value_type=float),
+            }
         ],
         condition=IfCondition(enable_motors)
+    )
+
+    twist_mux_node = Node(
+        package='twist_mux', executable='twist_mux', name='twist_mux',
+        output='screen',
+        parameters=[os.path.join(pkg_nav2, 'config', 'twist_mux.yaml')],
+        remappings=[('cmd_vel_out', '/cmd_vel_mux')],
+        condition=IfCondition(LaunchConfiguration('enable_twist_mux')),
     )
 
     rplidar_node = Node(
@@ -156,13 +206,21 @@ def generate_launch_description():
         declare_lidar_serial_port,
         declare_lidar_serial_baudrate,
         declare_mock_hardware,
+        declare_enable_twist_mux,
         declare_color_profile,
         declare_depth_profile,
         declare_scan_config_file,
         declare_driver_params_file,
+        declare_max_linear_velocity,
+        declare_motors_serial_port,
+        declare_wheel_diameter,
+        declare_wheel_separation,
         rsp_launch,
         realsense_laserscan_launch,
         motor_driver_node,
+        twist_mux_node,
+        Node(package='bringup', executable='robot_monitor.py', name='ijk_robot_monitor', output='screen',
+             parameters=[{'launch_session':uuid.uuid4().hex}], respawn=True, respawn_delay=.2),
         rplidar_node,
         lidar_self_filter,
     ])
