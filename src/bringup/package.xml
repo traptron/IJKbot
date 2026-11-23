@@ -21,10 +21,12 @@
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>image_transport</exec_depend>
   <exec_depend>image_transport_plugins</exec_depend>
+  <exec_depend>rmw_cyclonedds_cpp</exec_depend>
   <exec_depend>driver</exec_depend>
   <exec_depend>description</exec_depend>
   <exec_depend>nav2</exec_depend>
   <exec_depend>twist_mux</exec_depend>
+  <exec_depend>vision_cpp</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
