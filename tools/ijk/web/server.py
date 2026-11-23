@@ -42,6 +42,9 @@ class ControlCenterServer(ControlServices):
         self.last_error = None
         self.maps = MapCatalog(ROOT / 'src/nav2/maps')
         self.jobs = {}
+        self.maintenance_job = None
+        self.process_job = None
+        self.switching_mode = False
         self.save_task = None
         self.save_proc = None
         self.save_timeout = 30
@@ -58,7 +61,8 @@ class ControlCenterServer(ControlServices):
         self.app = web.Application(middlewares=[self.origin_guard])
         self.app.add_routes([
             web.get('/', self.index), web.static('/static/', STATIC),
-            web.get('/api/status', self.status), web.post('/api/profile/start', self.start),
+            web.post('/api/mode', self.set_mode),
+            web.get('/api/maintenance', self.maintenance_status), web.get('/api/status', self.status), web.post('/api/profile/start', self.start),
             web.post('/api/profile/stop', self.stop), web.post('/api/estop', self.estop),
             web.post('/api/reset', self.reset), web.post('/api/discovery', self.discovery),
             web.post('/api/ops/{action}', self.ops), web.get('/ws/teleop', self.teleop),
@@ -100,7 +104,9 @@ class ControlCenterServer(ControlServices):
         for task in (self.control_task, self.safety_task, self.link_task):
             if task:
                 task.cancel()
-                with contextlib.suppress(asyncio.CancelledError): await task
+                try:await task
+                except asyncio.CancelledError:pass
+                except Exception as exc:await self.log('Ошибка фоновой задачи при завершении: '+str(exc))
         await self.cancel_save()
         await self.stop_process()
         self.watchdog_task.cancel()
@@ -110,6 +116,9 @@ class ControlCenterServer(ControlServices):
 
     async def watchdog(self):
         while True:
+            if self.switching_mode:
+                await asyncio.sleep(.05)
+                continue
             if self.estopped:
                 self.bridge.publish(emergency=True)
             if self.moving and time.monotonic() - self.last_command > .35:
@@ -130,7 +139,7 @@ class ControlCenterServer(ControlServices):
     async def status(self, request):
         runner = Runner(self.config, self.robot_ip, self.mock, self.local)
         online, tmux = False, False
-        if self.robot_ip and not self.mock and not self.local:
+        if self.robot_ip and not self.local:
             online = await asyncio.to_thread(is_ssh_responsive, self.robot_ip, self.config.network.default_user, 2)
             if online:
                 tmux = await asyncio.to_thread(runner.is_remote_tmux_running)
@@ -150,8 +159,47 @@ class ControlCenterServer(ControlServices):
         else: cmd.append('--no-discovery')
         return cmd + parts
 
-    async def run_process(self, name, parts):
+    async def set_mode(self, request):
+        data=await self.json_body(request)
+        if set(data)!={'mock'} or type(data['mock']) is not bool:
+            raise web.HTTPBadRequest(text='Укажите mock: true или false')
         async with self.lock:
+            if data['mock']==self.mock:return web.json_response({'mock':self.mock})
+            if self.control_id or self.teleop_client:
+                raise web.HTTPConflict(text='Сначала освободите управление')
+            if self.proc or self.navigation.busy() or self.navigation.cancel_uncertain:
+                raise web.HTTPConflict(text='Сначала остановите профиль и навигационную задачу')
+            if any(task and not task.done() for task in (self.save_task,self.link_task)) or (self.maintenance_job and self.maintenance_job['state']=='running'):
+                raise web.HTTPConflict(text='Дождитесь завершения текущей операции')
+            self.switching_mode=True
+            try:
+                replacement=await asyncio.to_thread(Bridge,self.config,data['mock'],self.robot_ip)
+                if replacement.error:
+                    raise web.HTTPServiceUnavailable(text='Не удалось включить реальный ROS-мост: '+replacement.error)
+                old_bridge=self.bridge
+                old_bridge.publish()
+                old_bridge.publish(emergency=True)
+                old_bridge.lease('stop',self.lease_token or '',self.lease_seq)
+                # Publish the replacement before awaiting destruction: no new
+                # request or background tick may access the closing DDS handles.
+                self.bridge=replacement
+                self.mock=data['mock']
+                self.navigation=Navigation(self.bridge,self.log)
+                self.confirmed=None
+                self.plans.clear()
+                self.control_broken,self.was_armed=False,False
+                self.lease_token=None
+                self.moving=False
+                self.stationary_since=None
+                await asyncio.to_thread(old_bridge.close)
+                await self.log('Режим: '+('симуляция' if self.mock else 'реальное оборудование')+'. Профиль не запущен.')
+                return web.json_response({'mock':self.mock})
+            finally:self.switching_mode=False
+
+    async def run_process(self, name, parts, job=None):
+        async with self.lock:
+            if job is None and self.maintenance_job and self.maintenance_job['state']=='running':
+                raise web.HTTPConflict(text='Дождитесь операции обслуживания')
             if self.navigation.busy() or self.navigation.cancel_uncertain:
                 raise web.HTTPConflict(text='Сначала подтвердите отмену старой цели навигации')
             if self.save_task and not self.save_task.done():
@@ -169,14 +217,22 @@ class ControlCenterServer(ControlServices):
                 stderr=asyncio.subprocess.STDOUT, start_new_session=True)
             proc = self.proc
             self.active_profile = name
+            self.process_job = job
             self.process_state = 'running'
-            asyncio.create_task(self.read_output(proc, name))
+            asyncio.create_task(self.read_output(proc, name, job))
             await self.log('Запуск: ' + name)
 
-    async def read_output(self, proc, name):
+    async def read_output(self, proc, name, job=None):
         while line := await proc.stdout.readline():
-            await self.log(line.decode('utf-8', errors='replace').rstrip())
+            message = line.decode('utf-8', errors='replace').rstrip()
+            if job: self.maintenance_line(job, message)
+            await self.log(message)
         code = await proc.wait()
+        if job:
+            cancelled=job.pop('cancel_requested',False)
+            detail=next((line for line in reversed(job['output']) if line.strip()),'Нет вывода процесса')
+            self.finish_maintenance(job,'cancelled' if cancelled else 'succeeded' if code==0 else 'failed',
+                'Операция остановлена' if cancelled else 'Операция завершена' if code==0 else f'{detail} (код завершения {code})')
         if self.proc is proc:
             self.active_profile = None
             self.proc = None
@@ -189,6 +245,8 @@ class ControlCenterServer(ControlServices):
     async def stop_process(self):
         async with self.lock:
             proc = self.proc
+            if proc and self.process_job and self.process_job['state']=='running':
+                self.process_job['cancel_requested']=True
             if proc:
                 self.process_state = 'stopping'
             if proc and proc.returncode is None:
@@ -316,19 +374,54 @@ class ControlCenterServer(ControlServices):
         await self.log('Аварийная остановка снята; движение не возобновлено.')
         return web.json_response({'ok': True})
 
+    def new_maintenance(self, action):
+        if self.switching_mode:raise web.HTTPConflict(text='Дождитесь переключения режима')
+        if self.maintenance_job and self.maintenance_job['state']=='running':
+            raise web.HTTPConflict(text='Дождитесь текущей операции обслуживания')
+        job={'id':uuid.uuid4().hex,'type':'maintenance','action':action,'state':'running',
+             'started_at':time.time(),'finished_at':None,'message':'Начинаем операцию','output':[],'error':None}
+        self.jobs[job['id']]=job
+        self.maintenance_job=job
+        self.prune_jobs()
+        return job
+
+    def maintenance_line(self, job, message):
+        job['message']=message
+        job['output'].append(message)
+        del job['output'][:-200]
+
+    def finish_maintenance(self, job, state, message):
+        job.update(state=state,finished_at=time.time(),error=message if state=='failed' else None)
+        self.maintenance_line(job,message)
+
+    async def maintenance_status(self, request):
+        return web.json_response({'job':self.maintenance_job})
+
     async def discovery(self, request):
         if self.proc and self.proc.returncode is None:
             raise web.HTTPConflict(text='Остановите профиль перед поиском')
-        self.robot_ip = await asyncio.to_thread(discover_robot, self.config)
-        if self.robot_ip and not self.mock:
-            self.bridge.publish()
-            self.moving = False
-            self.bridge.close()
-            self.bridge = Bridge(self.config, self.mock, self.robot_ip)
-            self.navigation = Navigation(self.bridge, self.log)
-            self.confirmed = None
-            if self.control_id: await self.lose_control("Настройки соединения изменились")
-        return web.json_response({'robot_ip': self.robot_ip})
+        job=self.new_maintenance('discovery')
+        loop=asyncio.get_running_loop()
+        def progress(message):loop.call_soon_threadsafe(self.maintenance_line,job,message)
+        try:
+            self.maintenance_line(job,'Поиск Pi: проверка SSH и адресов локальной сети')
+            self.robot_ip = await asyncio.to_thread(discover_robot, self.config, verbose=False, progress=progress)
+            if self.robot_ip and not self.mock:
+                self.bridge.publish()
+                self.moving = False
+                self.bridge.close()
+                self.bridge = Bridge(self.config, self.mock, self.robot_ip)
+                self.navigation = Navigation(self.bridge, self.log)
+                self.confirmed = None
+                if self.control_id: await self.lose_control("Настройки соединения изменились")
+            if self.robot_ip:
+                mode=' Управление остаётся в симуляции.' if self.mock else ' Готовность ROS проверяется отдельно.'
+                self.finish_maintenance(job,'succeeded',f'Pi найдена: {self.robot_ip}. SSH доступен.'+mode)
+            else:self.finish_maintenance(job,'failed','Pi не найдена. Проверьте питание и подключение к локальной сети.')
+            return web.json_response({'robot_ip': self.robot_ip,'job_id':job['id']})
+        except Exception as exc:
+            self.finish_maintenance(job,'failed',str(exc))
+            raise
 
     async def ops(self, request):
         action = request.match_info['action']
@@ -343,8 +436,14 @@ class ControlCenterServer(ControlServices):
             if profile not in {'scan', 'list', 'dev', 'tplink'}:
                 raise web.HTTPBadRequest(text='Недопустимый профиль Wi-Fi')
             parts += ['--profile', profile]
-        await self.run_process('ops ' + action, parts)
-        return web.json_response({'ok': True})
+        job=self.new_maintenance(action)
+        try:
+            self.maintenance_line(job,'Запуск: '+('синхронизация времени' if action=='timesync' else 'получение списка Wi-Fi'))
+            await self.run_process('ops ' + action, parts, job=job)
+        except Exception as exc:
+            self.finish_maintenance(job,'failed',getattr(exc,'text',None) or str(exc))
+            raise
+        return web.json_response({'ok': True,'job_id':job['id']},status=202)
 
     async def list_maps(self, request):
         return web.json_response({'maps': await asyncio.to_thread(self.maps.list),

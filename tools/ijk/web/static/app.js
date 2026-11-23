@@ -20,7 +20,7 @@ try {
   }
 } catch (_) { /* Storage may be unavailable; controls remain usable. */ }
 function remember() { try { localStorage.setItem(storageKey, JSON.stringify(settings)); } catch (_) {} }
-function notice(message='') { $('#alert').textContent=message; $('#alert').hidden=!message; }
+function notice(message='',kind='error') {const box=$('#alert');box.textContent=message;box.hidden=!message;box.dataset.kind=kind;box.setAttribute('role',kind==='error'?'alert':'status');}
 async function api(path,data={}) {
   const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json',...(controlId?{'X-Control-Id':controlId}:{})},body:JSON.stringify(data)});
   if (!response.ok) throw new Error(await response.text());
@@ -58,7 +58,17 @@ function send() {
   if (controlId && teleop?.readyState===WebSocket.OPEN) teleop.send(JSON.stringify({type:'twist',v,w,linear_limit:settings.linear,angular_limit:settings.angular}));
 }
 function release() { pointer=null; x=y=0; $('#stick').style.transform='translate(-50%,-50%)'; send(); }
-function canDrive() { return !!controlId&&controlLeaseReady&&!state.estopped&&(state.mock||state.ros_available)&&teleop?.readyState===WebSocket.OPEN; }
+function driveBlockReason() {
+  if(modeBusy)return 'Переключается режим управления';
+  if(state.estopped)return 'Движение заблокировано аварийной остановкой';
+  if(state.control_error)return 'Ошибка управляющего цикла: '+state.control_error;
+  if(teleop?.readyState!==WebSocket.OPEN)return 'Подключается управляющий канал';
+  if(!controlId)return 'Нажмите «Взять управление», чтобы включить джойстик';
+  if(!controlLeaseReady)return state.mock?'Ожидаем готовности локальной симуляции':'Ожидаем подтверждения управляющей сессии на Pi';
+  if(!state.mock&&!state.ros_available)return 'ROS-мост недоступен';
+  return '';
+}
+function canDrive() { return !driveBlockReason(); }
 const joystick=$('#joystick');
 function move(event) {
   if(event.pointerId!==pointer) return;
@@ -68,7 +78,7 @@ function move(event) {
   x=dx/radius;y=dy/radius;
   $('#stick').style.transform=`translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`;send();
 }
-joystick.addEventListener('pointerdown',e=>{if(pointer!==null||!canDrive())return;pointer=e.pointerId;joystick.setPointerCapture(pointer);move(e);});
+joystick.addEventListener('pointerdown',e=>{if(pointer!==null)return;if(!canDrive()){notice(driveBlockReason());return;}pointer=e.pointerId;joystick.setPointerCapture(pointer);move(e);});
 joystick.addEventListener('pointermove',move);
 for(const event of ['pointerup','pointercancel','lostpointercapture']) joystick.addEventListener(event,e=>{if(e.pointerId===pointer)release();});
 $$('[data-drive]').forEach(button=>{
@@ -128,19 +138,26 @@ function renderMaps() {
   const list=$('#map-list');list.replaceChildren();
   for(const map of catalog) {
     const row=document.createElement('div'), text=document.createElement('span'), title=document.createElement('b'), info=document.createElement('small'), button=document.createElement('button');
-    title.textContent=map.name;info.textContent=map.valid?`${map.width} × ${map.height} · ${map.resolution} м/пикс. · ${new Date(map.modified).toLocaleString()}`:map.error;
+    row.dataset.selected=String(map.id===selected);button.className='secondary';button.setAttribute('aria-pressed',String(map.id===selected));title.textContent=map.name;info.textContent=map.valid?`${map.width} × ${map.height} · ${map.resolution} м/пикс. · ${new Date(map.modified).toLocaleString()}`:map.error;
     text.append(title,info);button.textContent=map.id===selected?'Выбрана':'Выбрать';button.disabled=!map.valid;
     button.onclick=()=>selectMap(map.id);row.append(text,button);list.append(row);
   }
   if(!catalog.length)list.textContent='Сохранённых карт пока нет.';
 }
-function selectMap(id){settings.profiles.navigate.map=id||null;remember();renderMaps();updateControls();window.dispatchEvent(new Event('ijk-map-changed'));}
+function selectMap(id){notice(id?'Для следующего Navigate выбрана карта '+id:'Выбор карты снят','success');settings.profiles.navigate.map=id||null;remember();renderMaps();updateControls();window.dispatchEvent(new Event('ijk-map-changed'));}
 $$('.map-select').forEach(select=>select.onchange=()=>selectMap(select.value));
 async function loadMaps(){const data=await get('/api/maps');catalog=data.maps;if(settings.profiles.navigate.map===null&&data.default_map)settings.profiles.navigate.map=data.default_map;remember();renderMaps();updateControls();window.dispatchEvent(new Event('ijk-map-changed'));}
-$('#reload-maps').onclick=()=>loadMaps().catch(e=>notice(e.message));
+$('#reload-maps').onclick=()=>act(loadMaps,'Обновляем каталог карт…','Каталог карт обновлён');
 const phaseLabels={idle:'Процесс не запущен',starting:'Запускается',running:'Процесс запущен',stopping:'Останавливается',error:'Ошибка процесса'};
+let maintenanceBusy=false, maintenanceStarting=false, maintenanceId=null, modeBusy=false, controlOwned=false;
 function updateControls() {
-  const busy=requestBusy||saving, active=!!state.active_profile;
+  const busy=requestBusy||saving||modeBusy, active=!!state.active_profile;
+  if(modeBusy)$('#claim-control').disabled=true;
+  if(!modeBusy)$('#simulation-toggle').checked=!!state.mock;
+  $('#simulation-toggle').disabled=busy||active||maintenanceBusy||controlOwned;
+  $('#simulation-toggle').setAttribute('aria-busy',String(modeBusy));
+  $('#discover').disabled=busy||maintenanceBusy||active;
+  $$('[data-op]').forEach(b=>b.disabled=busy||maintenanceBusy||active||!!state.estopped);
   const invalidMap=settings.profile==='navigate'&&!catalog.some(map=>map.id===settings.profiles.navigate.map&&map.valid);
   $('#start-profile').disabled=busy||active||!!state.estopped||invalidMap;
   $('#start-profile').textContent=requestBusy?'Выполняется…':`Запустить ${names[settings.profile]}`;
@@ -150,14 +167,18 @@ function updateControls() {
   for(const selector of ['#quick-save','#save-map','#save-stop'])$(selector).disabled=busy||!!state.estopped;
   $('#discard-stop').disabled=busy;
   $('#estop-alert').hidden=!state.estopped;
-  $('#drive-status').textContent=state.estopped?'Движение заблокировано':!canDrive()?'Канал управления недоступен':state.mock?'Симуляция: команды на оборудование не публикуются':state.active_profile==='mapping'?'Mapping работает. Можно рулить джойстиком и сохранять карту.':state.active_profile?'Можно управлять джойстиком. Отпустите для остановки.':'Для движения запустите Teleop или Mapping. Канал управления подключен.';
+  const blocked=driveBlockReason();
+  joystick.dataset.enabled=String(!blocked);joystick.setAttribute('aria-disabled',String(!!blocked));
+  $$('[data-drive]').forEach(button=>button.disabled=!!blocked);
+  $('#drive-status').textContent=blocked||(state.mock?'Симуляция: можно двигать стик, команды на оборудование не публикуются':state.active_profile==='mapping'?'Mapping работает. Можно рулить джойстиком и сохранять карту.':state.active_profile?'Отпустите стик для остановки.':'Для движения робота запустите Teleop или Mapping.');
 }
 function displayState() {
   $('#ip').textContent=`${state.robot_ip||'Не найден'} · ${state.ssh_online?'SSH доступен':'SSH недоступен'}`;
   $('#domain').textContent=`${state.ros_available?'Подключён':state.mock?'Mock':'Недоступен'} · ${state.domain_id??'—'}`;
   $('#tmux').textContent=state.tmux_running?'Работает':'Не запущен';
   $('#active').textContent=state.active_profile||'Не запущен';
-  $('#connection').textContent=state.mock?'● СИМУЛЯЦИЯ':state.ssh_online?'● PI В СЕТИ':'○ PI НЕДОСТУПНА';
+  $('#connection').textContent=state.mock?'Симуляция':state.ssh_online?'Pi в сети':'Pi недоступна';
+  $('#connection').dataset.state=state.mock?'mock':state.ssh_online?'online':'offline';
   $('#process-state').textContent=phaseLabels[state.process_state]||'Процесс не запущен';
   const o=state.active_options||{}, rows=[];
   if(state.active_profile)rows.push(`Профиль: ${names[state.active_profile]||state.active_profile}`);
@@ -170,15 +191,15 @@ function displayState() {
 }
 async function refresh(){state=await get('/api/status');if(state.estopped)release();displayState();if(state.map_job&&!handledJobs.has(state.map_job.id)&&watchedJob!==state.map_job.id)watchJob(state.map_job.id);}
 async function refreshLoop(){try{await refresh();}catch(e){notice(`Статус недоступен: ${e.message}`);}setTimeout(refreshLoop,2000);}
-async function act(fn){if(requestBusy)return;requestBusy=true;updateControls();try{notice();await fn();await refresh();}catch(e){notice(e.message);}finally{requestBusy=false;updateControls();}}
+async function act(fn,label='Выполнение действия…',complete='Действие выполнено'){if(requestBusy)return;requestBusy=true;updateControls();try{notice(label,'running');await fn();await refresh();notice(complete,'success');}catch(e){notice(e.message);}finally{requestBusy=false;updateControls();}}
 $('#start-profile').onclick=()=>act(async()=>{
   readOptions();const profile=settings.profile,stored=settings.profiles[profile],options={record:stored.record};
   if(stored.record&&stored.bag_name)options.bag_name=stored.bag_name;
   if(profile!=='teleop')options.rviz=stored.rviz;
   if(profile==='navigate'){options.map=stored.map;options.use_amcl=stored.use_amcl;}
   state.process_state='starting';displayState();await api('/api/profile/start',{profile,options});
-});
-$$('[data-start]').forEach(b=>b.onclick=()=>act(()=>api('/api/profile/start',{profile:b.dataset.start})));
+},'Запускаем выбранный профиль…','Процесс профиля запущен. Готовность оборудования смотрите в «Состоянии»');
+$$('[data-start]').forEach(b=>b.onclick=()=>act(()=>api('/api/profile/start',{profile:b.dataset.start}),'Запуск подсистемы…','Процесс подсистемы запущен; проверьте его вывод в журнале'));
 function newMapName(){const now=new Date(),pad=n=>String(n).padStart(2,'0');return `map_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;}
 function resetNames(){for(const id of ['map-name','quick-map-name','stop-map-name'])$('#'+id).value=newMapName();}
 function jobText(job){return job.state==='running'?`Сохраняется карта «${job.name}»…`:job.state==='succeeded'?`Сохранена карта «${job.name}»${job.stop_after?'; Mapping остановлен':''}`:job.error||'Сохранение отменено';}
@@ -191,7 +212,7 @@ async function watchJob(id){
     handledJobs.add(id);settings.seenJob=id;remember();watchedJob=null;saving=false;
     if(job.map_id){await loadMaps();selectMap(job.map_id);resetNames();}
     if(job.state==='succeeded'){
-      if($('#mapping-stop').open)$('#mapping-stop').close();notice();
+      if($('#mapping-stop').open)$('#mapping-stop').close();notice(jobText(job),'success');
     }else{notice(jobText(job));$('#stop-error').textContent=jobText(job);}
     await refresh();
   }catch(e){notice(`Не удалось получить результат сохранения: ${e.message}`);watchedJob=null;saving=false;}
@@ -210,16 +231,70 @@ function requestStop(){
     $('#stop-map-name').value=$('#quick-map-name').value||newMapName();$('#stop-error').textContent='';$('#mapping-stop').showModal();
   }else stopNow();
 }
-async function stopNow(){await act(async()=>{state.process_state='stopping';displayState();await api('/api/profile/stop');$('#mapping-stop').close();});}
+async function stopNow(){await act(async()=>{state.process_state='stopping';displayState();await api('/api/profile/stop');$('#mapping-stop').close();},'Останавливаем профиль…','Профиль остановлен');}
 $('#stop-profile').onclick=requestStop;$('#bench-stop').onclick=requestStop;
 $('#cancel-stop').onclick=()=>$('#mapping-stop').close();
 $('#discard-stop').onclick=stopNow;
 $('#save-stop').onclick=()=>saveMap($('#stop-map-name').value,true);
 $('#estop').onclick=async()=>{release();try{await api('/api/estop');await refresh();}catch(e){notice(e.message);}};
-$('#reset').onclick=()=>act(()=>api('/api/reset'));
-$('#discover').onclick=()=>act(()=>api('/api/discovery'));
-$$('[data-op]').forEach(b=>b.onclick=()=>act(()=>api('/api/ops/'+b.dataset.op,{profile:'list'})));
-$$('.tab').forEach(b=>b.onclick=()=>{$$('.tab').forEach(t=>t.classList.toggle('selected',t===b));$$('.page').forEach(p=>p.hidden=p.id!==b.dataset.tab);});
+$('#reset').onclick=()=>act(()=>api('/api/reset'),'Снимаем аварийную блокировку…','Блокировка снята. Движение не возобновлено');
+const maintenanceNames={discovery:'Поиск робота',timesync:'Синхронизация времени',wifi:'Список Wi-Fi'};
+function renderMaintenance(job){
+  const labels={running:'Выполняется',succeeded:'Завершено',failed:'Ошибка',cancelled:'Остановлено'};
+  maintenanceBusy=job.state==='running';
+  $('#maintenance-panel').dataset.state=job.state;
+  $('#maintenance-title').textContent=maintenanceNames[job.action]||'Обслуживание';
+  $('#maintenance-state').textContent=labels[job.state]||job.state;
+  $('#maintenance-summary').textContent=job.message;
+  const elapsed=Math.max(0,(job.finished_at||Date.now()/1000)-job.started_at);
+  $('#maintenance-time').textContent=(maintenanceBusy?'Прошло: ':'Длительность: ')+elapsed.toFixed(1)+' с';
+  const output=$('#maintenance-output'),atBottom=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
+  const text=(job.output||[]).join('\n');if(output.textContent!==text){output.textContent=text;if(atBottom)output.scrollTop=output.scrollHeight;}
+  $$('[data-op],#discover').forEach(button=>button.setAttribute('aria-busy',String(maintenanceBusy&&((button.dataset.op||'discovery')===job.action))));
+  updateControls();
+}
+let maintenanceTerminal=null;
+async function pollMaintenance(){
+  try{
+    const {job}=await get('/api/maintenance');
+    if(job&&!(maintenanceStarting&&job.id===maintenanceId)){
+      renderMaintenance(job);
+      if(!maintenanceStarting)maintenanceId=job.id;
+      if(job.state!=='running'&&maintenanceTerminal!==job.id){
+        maintenanceTerminal=job.id;
+        if(document.querySelector('#ops').hidden===false)notice(job.message,job.state==='succeeded'?'success':'error');
+      }
+    }
+  }catch(e){if(maintenanceBusy){$('#maintenance-summary').textContent='Не удаётся получить ход операции: '+e.message;}}
+}
+setInterval(pollMaintenance,800);pollMaintenance();
+async function runMaintenance(action){
+  if(requestBusy||maintenanceBusy)return;
+  maintenanceStarting=true;requestBusy=true;maintenanceBusy=true;
+  const name=maintenanceNames[action];
+  renderMaintenance({action,state:'running',started_at:Date.now()/1000,message:'Запрос отправляется на сервер…',output:[]});
+  notice(name+': запускаем…','running');
+  try{const response=await api(action==='discovery'?'/api/discovery':'/api/ops/'+action,{profile:'list'});maintenanceId=response.job_id;}
+  catch(e){notice(e.message);renderMaintenance({action,state:'failed',started_at:Date.now()/1000,finished_at:Date.now()/1000,message:e.message,output:[e.message]});}
+  finally{maintenanceStarting=false;requestBusy=false;await pollMaintenance();updateControls();}
+}
+$('#discover').onclick=()=>runMaintenance('discovery');
+$$('[data-op]').forEach(b=>b.onclick=()=>runMaintenance(b.dataset.op));
+$('#open-ops-logs').onclick=()=>document.querySelector('[data-tab="logs"]').click();
+const pageCopy={control:['Управление','Ручное движение и настройки запуска'],maps:['Карты','Сохранённые пространства для навигации'],health:['Состояние','Приводы, датчики и качество связи'],routes:['Места и маршруты','Точки назначения на выбранной карте'],bench:['Стенд','Проверка отдельных подсистем'],ops:['Обслуживание','Подключение и настройки системы'],logs:['Журнал','События и вывод процессов']};
+const mobileNavigation=matchMedia('(max-width:900px)');
+function syncNavigation(){document.querySelector('.sidebar').toggleAttribute('inert',mobileNavigation.matches&&!document.body.classList.contains('nav-open'));}
+mobileNavigation.addEventListener('change',syncNavigation);syncNavigation();
+function closeNavigation(){document.body.classList.remove('nav-open');$('#nav-toggle').setAttribute('aria-expanded','false');$('#nav-backdrop').hidden=true;syncNavigation();}
+$('#nav-toggle').onclick=()=>{const open=!document.body.classList.contains('nav-open');document.body.classList.toggle('nav-open',open);$('#nav-toggle').setAttribute('aria-expanded',String(open));$('#nav-backdrop').hidden=!open;syncNavigation();};
+$('#nav-backdrop').onclick=closeNavigation;
+document.addEventListener('keydown',event=>{if(event.key==='Escape')closeNavigation();});
+$$('.tab').forEach(b=>b.onclick=()=>{
+  $$('.tab').forEach(t=>{t.classList.toggle('selected',t===b);if(t===b)t.setAttribute('aria-current','page');else t.removeAttribute('aria-current');});
+  $$('.page').forEach(p=>p.hidden=p.id!==b.dataset.tab);
+  $('#page-title').textContent=pageCopy[b.dataset.tab][0];$('#page-description').textContent=pageCopy[b.dataset.tab][1];document.title=pageCopy[b.dataset.tab][0]+' · IJKbot';
+  closeNavigation();window.scrollTo({top:0,behavior:'instant'});
+});
 $('#clear').onclick=()=>{$('#log').textContent='';};
 $('#pause').onclick=()=>{paused=!paused;$('#pause').textContent=paused?'Продолжить':'Пауза';};
 resetNames();showOptions();connectTeleop();connectLogs();loadMaps().catch(e=>notice(e.message));refreshLoop();
@@ -227,5 +302,19 @@ resetNames();showOptions();connectTeleop();connectLogs();loadMaps().catch(e=>not
 setInterval(()=>{
   if(controlId&&!document.hidden&&teleop?.readyState===WebSocket.OPEN)teleop.send(JSON.stringify({type:'heartbeat'}));
 },100);
-$('#claim-control').onclick=()=>{if(teleop?.readyState===WebSocket.OPEN)teleop.send(JSON.stringify({type:'claim'}));else{pendingClaim=true;notice('Подключается управляющий канал…');}};
+$('#claim-control').onclick=()=>{notice('Запрос управления…');if(teleop?.readyState===WebSocket.OPEN)teleop.send(JSON.stringify({type:'claim'}));else{pendingClaim=true;notice('Подключается управляющий канал…');}};
 $('#release-control').onclick=()=>{release();if(teleop?.readyState===WebSocket.OPEN)teleop.send(JSON.stringify({type:'release'}));};
+
+$('#simulation-toggle').onchange=async event=>{
+  if(modeBusy)return;
+  const requested=event.target.checked;
+  modeBusy=true;updateControls();
+  notice(requested?'Включаем симуляцию…':'Подключаем реальный ROS-мост…','running');
+  try{
+    const result=await api('/api/mode',{mock:requested});
+    state.mock=result.mock;controlId=null;controlLeaseReady=false;release();
+    await refresh();
+    notice(result.mock?'Симуляция включена. Команды не отправляются оборудованию':'Симуляция выключена. Для движения нужны профиль и подтверждённая связь с Pi','success');
+  }catch(e){notice(e.message);}
+  finally{modeBusy=false;updateControls();}
+};

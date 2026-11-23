@@ -55,6 +55,8 @@ class ControlServices:
             raise web.HTTPConflict(text='Нет свежей управляющей сессии')
 
     def lease_ready(self):
+        task=getattr(self,'control_task',None)
+        if task is not None and task.done():return False
         sample=self.bridge.telemetry.snapshot()['topics']['guard']
         data=sample['data'] or {}
         return (not self.control_broken and sample['age_s'] is not None and sample['age_s']<.3
@@ -112,16 +114,24 @@ class ControlServices:
         elif not self.active_profile:reason='Ожидание команды'
         if self.navigation.state=='failed' and not self.estopped and not self.control_broken:
             reason=self.navigation.error or 'Ошибка навигационной задачи'
+        task=getattr(self,'control_task',None)
+        control_error=None
+        if task is not None and task.done():
+            control_error='Управляющий цикл остановлен' if task.cancelled() else str(task.exception() or 'Управляющий цикл завершился')
+            if not self.estopped:reason='Ошибка управляющей сессии: '+control_error
         result.update({'mock':self.mock,'estopped':self.estopped,'ros_error':self.bridge.error,'navigation':self.navigation.snapshot(),
             'summary':reason or ('Ожидание команды' if self.navigation.state not in ('running','waiting') else 'Выполняется маршрут'),
             'autonomy_ready':self.active_profile=='navigate' and self.autonomous_reason() is None,
-            'control':{'owned':self.control_id is not None,'ready':self.lease_ready(),
+            'control':{'owned':self.control_id is not None,'ready':self.lease_ready(),'error':control_error,
                 'broken':self.control_broken,'browser_age_s':None if not self.control_id else time.monotonic()-self.control_seen},
             'localization_confirmed':bool(self.confirmed and self.confirmed[0]==id(self.proc))})
         return result
 
     async def control_tick(self):
         while True:
+            if self.switching_mode:
+                await asyncio.sleep(.05)
+                continue
             self.probe_seq+=1;self.bridge.probe(self.probe_seq)
             if self.control_id:
                 self.lease_seq+=1
@@ -165,6 +175,8 @@ class ControlServices:
 
     async def claim_control(self,ws):
         async with self.claim_lock:
+            if self.switching_mode:raise ValueError('Дождитесь переключения режима')
+            if self.control_task.done():raise ValueError('Управляющий цикл остановлен. Перезапустите пульт.')
             await self._claim_control(ws)
 
     async def _claim_control(self,ws):
