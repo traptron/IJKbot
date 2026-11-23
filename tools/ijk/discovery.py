@@ -3,7 +3,7 @@
 Cascade:
 1. Explicit --host flag or ROBOT_IP / PI_HOST env
 2. Last cached IP (~/.cache/ijk/last_ip)
-3. mDNS (ijkbot.local)
+3. mDNS (ijkbot.local and tokmachka.local)
 4. Known hosts list from config/ijk.yaml
 5. Fast subnet port 22 scan + SSH banner validation
 """
@@ -67,88 +67,100 @@ def get_local_subnets() -> List[str]:
         for line in proc.stdout.splitlines():
             parts = line.split()
             if parts and "/" in parts[0] and not parts[0].startswith("127."):
+                interface=parts[parts.index("dev")+1] if "dev" in parts else ""
+                if interface.startswith(("docker", "br-", "veth", "tun", "tap", "wg", "happ-")):continue
                 subnets.append(parts[0])
     except (subprocess.TimeoutExpired, OSError):
         pass
     return subnets
 
 
-def scan_subnet_for_ssh(subnet_cidr: str, user: str, timeout_sec: float = 1.5) -> Optional[str]:
-    """Fast concurrent scan of /24 subnet for open port 22."""
+def scan_subnet_for_ssh(subnet_cidr: str, user: str, timeout_sec: float = 1.5, progress=None) -> Optional[str]:
+    """Probe the entire bounded subnet, including candidates that finish late.
+
+    timeout_sec controls the per-address probe budget, not an early exit that
+    discards successful SSH checks still running in the executor.
+    """
     try:
         net = ipaddress.ip_network(subnet_cidr, strict=False)
         if net.num_addresses > 512:
-            return None  # Don't scan huge networks
+            if progress:progress(f'[discovery] Пропуск слишком большой подсети: {subnet_cidr}')
+            return None
     except ValueError:
         return None
-
-    candidate_ips = [str(ip) for ip in net.hosts()]
-
-    def check_candidate(ip: str) -> Optional[str]:
-        if is_port_open(ip, 22, timeout=0.3):
-            if is_ssh_responsive(ip, user, timeout=1):
-                return ip
+    candidates=[str(ip) for ip in net.hosts()]
+    probe_timeout=min(1.,max(.3,timeout_sec/2))
+    def check(ip):
+        if not is_port_open(ip,22,timeout=probe_timeout):return None
+        if progress:progress(f'[discovery] {ip}: порт SSH открыт; проверяем вход {user}')
+        if is_ssh_responsive(ip,user,timeout=2):return ip
+        if progress:progress(f'[discovery] {ip}: вход по SSH не подтверждён')
         return None
-
-    with ThreadPoolExecutor(max_workers=50) as executor:
-        futures = {executor.submit(check_candidate, ip): ip for ip in candidate_ips}
-        start = time.time()
-        for fut in as_completed(futures):
-            res = fut.result()
-            if res:
-                return res
-            if time.time() - start > timeout_sec:
+    found=None
+    with ThreadPoolExecutor(max_workers=64) as executor:
+        futures=[executor.submit(check,ip) for ip in candidates]
+        for done,future in enumerate(as_completed(futures),1):
+            result=future.result()
+            if result:
+                found=result
+                for pending in futures:pending.cancel()
                 break
-    return None
+            if progress and (done%32==0 or done==len(candidates)):
+                progress(f'[discovery] {subnet_cidr}: проверено {done}/{len(candidates)} адресов')
+    return found
 
 
-def discover_robot(config: IjkConfig, explicit_host: Optional[str] = None, verbose: bool = True) -> Optional[str]:
+def discover_robot(config: IjkConfig, explicit_host: Optional[str] = None, verbose: bool = True, progress=None) -> Optional[str]:
+    def report(message):
+        if verbose: print(message)
+        if progress: progress(message)
+
     user = config.network.default_user
+    def check(address, timeout):
+        reachable=is_ssh_responsive(address,user,timeout=timeout)
+        report(f'[discovery] {address}: '+('вход по SSH подтверждён' if reachable else 'SSH недоступен или вход не подтверждён'))
+        return reachable
 
     # 1. Explicit argument / environment variable
     candidate = explicit_host or os.environ.get("ROBOT_IP") or os.environ.get("PI_HOST")
     if candidate:
-        if verbose:
-            print(f"[discovery] Проверка указанного хоста: {candidate}...")
-        if is_ssh_responsive(candidate, user, timeout=2):
+        report(f"[discovery] Проверка указанного хоста: {candidate}...")
+        if check(candidate,2):
             save_last_ip(candidate)
             return candidate
-        if verbose:
-            print(f"[discovery] Предупреждение: указанный хост {candidate} не отвечает по SSH.")
+        report(f"[discovery] Предупреждение: указанный хост {candidate} не отвечает по SSH.")
 
     # 2. Last cached IP
     cached_ip = get_cached_ip()
     if cached_ip:
-        if verbose:
-            print(f"[discovery] Проверка сохранённого IP из кэша: {cached_ip}...")
-        if is_ssh_responsive(cached_ip, user, timeout=1):
+        report(f"[discovery] Проверка сохранённого IP из кэша: {cached_ip}...")
+        if check(cached_ip,2):
             return cached_ip
 
-    # 3. mDNS hostname
-    if config.network.mdns_hostname:
-        if verbose:
-            print(f"[discovery] Поиск по mDNS: {config.network.mdns_hostname}...")
-        mdns_ip = resolve_mdns(config.network.mdns_hostname)
-        if mdns_ip and is_ssh_responsive(mdns_ip, user, timeout=1):
+    # 3. mDNS names: preserve the configured primary and try aliases as fallbacks.
+    mdns_names=dict.fromkeys([config.network.mdns_hostname, *config.network.mdns_aliases])
+    for hostname in filter(None, mdns_names):
+        report(f"[discovery] Поиск по mDNS: {hostname}...")
+        mdns_ip = resolve_mdns(hostname)
+        if not mdns_ip:report(f"[discovery] mDNS: имя {hostname} не найдено")
+        if mdns_ip and check(mdns_ip,2):
             save_last_ip(mdns_ip)
             return mdns_ip
 
     # 4. Known hosts from config
     for host in config.network.known_hosts:
-        if verbose:
-            print(f"[discovery] Проверка известного IP: {host}...")
-        if is_ssh_responsive(host, user, timeout=1):
+        report(f"[discovery] Проверка известного IP: {host}...")
+        if check(host,2):
             save_last_ip(host)
             return host
 
     # 5. Fast subnet scan
-    if verbose:
-        print("[discovery] Поиск робота сканированием локальной сети...")
+    report("[discovery] Поиск робота сканированием локальной сети...")
     for subnet in get_local_subnets():
-        found = scan_subnet_for_ssh(subnet, user, timeout_sec=config.network.subnet_scan_timeout_sec)
+        report(f"[discovery] Сканируем подсеть: {subnet}")
+        found = scan_subnet_for_ssh(subnet, user, timeout_sec=config.network.subnet_scan_timeout_sec, progress=report)
         if found:
-            if verbose:
-                print(f"[discovery] Робот успешно обнаружен по адресу: {found}")
+            report(f"[discovery] Робот успешно обнаружен по адресу: {found}")
             save_last_ip(found)
             return found
 

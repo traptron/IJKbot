@@ -233,3 +233,50 @@ def test_recording_does_not_skip_mock_teleop_hardware(monkeypatch):
         run_local_process=lambda cmd: launches.append(cmd),wait_with_ctrl_c=lambda:None)
     run_teleop(runner,load_config(),web_mode=True,mock=True,record=True)
     assert any('robot.launch.py' in command for command in launches)
+
+@pytest.mark.parametrize('action,handler',[('wifi','run_ops_wifi'),('timesync','run_ops_timesync')])
+def test_maintenance_propagates_failure_exit_code(monkeypatch,action,handler):
+    from tools.ijk import cli
+    monkeypatch.setattr(cli,handler,lambda *a,**kw:1)
+    monkeypatch.setattr(sys,'argv',['ijk','--mock','ops',action])
+    assert cli.main()==1
+
+def test_subnet_discovery_keeps_late_success(monkeypatch):
+    import time
+    from tools.ijk import discovery
+    monkeypatch.setattr(discovery,'is_port_open',lambda *a,**kw:True)
+    def ssh(ip,*a,**kw):
+        time.sleep(.02 if ip.endswith('.1') else .06)
+        return ip.endswith('.2')
+    monkeypatch.setattr(discovery,'is_ssh_responsive',ssh)
+    progress=[]
+    assert discovery.scan_subnet_for_ssh('192.0.2.0/30','robot',timeout_sec=.001,progress=progress.append)=='192.0.2.2'
+    assert any('192.0.2.2' in line for line in progress)
+
+def test_discovery_excludes_virtual_networks(monkeypatch):
+    from tools.ijk import discovery
+    from types import SimpleNamespace
+    monkeypatch.setattr(discovery.subprocess,'run',lambda *a,**kw:SimpleNamespace(stdout='10.82.218.0/24 dev wlo1 scope link\n172.17.0.0/16 dev docker0 scope link\n172.19.0.0/30 dev happ-xray scope link\n'))
+    assert discovery.get_local_subnets()==['10.82.218.0/24']
+
+def test_discovery_tries_tokmachka_with_configured_ssh_user(monkeypatch):
+    from tools.ijk import discovery
+    cfg=load_config()
+    assert cfg.network.default_user=='otmorozki'
+    assert 'tokmachka.local' in cfg.network.mdns_aliases
+    names=[];users=[];cached=[]
+    monkeypatch.delenv('ROBOT_IP',raising=False);monkeypatch.delenv('PI_HOST',raising=False)
+    monkeypatch.setattr(discovery,'get_cached_ip',lambda:None)
+    def resolve(name):
+        names.append(name)
+        return '192.0.2.42' if name=='tokmachka.local' else None
+    def ssh(ip,user,timeout):
+        users.append((ip,user))
+        return True
+    monkeypatch.setattr(discovery,'resolve_mdns',resolve)
+    monkeypatch.setattr(discovery,'is_ssh_responsive',ssh)
+    monkeypatch.setattr(discovery,'save_last_ip',cached.append)
+    assert discovery.discover_robot(cfg,verbose=False)=='192.0.2.42'
+    assert names==['ijkbot.local','tokmachka.local']
+    assert users==[('192.0.2.42','otmorozki')]
+    assert cached==['192.0.2.42']

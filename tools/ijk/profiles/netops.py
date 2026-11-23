@@ -80,7 +80,8 @@ def run_ops_wifi(runner: Runner, config: IjkConfig, profile: Optional[str] = Non
         cur = runner.run_remote_ssh("nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | grep '^yes' || iwgetid -r", timeout=5)
         print(f"Текущая сеть Pi: {cur.stdout.strip() or 'неизвестно'}")
         print("Использование: ./ijk ops wifi <профиль> | scan")
-        return 0
+        if cur.returncode and cur.stderr: print("[wifi] Ошибка SSH: " + cur.stderr.strip())
+        return cur.returncode
 
     if profile == "scan":
         res = runner.run_remote_ssh("nmcli -f SSID,SIGNAL,FREQ dev wifi list 2>/dev/null || sudo -n iwlist wlan0 scan | grep ESSID", timeout=15)

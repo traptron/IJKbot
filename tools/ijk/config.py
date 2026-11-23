@@ -24,6 +24,7 @@ class NetworkConfig:
     mdns_hostname: str = "ijkbot.local"
     subnet_scan_timeout_sec: float = 2.0
     remote_ws: str = "/home/otmorozki/IJKbot"
+    mdns_aliases: List[str] = field(default_factory=lambda: ["tokmachka.local"])
 
 
 @dataclass
@@ -90,6 +91,7 @@ def load_config() -> IjkConfig:
         rmw=os.environ.get("RMW_IMPLEMENTATION", net_data.get("rmw", "rmw_cyclonedds_cpp")),
         known_hosts=list(net_data.get("known_hosts", ["192.168.0.191", "10.197.37.154", "192.168.1.10"])),
         mdns_hostname=str(net_data.get("mdns_hostname", "ijkbot.local")),
+        mdns_aliases=list(net_data.get("mdns_aliases", ["tokmachka.local"])),
         subnet_scan_timeout_sec=float(net_data.get("subnet_scan_timeout_sec", 2.0)),
         remote_ws=str(net_data.get("remote_ws", "/home/otmorozki/IJKbot")),
     )

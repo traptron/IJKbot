@@ -8,6 +8,8 @@ network:
     - "10.197.37.154"
     - "192.168.1.10"
   mdns_hostname: "ijkbot.local"
+  mdns_aliases:
+    - "tokmachka.local"
   subnet_scan_timeout_sec: 2.0
   remote_ws: "/home/otmorozki/IJKbot"
 

@@ -268,9 +268,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif action == "chrony":
             run_ops_chrony(runner, config)
         elif action == "timesync":
-            run_ops_timesync(runner, config, force=getattr(args, "force", False))
+            return run_ops_timesync(runner, config, force=getattr(args, "force", False))
         elif action == "wifi":
-            run_ops_wifi(runner, config, profile=getattr(args, "profile", None))
+            return run_ops_wifi(runner, config, profile=getattr(args, "profile", None))
         elif action == "bag-export":
             run_ops_bag_export(runner, bag=getattr(args, "bag", None))
         elif action == "save-map":
