@@ -1,0 +1,60 @@
+{
+  "target": "/home/lev/IJKbot/docs/designs/rtk_final_2026.md",
+  "scope": "Feature specification before ## Detailed Implementation Plan",
+  "reviewed_sha256": "b8ccf5605695351666769b4daa6472e3dcb34c34588a879131696f05d7a3d1a3",
+  "status": "applied_after_author_approval",
+  "round": 1,
+  "edits": [
+    {
+      "id": "design-1-1",
+      "severity": "Major",
+      "category": "PROPOSE FIX",
+      "replacements": [
+        {
+          "before": "Mock/replay tests first inject obstacles, sensor loss, stale data, competing commands and process failure. Controlled physical trials then measure response for navigation, search turns, approach, recovery and return. Watching the robot stop once is insufficient to accept the wiring.",
+          "after": "Autonomous competition also requires a current mission-owner lease, enforced onboard at the permission boundary in `robot_monitor.py` independently of the existing web-control lease. Bind permission to the active coordinator session, mission and attempt. Only advancing owner updates emitted by the coordinator's mission-control loop may refresh its local monotonic deadline; fresh Nav2 commands, sensor traffic or web heartbeats cannot renew it. Measure and record the permitted owner-update age and stop-response bound in the accepted profile. Missing verified limits or a missing owner prevents autonomous readiness.\n\nOn owner expiry or invalidation, latch nonzero-motion inhibition in that common command path, record the owner-loss stop locally and request cancellation of onboard navigation work. Stopping must not depend on cancellation succeeding. Retire the expired owner context so delayed updates cannot restore permission. Reconnection or coordinator restart cannot resume the old attempt automatically: explicit stopped-state recovery must confirm cancellation/retirement of old work, establish a new attempt and owner session, and admit only newly authorized navigation work. Preserve the incomplete outcome and existing emergency/permission behavior; no new bypass publisher is introduced. The detailed contract, task list and tests must be aligned with this policy before implementation readiness is accepted.\n\nMock/replay tests first inject obstacles, sensor loss, stale data, competing commands and process failure. Also kill, stall or partition only the mission coordinator while onboard Nav2, sensors and protection remain healthy; verify the measured owner-loss stop bound, cancellation failure, delayed updates and restart/reconnect without stale-goal resumption. Controlled physical trials then measure response for navigation, search turns, approach, recovery and return. Watching the robot stop once is insufficient to accept the wiring."
+        }
+      ]
+    },
+    {
+      "id": "style-1-1",
+      "severity": "Major",
+      "category": "PROPOSE FIX",
+      "replacements": [
+        {
+          "before": "Validate on independent capture sessions and field arrangements before selecting model/version/thresholds",
+          "after": "Validate on independent capture sessions and field arrangements before promoting weights and acceptance thresholds"
+        },
+        {
+          "before": "4. Select and pin the compact pretrained model, training/inference runtime and weights through a reproducible compatibility check on the laptop. No particular model generation, CUDA/TensorRT conversion or library version is selected in this draft. Measure memory/latency with QR, preview and the intended language-model workload; do not infer capacity from the GPU model alone.",
+          "after": "4. Use the selected Ultralytics YOLO11n model with native PyTorch on the laptop. Pin compatible library versions and checkpoint artifacts after a reproducible laptop compatibility check; TensorRT conversion is outside the selected baseline. Measure memory/latency with QR, preview and the intended language-model workload; do not infer capacity from the GPU model alone."
+        }
+      ]
+    },
+    {
+      "id": "style-1-2",
+      "severity": "Nit",
+      "category": "PROPOSE FIX",
+      "replacements": [
+        {
+          "before": "This section was checked against the predecessor's `Alternatives Weighed` section and the subsequent author choices T1–T8. Author selections are recorded as such. The technical rationale describes the trade-offs discussed in drafting; it is not an invented quotation of the author's motives or an upstream maintainer rejection. No alternative is labelled physically disproven without an experiment. Deferred options remain distinct from rejected ones.",
+          "after": "These alternatives reflect the predecessor's `Alternatives Weighed` section and recorded author choices T1–T8. Author selections are identified explicitly; deferred options remain distinct from rejected ones."
+        }
+      ]
+    },
+    {
+      "id": "style-1-3",
+      "severity": "Nit",
+      "category": "PROPOSE FIX",
+      "replacements": [
+        {
+          "before": "**Reason not selected:** **Not selected by author:**",
+          "after": "**Author decision:**",
+          "expected_count": 9
+        }
+      ]
+    }
+  ],
+  "author_decision": "A — apply all four proposed document fixes",
+  "applied_sha256": "c6de09ea7dd6ba2f0ce4dc217c9ff2720326716d7a36c48e8ba5e150b9cb007a"
+}

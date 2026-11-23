@@ -1,0 +1,115 @@
+--- reviewed design
++++ approved revised design
+@@ -225,7 +225,11 @@
+ 
+ The selected nonzero command path is navigation/search/manual command arbitration, then the existing permission guard, then Collision Monitor, then the motor driver. The guard's direct `/cmd_vel` output, including timer-generated zeros, must be remapped into the monitor's input path in this configuration. Remove competing direct actuator publishers from the selected launch; do not leave the old chain running beside the new one. Emergency zero requests remain effective through the chain, and loss of forwarding/monitor activity must lead to the driver's timeout braking. The installed monitor's behavior on stale command input, lifecycle loss and sensor loss must be verified rather than presumed.
+ 
+-Mock/replay tests first inject obstacles, sensor loss, stale data, competing commands and process failure. Controlled physical trials then measure response for navigation, search turns, approach, recovery and return. Watching the robot stop once is insufficient to accept the wiring.
++Autonomous competition also requires a current mission-owner lease, enforced onboard at the permission boundary in `robot_monitor.py` independently of the existing web-control lease. Bind permission to the active coordinator session, mission and attempt. Only advancing owner updates emitted by the coordinator's mission-control loop may refresh its local monotonic deadline; fresh Nav2 commands, sensor traffic or web heartbeats cannot renew it. Measure and record the permitted owner-update age and stop-response bound in the accepted profile. Missing verified limits or a missing owner prevents autonomous readiness.
++
++On owner expiry or invalidation, latch nonzero-motion inhibition in that common command path, record the owner-loss stop locally and request cancellation of onboard navigation work. Stopping must not depend on cancellation succeeding. Retire the expired owner context so delayed updates cannot restore permission. Reconnection or coordinator restart cannot resume the old attempt automatically: explicit stopped-state recovery must confirm cancellation/retirement of old work, establish a new attempt and owner session, and admit only newly authorized navigation work. Preserve the incomplete outcome and existing emergency/permission behavior; no new bypass publisher is introduced. The detailed contract, task list and tests must be aligned with this policy before implementation readiness is accepted.
++
++Mock/replay tests first inject obstacles, sensor loss, stale data, competing commands and process failure. Also kill, stall or partition only the mission coordinator while onboard Nav2, sensors and protection remain healthy; verify the measured owner-loss stop bound, cancellation failure, delayed updates and restart/reconnect without stale-goal resumption. Controlled physical trials then measure response for navigation, search turns, approach, recovery and return. Watching the robot stop once is insufficient to accept the wiring.
+ 
+ ### Observation acceptance and mission outcomes
+ 
+@@ -297,7 +301,7 @@
+ 
+ | Option | Mechanism | Trade-offs | Conditions under which it fails |
+ | --- | --- | --- | --- |
+-| T5-A: Adapt a compact object detector to representative toys | Collect and annotate relevant toy/banner/field examples and negative scenes; adapt a pretrained detector for a separate toy-victim class. Validate on independent capture sessions and field arrangements before selecting model/version/thresholds | Can use learned appearance across the represented poses/backgrounds; requires representative props, annotation, training/inference dependencies and a held-out evaluation. Laptop inference/training must be measured with its other intended workloads | Training examples do not represent the final toy; adjacent video frames leak into evaluation; the toy occupies too few usable pixels; field distractors cause false confirmation; data preparation or dependency work exceeds the budget |
++| T5-A: Adapt a compact object detector to representative toys | Collect and annotate relevant toy/banner/field examples and negative scenes; adapt a pretrained detector for a separate toy-victim class. Validate on independent capture sessions and field arrangements before promoting weights and acceptance thresholds | Can use learned appearance across the represented poses/backgrounds; requires representative props, annotation, training/inference dependencies and a held-out evaluation. Laptop inference/training must be measured with its other intended workloads | Training examples do not represent the final toy; adjacent video frames leak into evaluation; the toy occupies too few usable pixels; field distractors cause false confirmation; data preparation or dependency work exceeds the budget |
+ | T5-B: Recognize the known toy from reference appearances | Capture the known toy from relevant views; use reference-image/feature/shape matching and geometrical consistency checks to locate candidates without detector training. Keep banner localization as an optional cue, not a prerequisite or victim proof | Avoids detector training and can build on OpenCV already used by the project; requires representative reference views, scale/pose handling, rejection thresholds and explicit checks against lookalikes. Does not establish lower total effort or better accuracy | The final toy differs from the references; small/low-texture appearance supplies insufficient features; pose, lighting, occlusion or distractors break the chosen matcher; hand-tuned rejection logic consumes the available time |
+ 
+ Examples of the candidate mechanisms are documented by [Ultralytics custom-data training](https://docs.ultralytics.com/modes/train/) and [OpenCV feature matching](https://docs.opencv.org/4.x/dc/dc3/tutorial_py_matcher.html). These sources establish available methods, not a model/version decision, dataset sufficiency or performance on this prop. No external images, weights or datasets have been downloaded during drafting.
+@@ -309,7 +313,7 @@
+ 1. Obtain representative figures and the actual camera stream. Record approach/search views at relevant distances, orientations, illumination and backgrounds, including the permitted 640×480 compressed network input. A high-resolution training image alone does not establish performance on the transmitted stream.
+ 2. Annotate the toy-victim class separately from the QR/banner. Include hard negative scenes such as an empty banner, cars/debris and similar objects; a model that learns only the visible QR pattern must fail evaluation when the banner is present without a figure.
+ 3. Split recordings by physical capture session/arrangement before selecting frames or augmenting them. Hold out scenes used for final evaluation rather than adjacent frames from the same video. Record prop variations and image-size ranges represented and missing.
+-4. Select and pin the compact pretrained model, training/inference runtime and weights through a reproducible compatibility check on the laptop. No particular model generation, CUDA/TensorRT conversion or library version is selected in this draft. Measure memory/latency with QR, preview and the intended language-model workload; do not infer capacity from the GPU model alone.
++4. Use the selected Ultralytics YOLO11n model with native PyTorch on the laptop. Pin compatible library versions and checkpoint artifacts after a reproducible laptop compatibility check; TensorRT conversion is outside the selected baseline. Measure memory/latency with QR, preview and the intended language-model workload; do not infer capacity from the GPU model alone.
+ 5. Adapt the detector, inspect held-out misses and false positives, and choose acceptance thresholds using measured evidence. Maintain model/dataset/configuration identities with results. Merely completing training or reaching a convenient training score is not acceptance.
+ 6. Run the full robot search and approach sequence on changed field arrangements, including unreadable QR and banner-only negatives. Confirm that rejected detections and false candidates cannot produce a successful-victim stage. Define numeric detection and mission-level acceptance thresholds before implementation tasks are finalized.
+ 
+@@ -421,13 +425,13 @@
+ 
+ **Section approval:** The author approved this section in chat ("согласовываем") and authorized proceeding to Detailed Implementation.
+ 
+-This section was checked against the predecessor's `Alternatives Weighed` section and the subsequent author choices T1–T8. Author selections are recorded as such. The technical rationale describes the trade-offs discussed in drafting; it is not an invented quotation of the author's motives or an upstream maintainer rejection. No alternative is labelled physically disproven without an experiment. Deferred options remain distinct from rejected ones.
++These alternatives reflect the predecessor's `Alternatives Weighed` section and recorded author choices T1–T8. Author selections are identified explicitly; deferred options remain distinct from rejected ones.
+ 
+ ### 1. Retain Raspberry Pi as the primary onboard target
+ 
+ * **Pros:** Preserves the existing Ubuntu/Jazzy installation, device setup and a previously point-scoring navigation arrangement; avoids board migration work.
+ * **Cons:** Capacity for the added depth/surface processing is unmeasured. The current sensing/motion integration still has known gaps. Remaining on Pi does not itself solve them.
+-* **Reason not selected:** **Not selected by author:** the author explicitly chose the available Jetson Nano as the target and approved that architecture. This supersedes the brainstorm's Pi-first recommendation. It is a platform preference, not evidence that the inspected 4 GB Pi failed a workload test or that Nano is a drop-in upgrade.
++* **Author decision:** the author explicitly chose the available Jetson Nano as the target and approved that architecture. This supersedes the brainstorm's Pi-first recommendation. It is a platform preference, not evidence that the inspected 4 GB Pi failed a workload test or that Nano is a drop-in upgrade.
+ * **Condition for reconsideration:** A demonstrated Nano compatibility/capacity problem and an explicit author decision, with a measured viable alternative. Preserve the Pi reference installation, but do not call its current configuration a safe competition fallback.
+ 
+ ### 2. Continue using only a narrow depth strip or simply reconnect `/depth/scan`
+@@ -448,21 +452,21 @@
+ 
+ * **Pros:** Could combine permission and obstacle decisions in one runtime boundary with fewer separately launched components.
+ * **Cons:** The team would own new geometry, freshness, command timing, concurrency and failure/reset behavior in motion-related code. This increases implementation and verification work at a short deadline.
+-* **Reason not selected:** **Not selected by author:** T1-A, the existing Nav2 Collision Monitor, was selected over T1-B. The recorded technical trade-off favors using its established sensor/zone mechanism while keeping permission checks before it; it still requires complete command remapping and measured settings.
++* **Author decision:** T1-A, the existing Nav2 Collision Monitor, was selected over T1-B. The recorded technical trade-off favors using its established sensor/zone mechanism while keeping permission checks before it; it still requires complete command remapping and measured settings.
+ * **Condition for reconsideration:** The selected monitor cannot meet a demonstrated required behavior or run in the verified deployment route, and the author accepts the bounded implementation and test cost of another solution.
+ 
+ ### 5. Collapse ground-filtered depth into a planar obstacle scan
+ 
+ * **Pros:** Compact downstream data and reuse of the existing 2D obstacle/scan interfaces after ground treatment.
+ * **Cons:** Loses height information and requires correct projection, unknown-space and clearing semantics. It still needs ground/bridge handling and valid close-range measurements; it is not the old narrow-strip pipeline made safe automatically.
+-* **Reason not selected:** **Not selected by author:** T2-A retains filtered 3D returns with Voxel Layer and direct Collision Monitor input instead of T2-B. That preserves vertical diagnostic evidence at the cost of local cloud/voxel processing.
++* **Author decision:** T2-A retains filtered 3D returns with Voxel Layer and direct Collision Monitor input instead of T2-B. That preserves vertical diagnostic evidence at the cost of local cloud/voxel processing.
+ * **Condition for reconsideration:** Measured target-load problems or a validated compact projection that preserves required small-obstacle evidence, clearing semantics and stopping response, followed by an author decision.
+ 
+ ### 6. Carry versioned JSON observations in standard String messages
+ 
+ * **Pros:** Reuses existing standard message transport and the City's JSON pattern; avoids a generated interface package.
+ * **Cons:** Requires consistent explicit JSON/schema validation across C++/Python, with weaker typed inspection by ROS tools. JSON alone does not solve frame association, reset or late-result behavior.
+-* **Reason not selected:** **Not selected by author:** T3-B introduces generated project-specific ROS interfaces instead of T3-A. The selected trade-off accepts interface-package/build coordination for explicit shared fields. Runtime semantic validation remains required.
++* **Author decision:** T3-B introduces generated project-specific ROS interfaces instead of T3-A. The selected trade-off accepts interface-package/build coordination for explicit shared fields. Runtime semantic validation remains required.
+ * **Condition for reconsideration:** A demonstrated binding/deployment restriction on the actual environment, or changed integration cost, with an explicit author decision and no loss of correlation/validity requirements.
+ 
+ ### 7. Use QR success as the sole victim-found signal
+@@ -476,35 +480,35 @@
+ 
+ * **Pros:** Avoids detector training and can use OpenCV already present in the project.
+ * **Cons:** Depends on representative reference views and sufficient image detail/features, with scale, pose, light and lookalike rejection work. It does not establish lower total engineering effort.
+-* **Reason not selected:** **Not selected by author:** T5-A, adapting a compact detector to representative toys, was selected over T5-B. The selected path represents appearance variation through training data, accepting capture/annotation, runtime and independent evaluation costs.
++* **Author decision:** T5-A, adapting a compact detector to representative toys, was selected over T5-B. The selected path represents appearance variation through training data, accepting capture/annotation, runtime and independent evaluation costs.
+ * **Condition for reconsideration:** Required data/training compatibility cannot be obtained in time, and a reference method passes the same held-out/field tests with an author-approved scope change. An unrelated generic human detector is not an already validated substitute.
+ 
+ ### 9. Retry QR only from the initial stationary pose
+ 
+ * **Pros:** Bounded motion and simpler local retry behavior; can preserve more time for return.
+ * **Cons:** Repeated frames do not repair an unsuitable angle, distance or occlusion. A failed initial view can leave the information stage incomplete even when another safe view exists.
+-* **Reason not selected:** **Not selected by author:** T4-A retries from different verified safe viewpoints instead of T4-B. The selected policy accepts added navigation/view testing while retaining hard retry limits and a conservative return reserve.
++* **Author decision:** T4-A retries from different verified safe viewpoints instead of T4-B. The selected policy accepts added navigation/view testing while retaining hard retry limits and a conservative return reserve.
+ * **Condition for reconsideration:** No safe alternate pose exists, the remaining time cannot support movement, or a new author-selected stationary policy passes the required mission tests. Stopping view search under T4-A's own limits is expected failure handling, not silent replacement of the policy.
+ 
+ ### 10. Use a premeasured floor/bridge surface model as the main ground classifier
+ 
+ * **Pros:** Known geometry can constrain interpretation of a bridge and floor when model and localization are accurate.
+ * **Cons:** Adds survey, 3D model, pose/inclination and calibration dependencies. Mismatch can erase a real low obstacle or misclassify a ramp. A bridge mask that disables protection is not a valid version of this option.
+-* **Reason not selected:** **Not selected by author:** T7-A estimates connected local support from current depth instead of T7-B. This avoids requiring an exact 3D bridge model while accepting more live surface-estimation and validity checks.
++* **Author decision:** T7-A estimates connected local support from current depth instead of T7-B. This avoids requiring an exact 3D bridge model while accepting more live surface-estimation and validity checks.
+ * **Condition for reconsideration:** Live support interpretation fails its coverage/time tests and a surveyed model with live verification can be demonstrated within the remaining time, subject to author agreement. Neither choice may erase a car to make the bridge traversable.
+ 
+ ### 11. Localize detections with matched depth and generate new target-relative observation poses
+ 
+ * **Pros:** Can adapt viewing direction/distance to the target's actual measured location rather than rely on a fixed catalogue.
+ * **Cons:** Adds colour-depth calibration, capture matching, bounded retained depth, tiny-object/background disambiguation and uncertainty-aware pose generation. Invalid depth or delayed results can make localization unavailable.
+-* **Reason not selected:** **Not selected by author:** T8-B uses surveyed observation poses and visual bearing instead of T8-A. The selected trade-off reduces target-depth association work but requires sufficient view coverage, repeatable localization and separate proof of the required hold cell.
++* **Author decision:** T8-B uses surveyed observation poses and visual bearing instead of T8-A. The selected trade-off reduces target-depth association work but requires sufficient view coverage, repeatable localization and separate proof of the required hold cell.
+ * **Condition for reconsideration:** Catalogue coverage or nearest-cell evidence fails and cannot be repaired within the selected approach. Adding target-depth localization then requires an explicit design revision; it is not a hidden fallback already approved by T8-B.
+ 
+ ### 12. Develop complete City behavior or both disciplines at equal scope
+ 
+ * **Pros:** A complete City scenario could provide more opportunities for points if implemented and verified under the applicable rules.
+ * **Cons:** Competes for the same robot and daily hours, adds route/sign/stop/finish integration, and has no current verified final scoring table. Similar grid sizes do not make City sequencing equivalent to Evacuation.
+-* **Reason not selected:** **Not selected by author:** T6-B limits City to a later explicit score-bearing subset instead of T6-A's complete scenario. Equal discipline priority also conflicts with the author's primary Evacuation objective. No specific partial action or points total is inferred from that selection.
++* **Author decision:** T6-B limits City to a later explicit score-bearing subset instead of T6-A's complete scenario. Equal discipline priority also conflicts with the author's primary Evacuation objective. No specific partial action or points total is inferred from that selection.
+ * **Condition for reconsideration:** Rules become available, the primary mission meets its agreed evidence gate, and actual capacity supports a newly approved larger action set without silently using the protected trial reserve.
+ 
+ ### 13. Replace the navigation framework, build a general mission platform or move every workload onboard
