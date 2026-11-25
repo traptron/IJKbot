@@ -60,13 +60,18 @@ def generate_launch_description() -> LaunchDescription:
             FindPackageShare('vision'), 'launch', 'zxing_qr.launch.py',
         ])),
         condition=LaunchConfigurationEquals('qr_backend', 'zxing'),
-        launch_arguments={'require_trigger': LaunchConfiguration('require_trigger')}.items(),
+        launch_arguments={
+            'require_trigger': LaunchConfiguration('require_trigger'),
+            'image_reliability': LaunchConfiguration('image_reliability'),
+        }.items(),
     )
     return LaunchDescription([
         DeclareLaunchArgument('enable_qr', default_value='false',
                               description='Decode QR locally from D435'),
         DeclareLaunchArgument('qr_backend', default_value='opencv', choices=['opencv', 'zxing']),
         DeclareLaunchArgument('require_trigger', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('image_reliability', default_value='best_effort',
+                              choices=['best_effort', 'reliable']),
         DeclareLaunchArgument('color_profile', default_value='640x480x15'),
         DeclareLaunchArgument('depth_profile', default_value='640x480x15'),
         GroupAction([

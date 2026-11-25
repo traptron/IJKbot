@@ -15,10 +15,13 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         DeclareLaunchArgument('params_file', default_value=str(params_file)),
         DeclareLaunchArgument('require_trigger', default_value='true', choices=['true', 'false']),
+        DeclareLaunchArgument('image_reliability', default_value='best_effort',
+                              choices=['best_effort', 'reliable']),
         Node(
             package='vision', executable='zxing_qr_reader_node', name='zxing_qr_reader', output='screen',
             parameters=[LaunchConfiguration('params_file'), {
                 'require_trigger': ParameterValue(LaunchConfiguration('require_trigger'), value_type=bool),
+                'image_reliability': LaunchConfiguration('image_reliability'),
             }],
         ),
     ])

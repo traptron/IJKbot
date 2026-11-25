@@ -405,7 +405,7 @@ class MissionStateMachine:
 
     SCAN_OFFSETS = tuple(math.radians(deg) for deg in (-45, -15, 15, 45))
     SCAN_SETTLE_SECONDS = 2.0
-    SCAN_CHECK_SECONDS = 1.0
+    SCAN_CHECK_SECONDS = 1.5
     SCAN_YAW_TOLERANCE = math.radians(1.0)
 
     def __init__(self, llm_client: Optional[LLMClient] = None, mock_mode: bool = True):
@@ -865,7 +865,8 @@ class MissionStateMachine:
                     self._log(
                         "NAV",
                         f"Робот прибыл в ячейку [{self.current_waypoint_idx + 1}/{total_wp}] «{self.current_waypoint.name}». "
-                        f"Начало осмотра сектора 90° к ориентиру (4 направления, остановка 3.0с)..."
+                        f"Начало осмотра сектора 90° к ориентиру "
+                        f"(4 направления, остановка {self.SCAN_SETTLE_SECONDS + self.SCAN_CHECK_SECONDS:.1f}с)..."
                     )
                     self.state = MissionState.SEARCHING_VICTIM
                     self._cancel_nav_goal()
@@ -1056,7 +1057,7 @@ class MissionStateMachine:
                 self._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
                 return
 
-            # Даем ноде QR-детектора 1.0с на обработку снимка перед переходом к следующему повороту
+            # Ждём результат QR перед переходом к следующему повороту.
             if self.spin_timer < self.SCAN_CHECK_SECONDS and not self.mock_mode:
                 return
 

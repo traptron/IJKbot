@@ -241,7 +241,7 @@ class TestMissionStateMachine(unittest.TestCase):
         Сквозной тест полного цикла миссии:
         1. Ввод задания и распознавание LLM
         2. Старт и движение к первой целевой ячейке
-        3. Осмотр сектора 90° с остановкой 3.0с и считывание QR-кода
+        3. Осмотр сектора 90° с остановкой и считывание QR-кода
         4. Регламентное 5-секундное удержание в ячейке пострадавшего
         5. Автоматическая эвакуация в стартовую ячейку [0.4, 0.4]
         6. Успешное завершение миссии и сохранение протокола.
@@ -309,7 +309,7 @@ class TestMissionStateMachine(unittest.TestCase):
         self.sm.mock_mode = False
         self.sm.spin_phase = "CHECK"
         self.sm.qr_code_data = None
-        self.sm.step(1.1)
+        self.sm.step(self.sm.SCAN_CHECK_SECONDS + 0.1)
 
         # Робот должен перейти к следующей ячейке Cell 2
         self.assertEqual(self.sm.state, MissionState.NAVIGATING_TO_LANDMARK)
@@ -325,7 +325,7 @@ class TestMissionStateMachine(unittest.TestCase):
         self.sm.mock_mode = False
         self.sm.spin_phase = "CHECK"
         self.sm.qr_code_data = None
-        self.sm.step(1.1)
+        self.sm.step(self.sm.SCAN_CHECK_SECONDS + 0.1)
 
         # Все точки исчерпаны -> автоматический возврат домой
         self.assertEqual(self.sm.state, MissionState.RETURNING_HOME)
@@ -395,14 +395,14 @@ class TestMissionStateMachine(unittest.TestCase):
                     self.assertLess(abs(sm._yaw_error(yaw, centre + offset)), sm.SCAN_YAW_TOLERANCE)
                 self.assertTrue(all(b - a >= 3.0 for a, b in zip(photo_times, photo_times[1:])))
 
-    def test_scan_check_wait_is_doubled(self):
+    def test_scan_check_waits_one_and_a_half_seconds(self):
         self.sm.mock_mode = False
         self.sm.state = MissionState.SEARCHING_VICTIM
         self.sm.spin_phase = 'CHECK'
         self.sm.robot_yaw = 0.0
         self.sm._handle_spin_and_scan(0.5)
         self.assertEqual(self.sm.spin_phase, 'CHECK')
-        self.sm._handle_spin_and_scan(0.49)
+        self.sm._handle_spin_and_scan(0.99)
         self.assertEqual(self.sm.spin_step, 0)
         self.sm._handle_spin_and_scan(0.02)
         self.assertEqual(self.sm.spin_step, 1)

@@ -82,3 +82,17 @@ def test_zxing_prefers_largest_candidate():
     gray[:, -large.shape[1]:] = large
 
     assert QrDecoder().decode(gray) == 'target'
+
+
+def test_decode_image_reads_padded_rgb_and_bgr_without_gray_copy():
+    zxing = pytest.importorskip('zxingcpp')
+    text = 'Пострадавший #2'
+    tile = np.asarray(zxing.write_barcode_to_image(
+        zxing.create_barcode(text, zxing.BarcodeFormat.QRCode), scale=4))
+    h, w = tile.shape
+    padded = np.full((h, w + 4, 3), 255, dtype=np.uint8)
+    padded[:, :w] = np.stack([tile, tile, tile], axis=-1)
+    step = (w + 4) * 3
+    decoder = QrDecoder(use_center_crop=True, center_crop_ratio=0.9)
+    assert decoder.decode_image(padded.tobytes(), w, h, step, 'rgb8') == text
+    assert decoder.decode_image(padded.tobytes(), w, h, step, 'bgr8') == text
