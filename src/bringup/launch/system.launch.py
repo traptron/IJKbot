@@ -21,8 +21,8 @@ system.launch.py — Единый мастер-лаунч мобильного �
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.conditions import IfCondition, LaunchConfigurationEquals
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -45,6 +45,12 @@ def generate_launch_description():
         default_value='true',
         description='Запускать ли распознавание QR-кодов (qr_reader_node)'
     )
+    declare_qr_backend = DeclareLaunchArgument(
+        'qr_backend', default_value='opencv', choices=['opencv', 'zxing'],
+        description='Бортовой QR-ридер: существующий OpenCV или ZXing на сыром изображении'
+    )
+    declare_color_profile = DeclareLaunchArgument('color_profile', default_value='640x480x15')
+    declare_depth_profile = DeclareLaunchArgument('depth_profile', default_value='640x480x15')
 
     declare_enable_camera = DeclareLaunchArgument(
         'enable_camera',
@@ -174,6 +180,8 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_robot')),
         launch_arguments={
             'enable_camera': LaunchConfiguration('enable_camera'),
+            'color_profile': LaunchConfiguration('color_profile'),
+            'depth_profile': LaunchConfiguration('depth_profile'),
             'enable_motors': LaunchConfiguration('enable_motors'),
             'enable_lidar': LaunchConfiguration('enable_lidar'),
             'lidar_serial_port': LaunchConfiguration('lidar_serial_port'),
@@ -218,11 +226,17 @@ def generate_launch_description():
         }]
     )
 
-    # 4. Запуск распознавания QR-кодов (ноутбук)
-    qr_reader_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_vision, 'launch', 'qr_reader.launch.py')
+    # 4. Запуск распознавания QR-кодов на том же компьютере, что и камера
+    qr_reader_launch = GroupAction([
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(pkg_vision, 'launch', 'qr_reader.launch.py')),
+            condition=LaunchConfigurationEquals('qr_backend', 'opencv'),
         ),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(pkg_vision, 'launch', 'zxing_qr.launch.py')),
+            condition=LaunchConfigurationEquals('qr_backend', 'zxing'),
+        ),
+    ],
         condition=IfCondition(LaunchConfiguration('enable_qr'))
     )
 
@@ -230,6 +244,9 @@ def generate_launch_description():
         SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1'),
         declare_mock_hardware,
         declare_enable_qr,
+        declare_qr_backend,
+        declare_color_profile,
+        declare_depth_profile,
         declare_enable_camera,
         declare_enable_motors,
         declare_enable_lidar,

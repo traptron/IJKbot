@@ -11,10 +11,11 @@ from launch.actions import (
     SetEnvironmentVariable,
     UnsetEnvironmentVariable,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, LaunchConfigurationEquals
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 BENCH_DOMAIN = '88'
@@ -43,7 +44,7 @@ def generate_launch_description() -> LaunchDescription:
         package='vision_cpp',
         executable='qr_reader_node',
         name='jetson_bench_qr',
-        condition=IfCondition(LaunchConfiguration('enable_qr')),
+        condition=LaunchConfigurationEquals('qr_backend', 'opencv'),
         parameters=[{
             'image_topic': '/camera/color/image_raw/compressed',
             'trigger_topic': '~/take_photo',
@@ -54,9 +55,18 @@ def generate_launch_description() -> LaunchDescription:
         }],
         output='screen',
     )
+    zxing_qr = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(PathJoinSubstitution([
+            FindPackageShare('vision'), 'launch', 'zxing_qr.launch.py',
+        ])),
+        condition=LaunchConfigurationEquals('qr_backend', 'zxing'),
+        launch_arguments={'require_trigger': LaunchConfiguration('require_trigger')}.items(),
+    )
     return LaunchDescription([
         DeclareLaunchArgument('enable_qr', default_value='false',
-                              description='Decode QR locally from the D435 JPEG stream'),
+                              description='Decode QR locally from D435'),
+        DeclareLaunchArgument('qr_backend', default_value='opencv', choices=['opencv', 'zxing']),
+        DeclareLaunchArgument('require_trigger', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('color_profile', default_value='640x480x15'),
         DeclareLaunchArgument('depth_profile', default_value='640x480x15'),
         GroupAction([
@@ -69,6 +79,6 @@ def generate_launch_description() -> LaunchDescription:
             UnsetEnvironmentVariable('ROS_LOCALHOST_ONLY'),
             LogInfo(msg=f'D435 bench: CycloneDDS loopback, domain {BENCH_DOMAIN}'),
             camera,
-            qr,
+            GroupAction([qr, zxing_qr], condition=IfCondition(LaunchConfiguration('enable_qr'))),
         ]),
     ])

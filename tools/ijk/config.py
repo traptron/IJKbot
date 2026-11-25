@@ -52,6 +52,8 @@ class ProfileConfig:
     map: str = "polygon_empty_4x4.yaml"
     teleop_source: str = "keyboard"
     allow_speed_override: bool = False
+    qr_backend: str = 'zxing'
+    color_profile: str = '1920x1080x15'
 
 
 @dataclass
@@ -126,6 +128,8 @@ def load_config() -> IjkConfig:
             map=str(p.get("map", "polygon_empty_4x4.yaml")),
             teleop_source=str(p.get("teleop_source", "keyboard")),
             allow_speed_override=bool(p.get("allow_speed_override", False)),
+            qr_backend=str(p.get('qr_backend', 'zxing')),
+            color_profile=str(p.get('color_profile', '1920x1080x15')),
         )
 
     return IjkConfig(network=network, hardware=hardware, profiles=profiles, raw=data)

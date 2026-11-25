@@ -2061,13 +2061,15 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         ui.label("Данные QR-кода пострадавшего").classes("text-base font-semibold text-slate-200")
 
                     qr_status_badge = ui.badge("QR не считан", color="gray-600").classes("text-xs w-fit mb-2")
-                    qr_text_label = ui.label("Ожидание считывания кода при приближении к человеку...").classes(
-                        "text-xs font-mono text-slate-300 whitespace-pre-line bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/50 w-full"
+                    qr_text_label = ui.label("Ожидание подтверждённого QR-кода с камеры...").classes(
+                        "text-sm font-mono text-slate-100 whitespace-pre-wrap break-words bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/50 w-full"
                     )
-                    qr_image_preview = ui.image().classes(
-                        "w-full max-h-48 object-contain rounded-lg border border-slate-700 mt-2 bg-slate-950"
-                    )
-                    qr_image_preview.visible = False
+                    with ui.column().classes("w-full gap-1") as qr_snapshot:
+                        ui.label("Последний снимок с QR-ридера").classes("text-xs text-slate-400")
+                        qr_image_preview = ui.image().classes(
+                            "w-full max-h-48 object-contain rounded-lg border border-slate-700 bg-slate-950"
+                        )
+                    qr_snapshot.visible = False
 
         # 3. НИЖНИЙ БЛОК: ПРОТОКОЛ И ХРОНОЛОГИЯ СОБЫТИЙ (ВО ВСЮ ШИРИНУ)
         with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
@@ -2384,48 +2386,31 @@ def build_judge_dashboard(sm: MissionStateMachine):
             hold_timer_label.text = "Удержание в ячейке: —"
 
         # 5. Карточка QR-кода
-        if sm.latest_qr_text:
-            qr_status_badge.text = f"QR получен: {sm.latest_qr_received_at}"
-            qr_status_badge.classes(replace="bg-emerald-600 text-white text-xs w-fit mb-2 font-bold")
-            qr_text_label.text = sm.latest_qr_text
-        elif sm.mock_mode and sm.qr_code_data:
-            qr_status_badge.text = "QR: симуляция"
-            qr_status_badge.classes(replace="bg-amber-600 text-white text-xs w-fit mb-2")
-            qr_text_label.text = sm.qr_code_data
-        elif sm.qr_code_data:
-            qr_status_badge.text = "QR-код успешно считан"
-            qr_status_badge.classes(replace="bg-emerald-600 text-white text-xs w-fit mb-2 font-bold")
-            qr_text_label.text = sm.qr_code_data
+        with sm.lock:
+            confirmed_qr = sm.qr_code_data if sm.qr_scanned else None
+            simulated = sm.mock_mode
+            snapshot_b64 = sm.latest_qr_image_b64
+            snapshot_bytes = sm.latest_qr_image_bytes
+
+        if confirmed_qr:
+            qr_text_label.text = confirmed_qr
+            if simulated:
+                qr_status_badge.text = "QR: симуляция"
+                qr_status_badge.classes(replace="bg-amber-600 text-white text-xs w-fit mb-2")
+            else:
+                qr_status_badge.text = "QR подтверждён"
+                qr_status_badge.classes(replace="bg-emerald-600 text-white text-xs w-fit mb-2 font-bold")
         else:
             qr_status_badge.text = "QR не считан"
             qr_status_badge.classes(replace="bg-gray-600 text-white text-xs w-fit mb-2")
             qr_text_label.text = "Ожидание подтверждённого QR-кода с камеры..."
 
-        if sm.latest_qr_image_b64:
-            src = f"data:image/jpeg;base64,{sm.latest_qr_image_b64}"
-            if getattr(qr_image_preview, 'source', None) != src:
-                if hasattr(qr_image_preview, 'set_source'):
-                    qr_image_preview.set_source(src)
-                else:
-                    qr_image_preview.source = src
-            qr_image_preview.visible = True
-        elif sm.latest_qr_image_bytes:
-            b64_data = base64.b64encode(sm.latest_qr_image_bytes).decode('ascii')
-            sm.latest_qr_image_b64 = b64_data
-            src = f"data:image/jpeg;base64,{b64_data}"
-            if getattr(qr_image_preview, 'source', None) != src:
-                if hasattr(qr_image_preview, 'set_source'):
-                    qr_image_preview.set_source(src)
-                else:
-                    qr_image_preview.source = src
-            qr_image_preview.visible = True
-        else:
-            if getattr(qr_image_preview, 'source', None):
-                if hasattr(qr_image_preview, 'set_source'):
-                    qr_image_preview.set_source('')
-                else:
-                    qr_image_preview.source = ''
-            qr_image_preview.visible = False
+        if confirmed_qr and snapshot_bytes and not snapshot_b64:
+            snapshot_b64 = base64.b64encode(snapshot_bytes).decode('ascii')
+        source = f"data:image/jpeg;base64,{snapshot_b64}" if confirmed_qr and snapshot_b64 else ""
+        if qr_image_preview.source != source:
+            qr_image_preview.set_source(source)
+        qr_snapshot.visible = bool(source)
 
         # 6. Добавление новых строк в судейский лог
         current_len = len(sm.logs)

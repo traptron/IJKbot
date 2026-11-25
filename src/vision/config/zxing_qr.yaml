@@ -1,0 +1,18 @@
+zxing_qr_reader:
+  ros__parameters:
+    image_topic: /camera/color/image_raw
+    status_topic: /victim_status
+    confirm_frames: 2
+    reset_timeout_sec: 1.2
+    max_process_hz: 8.0
+    # The Python binding keeps native tryHarder on. This adds a retry with denoising.
+    try_harder: false
+    use_center_crop: false
+    center_crop_ratio: 0.7
+    publish_confirm_snapshot: false
+    snapshot_topic: /vision/qr/image/compressed
+    require_trigger: true
+    trigger_topic: /vision/take_photo
+    reset_topic: ""
+    capture_window_sec: 0.9
+    metrics_interval_sec: 5.0

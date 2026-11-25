@@ -1,5 +1,6 @@
 """Competition profile executor."""
 
+import re
 from typing import Optional
 from tools.ijk.config import IjkConfig
 from tools.ijk.runner import Runner
@@ -16,6 +17,12 @@ def run_competition(
 ) -> None:
     prof = config.profiles.get("competition")
     speed_limit = prof.max_linear_velocity if prof else 0.25
+    qr_backend = prof.qr_backend if prof else 'zxing'
+    color_profile = prof.color_profile if prof else '1920x1080x15'
+    if qr_backend not in ('zxing', 'opencv'):
+        raise ValueError('competition.qr_backend must be zxing or opencv')
+    if not re.fullmatch(r'[1-9]\d*x[1-9]\d*x[1-9]\d*', color_profile):
+        raise ValueError('competition.color_profile must be WIDTHxHEIGHTxFPS')
     wheel_d = config.hardware.wheel_diameter
     wheel_sep = config.hardware.wheel_separation
 
@@ -47,11 +54,12 @@ def run_competition(
             ]
             runner.run_local_process(local_system_cmd)
         elif runner.robot_ip:
-            print(f"[competition] Запуск базового стека и Nav2 на Raspberry Pi ({runner.robot_ip})...")
+            print(f"[competition] Бортовой запуск Nav2 и QR ({qr_backend}) на {runner.robot_ip}...")
             remote_launch = (
                 f"ros2 launch bringup system.launch.py "
                 f"enable_robot:=true enable_nav:=true enable_lidar:=true "
-                f"enable_brain:=false enable_qr:=false "
+                f"enable_brain:=false enable_camera:=true enable_qr:=true "
+                f"qr_backend:={qr_backend} color_profile:={color_profile} depth_profile:=640x480x15 "
                 f"mock_hardware:=false max_linear_velocity:={speed_limit} "
                 f"wheel_diameter:={wheel_d} wheel_separation:={wheel_sep}"
             )
@@ -59,10 +67,10 @@ def run_competition(
 
     # 2. AI / Dashboard stack
     if role in ("ai", "all"):
-        print("[competition] Запуск судейского дашборда и распознавания QR (laptop.launch.py)...")
+        print("[competition] Запуск судейского дашборда на ноутбуке (laptop.launch.py)...")
         laptop_cmd = [
             "ros2", "launch", "bringup", "laptop.launch.py",
-            "enable_vision:=true",
+            "enable_vision:=false",
             f"mock:={'true' if mock else 'false'}",
         ]
         runner.run_local_process(laptop_cmd)

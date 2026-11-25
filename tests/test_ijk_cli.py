@@ -165,6 +165,31 @@ def test_cyclonedds_config_uses_route_address(tmp_path, monkeypatch):
     assert '<Peer address="192.168.0.191"/>' in xml
 
 
+@pytest.mark.parametrize('backend', ['zxing', 'opencv'])
+def test_competition_runs_qr_on_robot_only(backend):
+    from types import SimpleNamespace
+
+    from tools.ijk.profiles.competition import run_competition
+
+    cfg = load_config()
+    cfg.profiles['competition'].qr_backend = backend
+    cfg.profiles['competition'].color_profile = '1280x720x15'
+    local, remote = [], []
+    runner = SimpleNamespace(
+        robot_ip='192.0.2.2', local=False, domain_id=42,
+        start_remote_launch=remote.append, run_local_process=local.append,
+        wait_with_ctrl_c=lambda: None,
+    )
+
+    run_competition(runner, cfg, rviz=False)
+
+    assert len(remote) == len(local) == 1
+    assert f'qr_backend:={backend}' in remote[0]
+    assert 'enable_qr:=true' in remote[0] and 'enable_camera:=true' in remote[0]
+    assert 'color_profile:=1280x720x15' in remote[0] and 'depth_profile:=640x480x15' in remote[0]
+    assert 'laptop.launch.py' in local[0] and 'enable_vision:=false' in local[0]
+
+
 def test_remote_launch_configures_cyclonedds_without_hardware(monkeypatch):
     from tools.ijk import runner as runner_module
     from subprocess import CompletedProcess

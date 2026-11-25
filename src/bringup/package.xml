@@ -26,6 +26,7 @@
   <exec_depend>description</exec_depend>
   <exec_depend>nav2</exec_depend>
   <exec_depend>twist_mux</exec_depend>
+  <exec_depend>vision</exec_depend>
   <exec_depend>vision_cpp</exec_depend>
 
   <export>
