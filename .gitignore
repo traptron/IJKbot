@@ -61,3 +61,9 @@ qtcreator-*
 
 # Catkin custom files
 CATKIN_IGNORE
+
+# Datasets & YOLO/TensorRT weights
+datasets/
+*.pt
+*.engine
+*.onnx
