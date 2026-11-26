@@ -140,12 +140,12 @@ class ControlCenterServer(ControlServices):
         runner = Runner(self.config, self.robot_ip, self.mock, self.local)
         online, tmux = False, False
         if self.robot_ip and not self.local:
-            online = await asyncio.to_thread(is_ssh_responsive, self.robot_ip, self.config.network.default_user, 2)
+            online = await asyncio.to_thread(is_ssh_responsive, self.robot_ip, self.config.network.default_user, 4)
             if online:
                 tmux = await asyncio.to_thread(runner.is_remote_tmux_running)
         return web.json_response({'robot_ip': self.robot_ip, 'ssh_online': online,
             'tmux_running': tmux, 'active_profile': self.active_profile,
-            'domain_id': self.config.network.domain_id, 'mock': self.mock,
+            'domain_id': self.config.network.domain_id, 'mock': self.mock, 'local': self.local,
             'ros_available': bool(self.bridge.node), 'ros_error': self.bridge.error,
             'estopped': self.estopped, 'process_state': self.process_state,
             'active_options': self.active_options, 'last_error': self.last_error,
@@ -404,7 +404,7 @@ class ControlCenterServer(ControlServices):
         loop=asyncio.get_running_loop()
         def progress(message):loop.call_soon_threadsafe(self.maintenance_line,job,message)
         try:
-            self.maintenance_line(job,'Поиск Pi: проверка SSH и адресов локальной сети')
+            self.maintenance_line(job,'Поиск робота: проверка SSH и адресов локальной сети')
             self.robot_ip = await asyncio.to_thread(discover_robot, self.config, verbose=False, progress=progress)
             if self.robot_ip and not self.mock:
                 self.bridge.publish()
@@ -416,8 +416,8 @@ class ControlCenterServer(ControlServices):
                 if self.control_id: await self.lose_control("Настройки соединения изменились")
             if self.robot_ip:
                 mode=' Управление остаётся в симуляции.' if self.mock else ' Готовность ROS проверяется отдельно.'
-                self.finish_maintenance(job,'succeeded',f'Pi найдена: {self.robot_ip}. SSH доступен.'+mode)
-            else:self.finish_maintenance(job,'failed','Pi не найдена. Проверьте питание и подключение к локальной сети.')
+                self.finish_maintenance(job,'succeeded',f'Робот найден: {self.robot_ip}. SSH доступен.'+mode)
+            else:self.finish_maintenance(job,'failed','Робот не найден. Проверьте питание и подключение к локальной сети.')
             return web.json_response({'robot_ip': self.robot_ip,'job_id':job['id']})
         except Exception as exc:
             self.finish_maintenance(job,'failed',str(exc))
@@ -576,8 +576,11 @@ class ControlCenterServer(ControlServices):
                     elif data.get('type') == 'release':
                         await self.release_control(ws)
                         await ws.send_json({'type':'released'})
-                    elif data.get('type') == 'heartbeat' and self.teleop_client is ws:
-                        self.control_seen = time.monotonic()
+                    elif data.get('type') == 'heartbeat':
+                        if self.teleop_client is ws:
+                            self.control_seen = time.monotonic()
+                        else:
+                            await ws.send_json({'type':'released'})
                     elif data.get('type') == 'twist' and not self.estopped:
                         if self.teleop_client is not ws or time.monotonic()-self.control_seen>.35:
                             await ws.send_json({'type':'error','message':'Возьмите управление и поддерживайте heartbeat'})
@@ -591,10 +594,7 @@ class ControlCenterServer(ControlServices):
                         linear, angular = min(.25, linear), min(.8, angular)
                         v,w=max(-linear,min(linear,v)),max(-angular,min(angular,w))
                         if v or w:
-                            reason = None
-                            if self.link_task and not self.link_task.done(): reason = 'Дождитесь завершения теста связи'
-                            elif not self.lease_ready(): reason = 'Нет подтверждённой управляющей сессии Pi'
-                            elif not self.mock: reason = self.driver_reason(self.bridge.telemetry.snapshot()['topics'])
+                            reason = self.manual_drive_reason(self.bridge.telemetry.snapshot()['topics'])
                             if reason:
                                 self.bridge.publish()
                                 await ws.send_json({'type':'error','message':reason})

@@ -70,6 +70,19 @@ class ControlServices:
         if topics['odom']['stale']: return 'Нет свежей одометрии'
         return None
 
+    def manual_drive_reason(self, topics):
+        if self.estopped: return 'Движение заблокировано аварийной остановкой'
+        if not self.mock:
+            if not (self.robot_ip or self.local): return 'Робот не найден. Выполните поиск.'
+            if not self.bridge.node: return 'ROS-мост недоступен'
+        if self.link_task and not self.link_task.done(): return 'Дождитесь завершения теста связи'
+        if self.control_broken: return 'Управляющая сессия потеряна. Возьмите управление снова.'
+        if not self.lease_ready():
+            if self.mock: return 'Ожидаем готовности симуляции'
+            if topics['guard']['stale']: return 'Нет связи с узлом контроля на борту. Проверьте запуск профиля.'
+            return 'Ожидаем подтверждения управляющей сессии на борту'
+        return None if self.mock else self.driver_reason(topics)
+
     def navigation_context(self,map_id,confirmed=True,full=False):
         if self.active_profile!='navigate' or not self.active_options.get('use_amcl'):
             raise ValueError('Нужен профиль Navigate с включённым AMCL')
@@ -104,6 +117,7 @@ class ControlServices:
     def telemetry_snapshot(self):
         result=self.bridge.telemetry.snapshot()
         topics=result['topics']
+        manual_drive_reason=self.manual_drive_reason(topics)
         # Convert monotonic timestamps to ages for clients on other computers.
         for item in (topics['diagnostics']['data'] or {}).values():
             item['age_s']=max(0,time.monotonic()-item.pop('received'))
@@ -121,6 +135,7 @@ class ControlServices:
             if not self.estopped:reason='Ошибка управляющей сессии: '+control_error
         result.update({'mock':self.mock,'estopped':self.estopped,'ros_error':self.bridge.error,'navigation':self.navigation.snapshot(),
             'summary':reason or ('Ожидание команды' if self.navigation.state not in ('running','waiting') else 'Выполняется маршрут'),
+            'manual_drive_reason':manual_drive_reason,
             'autonomy_ready':self.active_profile=='navigate' and self.autonomous_reason() is None,
             'control':{'owned':self.control_id is not None,'ready':self.lease_ready(),'error':control_error,
                 'broken':self.control_broken,'browser_age_s':None if not self.control_id else time.monotonic()-self.control_seen},
@@ -135,12 +150,14 @@ class ControlServices:
             self.probe_seq+=1;self.bridge.probe(self.probe_seq)
             if self.control_id:
                 self.lease_seq+=1
-                if time.monotonic()-self.control_seen<=.3 and not self.control_broken and not self.estopped:
+                if time.monotonic()-self.control_seen>.3:
+                    await self.release_control(self.teleop_client, 'Потеря heartbeat управляющего браузера')
+                elif not self.control_broken and not self.estopped:
                     self.bridge.lease('heartbeat' if self.was_armed else 'arm',self.lease_token,self.lease_seq)
                     if self.lease_ready():self.was_armed=True
                     elif self.was_armed:await self.lose_control('Нет подтверждения lease от Pi')
                 elif not self.control_broken:
-                    await self.lose_control('Потеря heartbeat управляющего браузера')
+                    await self.lose_control('Аварийная остановка')
             topics=self.bridge.telemetry.snapshot()['topics']
             if self.confirmed and (topics['pose']['stale'] or topics['nav']['stale'] or not (topics['nav']['data'] or {}).get('amcl_active')):
                 self.confirmed=None
@@ -206,11 +223,11 @@ class ControlServices:
         self.lease_seq+=1
         self.bridge.lease('arm',self.lease_token,self.lease_seq)
 
-    async def release_control(self,ws):
+    async def release_control(self,ws,reason='Управляющая вкладка отключена'):
         if self.teleop_client is not ws:return
-        await self.lose_control('Управляющая вкладка отключена')
         self.teleop_client=None
         self.control_id=None
+        await self.lose_control(reason)
 
     async def get_telemetry(self,request):
         return web.json_response(self.telemetry_snapshot())

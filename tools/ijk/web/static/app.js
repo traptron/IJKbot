@@ -27,7 +27,7 @@ async function api(path,data={}) {
   return response.json();
 }
 async function get(path) { const response=await fetch(path); if (!response.ok) throw new Error(await response.text()); return response.json(); }
-let controlId=null, controlLeaseReady=false, pendingClaim=false;
+let controlId=null, controlLeaseReady=false, manualDriveReason=null, pendingClaim=false;
 let state={}, catalog=[], requestBusy=false, saving=false, teleop, pointer=null, x=0,y=0, paused=false;
 let watchedJob=null, handledJobs=new Set(settings.seenJob?[settings.seenJob]:[]);
 const wsUrl=path=>`${location.protocol==='https:'?'wss':'ws'}://${location.host}${path}`;
@@ -63,8 +63,10 @@ function driveBlockReason() {
   if(state.estopped)return 'Движение заблокировано аварийной остановкой';
   if(state.control_error)return 'Ошибка управляющего цикла: '+state.control_error;
   if(teleop?.readyState!==WebSocket.OPEN)return 'Подключается управляющий канал';
+  if(!state.mock&&state.local===false&&!state.robot_ip)return 'Робот не найден. Выполните поиск.';
   if(!controlId)return 'Нажмите «Взять управление», чтобы включить джойстик';
-  if(!controlLeaseReady)return state.mock?'Ожидаем готовности локальной симуляции':'Ожидаем подтверждения управляющей сессии на Pi';
+  if(manualDriveReason)return manualDriveReason;
+  if(!controlLeaseReady)return 'Ожидаем подтверждения управляющей сессии';
   if(!state.mock&&!state.ros_available)return 'ROS-мост недоступен';
   return '';
 }
@@ -168,6 +170,7 @@ function updateControls() {
   $('#discard-stop').disabled=busy;
   $('#estop-alert').hidden=!state.estopped;
   const blocked=driveBlockReason();
+  if(blocked&&pointer!==null)release();
   joystick.dataset.enabled=String(!blocked);joystick.setAttribute('aria-disabled',String(!!blocked));
   $$('[data-drive]').forEach(button=>button.disabled=!!blocked);
   $('#drive-status').textContent=blocked||(state.mock?'Симуляция: можно двигать стик, команды на оборудование не публикуются':state.active_profile==='mapping'?'Mapping работает. Можно рулить джойстиком и сохранять карту.':state.active_profile?'Отпустите стик для остановки.':'Для движения робота запустите Teleop или Mapping.');
@@ -177,7 +180,7 @@ function displayState() {
   $('#domain').textContent=`${state.ros_available?'Подключён':state.mock?'Mock':'Недоступен'} · ${state.domain_id??'—'}`;
   $('#tmux').textContent=state.tmux_running?'Работает':'Не запущен';
   $('#active').textContent=state.active_profile||'Не запущен';
-  $('#connection').textContent=state.mock?'Симуляция':state.ssh_online?'Pi в сети':'Pi недоступна';
+  $('#connection').textContent=state.mock?'Симуляция':state.ssh_online?'Робот в сети':'Робот недоступен';
   $('#connection').dataset.state=state.mock?'mock':state.ssh_online?'online':'offline';
   $('#process-state').textContent=phaseLabels[state.process_state]||'Процесс не запущен';
   const o=state.active_options||{}, rows=[];
@@ -314,7 +317,7 @@ $('#simulation-toggle').onchange=async event=>{
     const result=await api('/api/mode',{mock:requested});
     state.mock=result.mock;controlId=null;controlLeaseReady=false;release();
     await refresh();
-    notice(result.mock?'Симуляция включена. Команды не отправляются оборудованию':'Симуляция выключена. Для движения нужны профиль и подтверждённая связь с Pi','success');
+    notice(result.mock?'Симуляция включена. Команды не отправляются оборудованию':'Симуляция выключена. Для движения нужны профиль и подтверждённая связь с роботом','success');
   }catch(e){notice(e.message);}
   finally{modeBusy=false;updateControls();}
 };

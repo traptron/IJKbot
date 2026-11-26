@@ -29,22 +29,22 @@
         rtts=rtts.filter(v=>performance.now()-v.t<30000);return;
       }
       if(data.type!=='telemetry')return;
-      telemetry=data;lastFrame=performance.now();controlLeaseReady=!!data.control.ready;controlOwned=!!data.control.owned;state.mock=!!data.mock;state.control_error=data.control.error||null;
+      telemetry=data;lastFrame=performance.now();controlLeaseReady=!!data.control.ready;controlOwned=!!data.control.owned;manualDriveReason=data.manual_drive_reason;state.mock=!!data.mock;state.control_error=data.control.error||null;
       $('#claim-control').textContent=!controlId?'Взять управление':data.control.broken?'Восстановить управление':data.control.ready?'Управление получено':'Подключение…';
       $('#claim-control').disabled=modeBusy||!!data.control.error||!!state.estopped||(!controlId&&data.control.owned)||(!!controlId&&!data.control.broken);
       $('#release-control').hidden=!controlId;
       const sessionText=data.control.error?'Ошибка управляющего цикла · требуется перезапуск пульта':controlId
         ? data.control.ready
-          ? data.mock?'Вы управляете симуляцией · Pi не подключена':'Сессия подтверждена узлом Pi'
+          ? data.mock?'Вы управляете симуляцией':'Сессия подтверждена бортовым узлом'
           : data.control.broken?'Управляющая сессия потеряна · требуется восстановление'
-            : data.mock?'Подключается локальная симуляция':'Ожидание подтверждения сессии от Pi'
+            : data.mock?'Подключается локальная симуляция':'Ожидание подтверждения сессии от робота'
         : data.control.owned?'Управляет другая вкладка':data.mock?'Наблюдение · симуляция':'Наблюдение';
       setText('#lease-status',sessionText);
       setText('#health-summary',data.summary);setText('#health-detail',data.summary);
       renderSignals();
       renderTelemetry();renderNavigation();drawRadar();drawMap();updateControls();
     };
-    socket.onclose=()=>{reconnects++;controlLeaseReady=false;setText('#health-summary','Телеметрия отключена');setText('#lease-status','Нет свежих данных о состоянии сессии');setTimeout(connect,1500);};
+    socket.onclose=()=>{reconnects++;controlLeaseReady=false;setText('#health-summary','Телеметрия отключена');setText('#lease-status','Нет свежих данных о состоянии сессии');updateControls();setTimeout(connect,1500);};
   }
   setInterval(()=>{
     if(socket?.readyState===WebSocket.OPEN){const seq=++pingSeq;pings.set(seq,performance.now());socket.send(JSON.stringify({type:'ping',seq}));}

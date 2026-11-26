@@ -86,6 +86,28 @@ class WebControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 400)
         await first.close()
 
+    async def test_heartbeat_timeout_frees_ownership_without_rearming(self):
+        self.center.active_profile = 'teleop'
+        first = await self.client.ws_connect('/ws/teleop')
+        await first.receive_json()
+        await first.send_json({'type': 'claim'})
+        self.assertEqual((await first.receive_json())['type'], 'claimed')
+        self.center.control_seen -= 1
+        for _ in range(20):
+            if self.center.control_id is None:
+                break
+            await asyncio.sleep(.025)
+        self.assertIsNone(self.center.control_id)
+        self.assertFalse(self.center.lease_ready())
+        self.assertEqual(self.published[-1], (0, 0, False))
+
+        await first.send_json({'type': 'heartbeat'})
+        self.assertEqual((await first.receive_json())['type'], 'released')
+        replacement = await self.control_socket()
+        self.assertTrue(self.center.lease_ready())
+        await first.close()
+        await replacement.close()
+
     async def test_profile_lifecycle_and_log_stream(self):
         self.center.command = lambda parts: [sys.executable, '-u', '-c',
             'import time; print("profile ready", flush=True); time.sleep(30)']
@@ -502,7 +524,7 @@ class WebControlTests(unittest.IsolatedAsyncioTestCase):
             search.assert_called_once()
         job=(await (await self.client.get('/api/maintenance')).json())['job']
         self.assertEqual(job['state'],'failed')
-        self.assertIn('не найдена',job['message'])
+        self.assertIn('Робот не найден',job['message'])
 
     async def test_simulation_toggle_changes_commands_and_clears_plans(self):
         from unittest.mock import patch

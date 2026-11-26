@@ -1,5 +1,6 @@
-"""Teleoperation profile (Keyboard or DS4 gamepad)."""
+"""Teleoperation profile (web, keyboard or DS4 gamepad)."""
 
+from shlex import quote
 from typing import Optional
 from tools.ijk.config import IjkConfig
 from tools.ijk.runner import Runner
@@ -51,10 +52,21 @@ def run_teleop(
         runner.run_local_process(local_robot_cmd)
     elif runner.robot_ip:
         if not runner.is_remote_tmux_running():
-            print(f"[teleop] Базовый стек на Pi ({runner.robot_ip}) не запущен. Запуск diff_drive_node...")
+            port = quote(config.hardware.motors_port)
+            setup = quote(f"{config.network.remote_ws}/install/setup.bash")
+            check = runner.run_remote_ssh(
+                f"test -f {setup} && test -c {port} && test -r {port} && test -w {port}",
+            )
+            if check.returncode != 0:
+                raise RuntimeError(
+                    f"На борту {runner.robot_ip} недоступен ROS workspace "
+                    f"или порт приводов {config.hardware.motors_port}. Проверьте SSH, сборку и права на порт."
+                )
+            print(f"[teleop] Запуск драйвера на борту ({runner.robot_ip})...")
             remote_launch = (
                 f"ros2 launch bringup robot.launch.py "
                 f"enable_lidar:=false enable_camera:=false mock_hardware:=false "
+                f"motors_serial_port:={port} "
                 f"max_linear_velocity:={target_speed} "
                 f"wheel_diameter:={config.hardware.wheel_diameter} "
                 f"wheel_separation:={config.hardware.wheel_separation}"

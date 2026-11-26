@@ -232,7 +232,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     elif command == "showcase":
         run_showcase(runner, config, mock=args.mock, gamepad=getattr(args, "use_gamepad", True), record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
     elif command == "teleop":
-        run_teleop(runner, config, use_gamepad=getattr(args, "gamepad", False), web_mode=getattr(args, "web", False), speed=getattr(args, "speed", None), mock=args.mock, record=args.record, bag_name=args.bag_name)
+        try:
+            run_teleop(runner, config, use_gamepad=getattr(args, "gamepad", False), web_mode=getattr(args, "web", False), speed=getattr(args, "speed", None), mock=args.mock, record=args.record, bag_name=args.bag_name)
+        except RuntimeError as exc:
+            print(f"[teleop] {exc}", file=sys.stderr)
+            return 1
     elif command == "mapping":
         run_mapping(runner, config, teleop=getattr(args, "teleop", False), save_name=getattr(args, "save_map", None), mock=args.mock, record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
     elif command == "navigate":

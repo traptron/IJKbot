@@ -161,6 +161,8 @@ def test_cyclonedds_config_uses_route_address(tmp_path, monkeypatch):
     monkeypatch.setattr(env.tempfile, 'gettempdir', lambda: str(tmp_path))
     uri = env.configure_cyclonedds('192.168.0.191')
     xml = Path(uri.removeprefix('file://')).read_text()
+    assert '<AllowMulticast>false</AllowMulticast>' in xml
+    assert '<Peer address="192.168.0.187"/>' in xml
     assert 'address="192.168.0.187"' in xml
     assert '<Peer address="192.168.0.191"/>' in xml
 
@@ -207,6 +209,8 @@ def test_remote_launch_configures_cyclonedds_without_hardware(monkeypatch):
     runner.start_remote_launch('ros2 launch bringup robot.launch.py')
     encoded = commands[1].split('printf %s ', 1)[1].split(' |', 1)[0]
     remote_xml = base64.b64decode(encoded).decode()
+    assert '<AllowMulticast>false</AllowMulticast>' in remote_xml
+    assert '<Peer address="192.168.0.191"/>' in remote_xml
     assert 'address="192.168.0.191"' in remote_xml
     assert '<Peer address="192.168.0.187"/>' in remote_xml
     assert 'CYCLONEDDS_URI=file:///tmp/cyclonedds_ijkbot_remote.xml' in commands[-1]
@@ -284,8 +288,10 @@ def test_discovery_excludes_virtual_networks(monkeypatch):
     monkeypatch.setattr(discovery.subprocess,'run',lambda *a,**kw:SimpleNamespace(stdout='10.82.218.0/24 dev wlo1 scope link\n172.17.0.0/16 dev docker0 scope link\n172.19.0.0/30 dev happ-xray scope link\n'))
     assert discovery.get_local_subnets()==['10.82.218.0/24']
 
-def test_discovery_tries_tokmachka_with_configured_ssh_user(monkeypatch):
-    from tools.ijk import discovery
+def test_discovery_tries_tokmachka_with_configured_ssh_user(monkeypatch, tmp_path):
+    from tools.ijk import config, discovery
+    monkeypatch.setattr(config, 'LOCAL_CONFIG_FILE', tmp_path / 'ijk.local.yaml')
+    monkeypatch.delenv('ROBOT_USER', raising=False)
     cfg=load_config()
     assert cfg.network.default_user=='otmorozki'
     assert 'tokmachka.local' in cfg.network.mdns_aliases
