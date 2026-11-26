@@ -469,6 +469,8 @@ class MissionStateMachine:
 
         # Состояние зрения и QR-кода
         self.victim_detected: bool = False
+        self.latest_victim_image_bytes: Optional[bytes] = None
+        self.latest_victim_image_b64: Optional[str] = None
         self.qr_code_data: Optional[str] = None
         self.latest_qr_text: Optional[str] = None
         self.latest_qr_received_at: Optional[str] = None
@@ -848,6 +850,8 @@ class MissionStateMachine:
             self.spin_timer = 0.0
             self.spin_start_yaw = 0.0
             self.victim_detected = False
+            self.latest_victim_image_bytes = None
+            self.latest_victim_image_b64 = None
             self.qr_code_data = None
             self.latest_qr_text = None
             self.latest_qr_received_at = None
@@ -1130,6 +1134,7 @@ class MissionStateMachine:
                 "latest_qr_text": self.latest_qr_text,
                 "latest_qr_received_at": self.latest_qr_received_at,
                 "has_qr_snapshot": self.latest_qr_image_bytes is not None,
+                "has_victim_snapshot": self.latest_victim_image_bytes is not None,
                 "chronology": [asdict(l) for l in self.logs]
             }
 
@@ -1221,6 +1226,9 @@ class MissionROSNode:
                 self.node.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_callback, 10)
                 self.node.create_subscription(RosString, "/victim_status", self._qr_callback, 10)
                 self.node.create_subscription(CompressedImage, "/vision/qr/image/compressed", self._qr_image_callback, 10)
+                self.node.create_subscription(
+                    CompressedImage, "/vision/victim/image/compressed", self._victim_image_callback, 10
+                )
                 self.node.create_subscription(RosBool, "/victim_detected", self._victim_detected_callback, 10)
                 self.node.create_subscription(RosBool, "/vision/qr/detected", self._qr_detected_callback, 10)
                 self.node.create_subscription(RosString, "/mission/judge_task", self._judge_task_callback, 10)
@@ -1394,6 +1402,17 @@ class MissionROSNode:
                 self.sm.latest_qr_image_b64 = base64.b64encode(data).decode('ascii')
         except Exception as e:
             self.sm._log("WARN", f"Ошибка обработки снимка QR: {e}")
+
+    def _victim_image_callback(self, msg: Any) -> None:
+        try:
+            data = bytes(msg.data)
+            if not data:
+                return
+            with self.sm.lock:
+                self.sm.latest_victim_image_bytes = data
+                self.sm.latest_victim_image_b64 = base64.b64encode(data).decode('ascii')
+        except Exception as e:
+            self.sm._log("WARN", f"Ошибка обработки снимка пострадавшего: {e}")
 
     def _estop_callback(self, msg: Any) -> None:
         if msg.data:
@@ -1890,6 +1909,21 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         for label, obj in sm.evacuation.map.get('objects', {}).items():
                             ui.label(f"{label} · {obj.get('cells', [])} · {obj['description']}")
 
+                # Один снимок найденного пострадавшего (/vision/victim/image/compressed)
+                with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
+                    with ui.row().classes("w-full justify-between items-center mb-2"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.icon("person_search", size="1.4rem").classes("text-amber-400")
+                            ui.label("Найденный пострадавший (1 кадр)").classes("text-base font-semibold text-slate-200")
+                        victim_status_badge = ui.badge("Не обнаружен", color="gray-600").classes("text-xs font-mono px-2 py-0.5 rounded")
+                    victim_image_preview = ui.image().classes(
+                        "w-full max-h-64 object-contain rounded-lg border border-slate-700 bg-slate-950"
+                    )
+                    victim_empty_label = ui.label(
+                        "Ожидание одного кадра при обнаружении (/vision/victim/image/compressed)..."
+                    ).classes("text-xs font-mono text-slate-400 text-center w-full py-4")
+                    victim_image_preview.visible = False
+
             # ПРАВАЯ КОЛОНКА: КАРТОЧКА LLM И КАРТОЧКА QR-КОДА
             with ui.column().classes("w-5/4 gap-4"):
 
@@ -2337,12 +2371,16 @@ def build_judge_dashboard(sm: MissionStateMachine):
         else:
             hold_timer_label.text = "Удержание в ячейке: —"
 
-        # 5. Карточка QR-кода
+        # 5. Карточка QR-кода (текст + 1 снимок прочитанного QR)
         with sm.lock:
             confirmed_qr = sm.qr_code_data if sm.qr_scanned else None
+            latest_qr = sm.latest_qr_text
             simulated = sm.mock_mode
             snapshot_b64 = sm.latest_qr_image_b64
             snapshot_bytes = sm.latest_qr_image_bytes
+            victim_detected = sm.victim_detected
+            victim_b64 = sm.latest_victim_image_b64
+            victim_bytes = sm.latest_victim_image_bytes
 
         if confirmed_qr:
             qr_text_label.text = confirmed_qr
@@ -2352,17 +2390,45 @@ def build_judge_dashboard(sm: MissionStateMachine):
             else:
                 qr_status_badge.text = "QR подтверждён"
                 qr_status_badge.classes(replace="bg-emerald-600 text-white text-xs w-fit mb-2 font-bold")
+        elif latest_qr and latest_qr.strip():
+            qr_text_label.text = latest_qr
+            qr_status_badge.text = "QR считан"
+            qr_status_badge.classes(replace="bg-cyan-600 text-white text-xs w-fit mb-2 font-bold")
         else:
             qr_status_badge.text = "QR не считан"
             qr_status_badge.classes(replace="bg-gray-600 text-white text-xs w-fit mb-2")
             qr_text_label.text = "Ожидание подтверждённого QR-кода с камеры..."
 
-        if confirmed_qr and snapshot_bytes and not snapshot_b64:
+        if snapshot_bytes and not snapshot_b64:
             snapshot_b64 = base64.b64encode(snapshot_bytes).decode('ascii')
-        source = f"data:image/jpeg;base64,{snapshot_b64}" if confirmed_qr and snapshot_b64 else ""
+        source = f"data:image/jpeg;base64,{snapshot_b64}" if snapshot_b64 else ""
         if qr_image_preview.source != source:
             qr_image_preview.set_source(source)
         qr_snapshot.visible = bool(source)
+
+        # 5b. Один снимок найденного пострадавшего
+        if victim_bytes and not victim_b64:
+            victim_b64 = base64.b64encode(victim_bytes).decode('ascii')
+        if victim_b64:
+            victim_source = f"data:image/jpeg;base64,{victim_b64}"
+            if victim_image_preview.source != victim_source:
+                victim_image_preview.set_source(victim_source)
+            victim_image_preview.visible = True
+            victim_empty_label.visible = False
+            victim_status_badge.text = "Пострадавший найден"
+            victim_status_badge.classes(replace="text-xs font-mono px-2 py-0.5 rounded bg-emerald-600 text-white font-bold")
+        elif victim_detected:
+            victim_image_preview.visible = False
+            victim_empty_label.text = "Пострадавший обнаружен, ожидание кадра (/vision/victim/image/compressed)..."
+            victim_empty_label.visible = True
+            victim_status_badge.text = "Обнаружен (без фото)"
+            victim_status_badge.classes(replace="text-xs font-mono px-2 py-0.5 rounded bg-amber-600 text-white font-bold")
+        else:
+            victim_image_preview.visible = False
+            victim_empty_label.text = "Ожидание одного кадра при обнаружении (/vision/victim/image/compressed)..."
+            victim_empty_label.visible = True
+            victim_status_badge.text = "Не обнаружен"
+            victim_status_badge.classes(replace="text-xs font-mono px-2 py-0.5 rounded bg-gray-600 text-white")
 
         # 6. Добавление новых строк в судейский лог
         current_len = len(sm.logs)

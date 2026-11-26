@@ -14,7 +14,7 @@ def generate_launch_description() -> LaunchDescription:
     params_file = Path(get_package_share_directory('vision')) / 'config' / 'zxing_qr.yaml'
     return LaunchDescription([
         DeclareLaunchArgument('params_file', default_value=str(params_file)),
-        DeclareLaunchArgument('require_trigger', default_value='true', choices=['true', 'false']),
+        DeclareLaunchArgument('require_trigger', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('image_reliability', default_value='best_effort',
                               choices=['best_effort', 'reliable']),
         Node(

@@ -11,9 +11,9 @@ zxing_qr_reader:
     try_harder: false
     use_center_crop: false
     center_crop_ratio: 0.7
-    publish_confirm_snapshot: false
+    publish_confirm_snapshot: true
     snapshot_topic: /vision/qr/image/compressed
-    require_trigger: true
+    require_trigger: false
     trigger_topic: /vision/take_photo
     reset_topic: ""
     capture_window_sec: 1.4
