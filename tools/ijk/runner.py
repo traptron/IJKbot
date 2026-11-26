@@ -13,7 +13,7 @@ import sys
 import time
 
 from tools.ijk.config import IjkConfig
-from tools.ijk.env import build_base_environment, build_shell_command, get_source_ip_for_target
+from tools.ijk.env import build_base_environment, build_shell_command, get_source_ip_for_target, unicast_xml
 
 TMUX_SESSION = "ijk"
 REPO_DIR = Path(__file__).resolve().parents[2]
@@ -64,7 +64,19 @@ class Runner:
     def kill_remote_tmux(self) -> None:
         if not self.robot_ip or self.local:
             return
-        self.run_remote_ssh(f"tmux kill-session -t {TMUX_SESSION} 2>/dev/null || true", timeout=5)
+        # Our tmux shell is the session leader. Give launch time to stop the
+        # driver and flush maps, then clean up only this session's processes.
+        target = f"={TMUX_SESSION}"
+        self.run_remote_ssh(
+            f"pane=$(tmux display-message -pt {target}: '#{{pane_pid}}') || exit 0; "
+            'case "$pane" in (""|*[!0-9]*) exit 0;; esac; '
+            f"tmux send-keys -t {target}: C-c; "
+            'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do '
+            'pgrep -s "$pane" -P "$pane" >/dev/null || break; sleep 0.25; done; '
+            f"tmux kill-session -t {target} 2>/dev/null || true; "
+            'pkill -KILL -s "$pane" 2>/dev/null || true',
+            timeout=7,
+        )
 
     def attach_remote(self) -> None:
         """Attach interactively to the Pi's tmux session."""
@@ -98,14 +110,7 @@ class Runner:
             if route.returncode != 0 or not match:
                 raise RuntimeError("Cannot determine robot IP toward laptop for CycloneDDS")
             robot_source_ip = match.group(1)
-            xml = (
-                '<?xml version="1.0" encoding="UTF-8"?>'
-                '<CycloneDDS xmlns="https://cdds.io/config"><Domain id="any">'
-                f'<General><Interfaces><NetworkInterface address="{robot_source_ip}"/>'
-                '</Interfaces><AllowMulticast>true</AllowMulticast></General>'
-                f'<Discovery><Peers><Peer address="{local_ip}"/></Peers></Discovery>'
-                '</Domain></CycloneDDS>'
-            )
+            xml = unicast_xml(robot_source_ip, local_ip)
             encoded = base64.b64encode(xml.encode()).decode()
             remote_file = "/tmp/cyclonedds_ijkbot_remote.xml"
             setup = self.run_remote_ssh(f"printf %s {encoded} | base64 -d > {remote_file}", timeout=5)
@@ -199,7 +204,6 @@ class Runner:
         if self.robot_ip and not self.local:
             print("[stop] Завершение удалённых процессов на Raspberry Pi...")
             self.kill_remote_tmux()
-            self.run_remote_ssh("pkill -9 -f diff_drive_node || true; pkill -9 -f ros2 || true", timeout=4)
         print("[stop] Все системы остановлены.")
 
     def wait_with_ctrl_c(self) -> None:

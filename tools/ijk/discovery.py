@@ -28,8 +28,6 @@ def is_port_open(ip: str, port: int = 22, timeout: float = 0.5) -> bool:
 
 
 def is_ssh_responsive(ip: str, user: str, timeout: int = 2) -> bool:
-    if not is_port_open(ip, 22, timeout=0.6):
-        return False
     try:
         # Quick non-interactive check with BatchMode=yes
         cmd = [

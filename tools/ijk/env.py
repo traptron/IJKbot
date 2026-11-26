@@ -61,6 +61,28 @@ def get_source_ip_for_target(target_ip: str) -> Optional[str]:
     return None
 
 
+def unicast_xml(src_ip: str, peer_ip: str) -> str:
+    """Use unicast on the Wi-Fi link and discover same-host nodes as well."""
+    src_element = f'<Interfaces><NetworkInterface address="{src_ip}"/></Interfaces>'
+    return f"""<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config">
+    <Domain id="any">
+        <General>
+            {src_element}
+            <AllowMulticast>false</AllowMulticast>
+        </General>
+        <Discovery>
+            <ParticipantIndex>auto</ParticipantIndex>
+            <Peers>
+                <Peer address="{src_ip}"/>
+                <Peer address="{peer_ip}"/>
+            </Peers>
+        </Discovery>
+    </Domain>
+</CycloneDDS>
+"""
+
+
 def configure_cyclonedds(robot_ip: Optional[str]) -> Optional[str]:
     """Generate CycloneDDS XML configuration with local interface and robot unicast peer."""
     if not robot_ip:
@@ -69,22 +91,7 @@ def configure_cyclonedds(robot_ip: Optional[str]) -> Optional[str]:
     if not src_ip:
         return None
     xml_path = str(Path(tempfile.gettempdir()) / f"cyclonedds_ijkbot_{os.getuid()}_{robot_ip.replace('.', '_')}.xml")
-    src_element = f'<Interfaces><NetworkInterface address="{src_ip}"/></Interfaces>'
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8" ?>
-<CycloneDDS xmlns="https://cdds.io/config">
-    <Domain id="any">
-        <General>
-            {src_element}
-            <AllowMulticast>true</AllowMulticast>
-        </General>
-        <Discovery>
-            <Peers>
-                <Peer address="{robot_ip}"/>
-            </Peers>
-        </Discovery>
-    </Domain>
-</CycloneDDS>
-"""
+    xml_content = unicast_xml(src_ip, robot_ip)
     try:
         Path(xml_path).write_text(xml_content, encoding="utf-8")
         return f"file://{xml_path}"
