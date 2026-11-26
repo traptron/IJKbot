@@ -25,6 +25,17 @@ Panels:
 Visualization Manager:
   Class: ""
   Displays:
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Состояние мостов
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /terrain/markers
+      Value: true
+
     - Alpha: 0.5
       Cell Size: 0.8
       Class: rviz_default_plugins/Grid

@@ -311,3 +311,20 @@ def test_discovery_tries_tokmachka_with_configured_ssh_user(monkeypatch, tmp_pat
     assert names==['ijkbot.local','tokmachka.local']
     assert users==[('192.0.2.42','otmorozki')]
     assert cached==['192.0.2.42']
+
+
+def test_competition_uses_training_occupancy_map(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from tools.ijk.profiles.competition import run_competition
+    occupancy = tmp_path / 'occupancy.yaml'
+    occupancy.write_text('image: occupancy.pgm\n')
+    arena = tmp_path / 'arena.json'
+    arena.write_text(json.dumps({'training_state': 'MAP_READY', 'version': 'reviewed',
+                                 'occupancy_map': str(occupancy)}))
+    monkeypatch.setenv('IJKBOT_ARENA_FILE', str(arena))
+    launches = []
+    runner = SimpleNamespace(local=True, domain_id=42, robot_ip=None,
+                             run_local_process=launches.append, wait_with_ctrl_c=lambda: None)
+    run_competition(runner, load_config(), mock=True, rviz=False)
+    assert f'map:={occupancy}' in launches[0]

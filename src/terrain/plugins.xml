@@ -1,0 +1,5 @@
+<library path="bridge_layer">
+  <class type="terrain::BridgeLayer" base_class_type="nav2_costmap_2d::Layer">
+    <description>Adds current bridge hazards without clearing other layers.</description>
+  </class>
+</library>

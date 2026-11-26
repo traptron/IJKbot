@@ -129,7 +129,11 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_description, 'launch', 'rsp.launch.py')
         ),
-        launch_arguments={'robot_model': LaunchConfiguration('robot_model')}.items(),
+        launch_arguments={
+            'robot_model': LaunchConfiguration('robot_model'),
+            'sensor_mounts_file': LaunchConfiguration('sensor_mounts_file'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }.items(),
     )
 
     # 2. Сенсорный пайплайн (RealSense D435 + LaserScan)
@@ -159,9 +163,11 @@ def generate_launch_description():
                 'serial_port': motors_serial_port,
                 'wheel_diameter': ParameterValue(wheel_diameter, value_type=float),
                 'wheel_separation': ParameterValue(wheel_separation, value_type=float),
+                'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool),
             }
         ],
-        condition=IfCondition(enable_motors)
+        condition=IfCondition(enable_motors),
+        remappings=[('cmd_vel', LaunchConfiguration('motor_cmd_vel_topic'))],
     )
 
     twist_mux_node = Node(
@@ -202,6 +208,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('robot_model', default_value='legacy'),
+        DeclareLaunchArgument('sensor_mounts_file', default_value=''),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('motor_cmd_vel_topic', default_value='/cmd_vel'),
+        DeclareLaunchArgument('monitor_cmd_vel_topic', default_value='/cmd_vel'),
         declare_enable_camera,
         declare_enable_motors,
         declare_enable_lidar,
@@ -222,6 +232,7 @@ def generate_launch_description():
         motor_driver_node,
         twist_mux_node,
         Node(package='bringup', executable='robot_monitor.py', name='ijk_robot_monitor', output='screen',
+             remappings=[('/cmd_vel', LaunchConfiguration('monitor_cmd_vel_topic'))],
              parameters=[{'launch_session':uuid.uuid4().hex}], respawn=True, respawn_delay=.2),
         rplidar_node,
         lidar_self_filter,

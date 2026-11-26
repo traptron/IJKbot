@@ -1,8 +1,8 @@
 """Mapping profile (SLAM with slam_toolbox and RViz)."""
 
 from pathlib import Path
-from shlex import join
 from typing import Optional
+import shlex
 import time
 
 from tools.ijk.config import IjkConfig
@@ -57,9 +57,20 @@ def run_mapping(
     record: bool = False,
     bag_name: Optional[str] = None,
     rviz: bool = True,
+    terrain_3d: bool = False,
+    terrain_session: Optional[str] = None,
+    sensor_mounts_file: str = "",
 ) -> None:
     prof = config.profiles.get("mapping")
     speed_limit = prof.max_linear_velocity if prof else 0.20
+    terrain_args = []
+    if terrain_3d:
+        speed_limit = min(speed_limit, .1)
+        session = terrain_session or time.strftime(".ros/ijk-terrain/%Y%m%d-%H%M%S")
+        terrain_args = ["enable_3d:=true", f"terrain_session:={session}",
+                        "mapping_frame:=slam_map", "mapping_topic:=/terrain/slam_grid",
+                        f"sensor_mounts_file:={sensor_mounts_file}"]
+        print(f"[mapping] RTAB-Map и съёмка моста: {session} на роботе")
 
     print(f"\n==================================================================")
     print(f"  IJKbot — Картографирование помещения (SLAM) [mapping]            ")
@@ -83,17 +94,21 @@ def run_mapping(
             "mock_hardware:=true",
             "enable_lidar:=false",
             *drive_args,
+            *terrain_args,
+            *(["replay:=true"] if terrain_3d else []),
         ]
         runner.run_local_process(cmd)
     elif runner.robot_ip:
-        print(f"[mapping] Запуск SLAM Toolbox и лидара на борту ({runner.robot_ip})...")
-        remote_launch = join([
+        print(f"[mapping] Запуск SLAM Toolbox и лидара на роботе ({runner.robot_ip})...")
+        camera_preview = config.hardware.camera_type == "realsense" and not terrain_3d
+        remote_launch = shlex.join([
             "ros2", "launch", "bringup", "mapping.launch.py", "mock_hardware:=false",
+            f"mapping_camera:={str(camera_preview).lower()}",
             f"lidar_serial_port:={config.hardware.lidar_port}",
             f"lidar_serial_baudrate:={config.hardware.lidar_baudrate}",
             f"motors_serial_port:={config.hardware.motors_port}",
-            f"mapping_camera:={str(config.hardware.camera_type == 'realsense').lower()}",
             *drive_args,
+            *terrain_args,
         ])
         runner.start_remote_launch(remote_launch)
 
