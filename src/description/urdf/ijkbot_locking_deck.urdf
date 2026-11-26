@@ -1,0 +1,349 @@
+<?xml version="1.0"?>
+<robot name="ijkbot_locking_deck_rviz">
+  <!-- Статическая CAD-модель для RViz. Начала координат датчиков привязаны к корпусам. -->
+  <material name="chassis_gray">
+    <color rgba="0.54 0.60 0.66 1" />
+  </material>
+  <material name="lidar_green">
+    <color rgba="0.22 0.78 0.46 1" />
+  </material>
+  <material name="camera_blue">
+    <color rgba="0.20 0.62 1 1" />
+  </material>
+  <material name="wheel_amber">
+    <color rgba="1 0.61 0.20 1" />
+  </material>
+  <material name="caster_purple">
+    <color rgba="0.72 0.48 0.93 1" />
+  </material>
+  <link name="base_footprint" />
+  <link name="base_link">
+    <visual name="visual_0003">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0003.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0004">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0004.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0005">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0005.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0007">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0007.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0008">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0008.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0009">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0009.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0010">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0010.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0011">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0011.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0016">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0016.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0017">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0017.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0018">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0018.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0019">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0019.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0020">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0020.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0021">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0021.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0022">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0022.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0023">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0023.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0024">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0024.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0025">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0025.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0028">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0028.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0029">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0029.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0030">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0030.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0031">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0031.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0032">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0032.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0033">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0033.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0034">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0034.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0035">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0035.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0036">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0036.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+    <visual name="visual_0039">
+      <origin xyz="-0.1763000 -0.0745500 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0039.stl" />
+      </geometry>
+      <material name="chassis_gray" />
+    </visual>
+  </link>
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint" />
+    <child link="base_link" />
+    <origin xyz="0.0000000 0.0000000 0.0375000" />
+  </joint>
+  <link name="lidar_link">
+    <visual name="visual_0026">
+      <origin xyz="-0.1350000 -0.0740000 -0.2673000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0026.stl" />
+      </geometry>
+      <material name="lidar_green" />
+    </visual>
+    <visual name="visual_0027">
+      <origin xyz="-0.1350000 -0.0740000 -0.2673000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0027.stl" />
+      </geometry>
+      <material name="lidar_green" />
+    </visual>
+  </link>
+  <joint name="lidar_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="lidar_link" />
+    <origin xyz="-0.0413000 -0.0005500 0.2249000" />
+  </joint>
+  <link name="camera_link">
+    <visual name="visual_0037">
+      <origin xyz="-0.2730000 -0.0762000 -0.1562000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0037.stl" />
+      </geometry>
+      <material name="camera_blue" />
+    </visual>
+    <visual name="visual_0038">
+      <origin xyz="-0.2730000 -0.0762000 -0.1562000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0038.stl" />
+      </geometry>
+      <material name="camera_blue" />
+    </visual>
+  </link>
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="camera_link" />
+    <origin xyz="0.0967000 0.0016500 0.1138000" />
+  </joint>
+  <link name="wheel_left_link">
+    <visual name="visual_0012">
+      <origin xyz="-0.1763000 -0.1849000 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0012.stl" />
+      </geometry>
+      <material name="wheel_amber" />
+    </visual>
+    <visual name="visual_0013">
+      <origin xyz="-0.1763000 -0.1849000 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0013.stl" />
+      </geometry>
+      <material name="wheel_amber" />
+    </visual>
+  </link>
+  <joint name="wheel_left_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="wheel_left_link" />
+    <origin xyz="0.0000000 0.1103500 0.0000000" />
+  </joint>
+  <link name="wheel_right_link">
+    <visual name="visual_0001">
+      <origin xyz="-0.1763000 0.0358000 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0001.stl" />
+      </geometry>
+      <material name="wheel_amber" />
+    </visual>
+    <visual name="visual_0002">
+      <origin xyz="-0.1763000 0.0358000 -0.0424000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0002.stl" />
+      </geometry>
+      <material name="wheel_amber" />
+    </visual>
+  </link>
+  <joint name="wheel_right_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="wheel_right_link" />
+    <origin xyz="0.0000000 -0.1103500 0.0000000" />
+  </joint>
+  <link name="caster_left_link">
+    <visual name="visual_0000">
+      <origin xyz="-0.0339000 -0.1546000 -0.0255000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0000.stl" />
+      </geometry>
+      <material name="caster_purple" />
+    </visual>
+    <visual name="visual_0006">
+      <origin xyz="-0.0339000 -0.1546000 -0.0255000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0006.stl" />
+      </geometry>
+      <material name="caster_purple" />
+    </visual>
+  </link>
+  <joint name="caster_left_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="caster_left_link" />
+    <origin xyz="-0.1424000 0.0800500 -0.0169000" />
+  </joint>
+  <link name="caster_right_link">
+    <visual name="visual_0014">
+      <origin xyz="-0.0339000 0.0054000 -0.0255000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0014.stl" />
+      </geometry>
+      <material name="caster_purple" />
+    </visual>
+    <visual name="visual_0015">
+      <origin xyz="-0.0339000 0.0054000 -0.0255000" rpy="0 0 3.141592653589793" />
+      <geometry>
+        <mesh filename="package://description/meshes/locking_deck/body_0015.stl" />
+      </geometry>
+      <material name="caster_purple" />
+    </visual>
+  </link>
+  <joint name="caster_right_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="caster_right_link" />
+    <origin xyz="-0.1424000 -0.0799500 -0.0169000" />
+  </joint>
+</robot>
