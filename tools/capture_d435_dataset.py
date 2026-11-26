@@ -132,8 +132,8 @@ def main() -> int:
                         help='List available OpenCV camera indices and exit')
     parser.add_argument('--save-hz', type=float, default=2.5,
                         help='Target save rate in frames/sec (default: 2.5)')
-    parser.add_argument('--min-blur', type=float, default=60.0,
-                        help='Minimum Laplacian variance to save a frame (0 disables filtering)')
+    parser.add_argument('--min-blur', type=float, default=25.0,
+                        help='Minimum Laplacian variance to save a frame (0 disables filtering; default: 25.0)')
     parser.add_argument('--jpeg-quality', type=int, default=95, help='JPEG quality (1-100)')
     parser.add_argument('--prefix', default='d435', help='Saved filename prefix')
     parser.add_argument('--max-frames', type=int, default=0, help='Optional limit on saved frames (0 = unlimited)')

@@ -72,8 +72,8 @@ def main() -> int:
                         help='Time interval between sampled frames in seconds (default: 0.5)')
     parser.add_argument('--step-frames', type=int, default=None,
                         help='Override --step-sec with a fixed integer frame step')
-    parser.add_argument('--blur-threshold', type=float, default=80.0,
-                        help='Minimum Laplacian variance to keep a frame (0 disables filtering)')
+    parser.add_argument('--blur-threshold', type=float, default=25.0,
+                        help='Minimum Laplacian variance to keep a frame (0 disables filtering; default: 25.0)')
     parser.add_argument('--ext', choices=['jpg', 'png'], default='jpg', help='Output image format')
     parser.add_argument('--jpeg-quality', type=int, default=95, help='JPEG quality (1-100)')
     parser.add_argument('--max-frames', type=int, default=0, help='Optional limit on saved frames (0 = unlimited)')
