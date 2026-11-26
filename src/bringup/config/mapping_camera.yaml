@@ -1,0 +1,4 @@
+# Limit the bandwidth of the RViz preview. Onboard algorithms receive original frames.
+/camera:
+  ros__parameters:
+    camera.color.image_raw.compressed.jpeg_quality: 65

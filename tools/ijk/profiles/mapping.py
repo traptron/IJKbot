@@ -1,6 +1,7 @@
 """Mapping profile (SLAM with slam_toolbox and RViz)."""
 
 from pathlib import Path
+from shlex import join
 from typing import Optional
 import time
 
@@ -68,21 +69,32 @@ def run_mapping(
     if record:
         runner.start_bag_recording(bag_name=bag_name)
 
+    drive_args = [
+        f"max_linear_velocity:={speed_limit}",
+        f"wheel_diameter:={config.hardware.wheel_diameter}",
+        f"wheel_separation:={config.hardware.wheel_separation}",
+    ]
+
     # 1. Start SLAM stack
     if mock or runner.local:
         print("[mapping] Запуск SLAM Toolbox локально (mock_hardware:=true)...")
         cmd = [
             "ros2", "launch", "bringup", "mapping.launch.py",
             "mock_hardware:=true",
-            f"max_linear_velocity:={speed_limit}",
+            "enable_lidar:=false",
+            *drive_args,
         ]
         runner.run_local_process(cmd)
     elif runner.robot_ip:
-        print(f"[mapping] Запуск SLAM Toolbox и лидара на Raspberry Pi ({runner.robot_ip})...")
-        remote_launch = (
-            f"ros2 launch bringup mapping.launch.py "
-            f"mock_hardware:=false max_linear_velocity:={speed_limit}"
-        )
+        print(f"[mapping] Запуск SLAM Toolbox и лидара на борту ({runner.robot_ip})...")
+        remote_launch = join([
+            "ros2", "launch", "bringup", "mapping.launch.py", "mock_hardware:=false",
+            f"lidar_serial_port:={config.hardware.lidar_port}",
+            f"lidar_serial_baudrate:={config.hardware.lidar_baudrate}",
+            f"motors_serial_port:={config.hardware.motors_port}",
+            f"mapping_camera:={str(config.hardware.camera_type == 'realsense').lower()}",
+            *drive_args,
+        ])
         runner.start_remote_launch(remote_launch)
 
     # 2. RViz locally
@@ -90,7 +102,7 @@ def run_mapping(
         print("[mapping] Запуск RViz2 (отображение сетки и строящейся карты /map)...")
         rviz_cmd = [
             "ros2", "run", "rviz2", "rviz2",
-            "-d", "src/nav2/rviz/nav2_default_view.rviz",
+            "-d", str(REPO_DIR / "src/nav2/rviz/mapping.rviz"),
         ]
         runner.run_local_process(rviz_cmd)
 

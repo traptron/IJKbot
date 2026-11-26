@@ -128,7 +128,8 @@ def generate_launch_description():
     rsp_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_description, 'launch', 'rsp.launch.py')
-        )
+        ),
+        launch_arguments={'robot_model': LaunchConfiguration('robot_model')}.items(),
     )
 
     # 2. Сенсорный пайплайн (RealSense D435 + LaserScan)
@@ -200,6 +201,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('robot_model', default_value='legacy'),
         declare_enable_camera,
         declare_enable_motors,
         declare_enable_lidar,
