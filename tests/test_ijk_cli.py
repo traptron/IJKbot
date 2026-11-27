@@ -168,7 +168,8 @@ def test_cyclonedds_config_uses_route_address(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('backend', ['zxing', 'opencv'])
-def test_competition_runs_qr_on_robot_only(backend):
+def test_competition_runs_qr_and_configured_yolo_on_robot_only(backend, monkeypatch):
+    import shlex
     from types import SimpleNamespace
 
     from tools.ijk.profiles.competition import run_competition
@@ -176,6 +177,8 @@ def test_competition_runs_qr_on_robot_only(backend):
     cfg = load_config()
     cfg.profiles['competition'].qr_backend = backend
     cfg.profiles['competition'].color_profile = '1280x720x15'
+    model_path = '/opt/robot models/victim.onnx'
+    monkeypatch.setenv('IJKBOT_VICTIM_MODEL_PATH', model_path)
     local, remote = [], []
     runner = SimpleNamespace(
         robot_ip='192.0.2.2', local=False, domain_id=42,
@@ -189,6 +192,7 @@ def test_competition_runs_qr_on_robot_only(backend):
     assert f'qr_backend:={backend}' in remote[0]
     assert 'enable_qr:=true' in remote[0] and 'enable_camera:=true' in remote[0]
     assert 'color_profile:=1280x720x15' in remote[0] and 'depth_profile:=640x480x15' in remote[0]
+    assert f'victim_model_path:={model_path}' in shlex.split(remote[0])
     assert 'laptop.launch.py' in local[0] and 'enable_vision:=false' in local[0]
 
 

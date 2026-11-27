@@ -42,7 +42,6 @@ def observation(sm, label='victim', position=(2.1, .5, .1), stamp=100.):
 
 def found(sm):
     sm.state = MissionState.SEARCHING_VICTIM
-    sm.evacuation.observe(observation(sm, 'blue_building'), 100.)
     sm.evacuation.observe(observation(sm), 100.)
 
 
@@ -63,16 +62,45 @@ def test_qr_before_figure_does_not_complete_search(sm):
     assert sm.victim_found and sm.state == MissionState.SEARCHING_VICTIM
 
 
-def test_first_observation_requires_landmark_and_depth_evidence(sm):
+def test_first_observation_confirms_victim_without_landmark_or_local_object(sm):
     sm.state = MissionState.SEARCHING_VICTIM
+    sm.command_interpretation.local_object_id = 'tanker_truck'
     sm.evacuation.observe(observation(sm), 100)
-    assert not sm.victim_found
-    sm.evacuation.observe(observation(sm, 'blue_building'), 100)
     assert sm.victim_found
+    assert sm.evacuation.landmark_confirmed
     with pytest.raises(ValueError):
         sm.evacuation.observe(observation(sm, stamp=95), 100)
     with pytest.raises(ValueError):
         sm.evacuation.observe(dict(observation(sm), image_jpeg_b64='invalid'), 100)
+
+
+def test_repeated_yolo_observations_keep_completed_cell_plans(sm):
+    found(sm)
+    original = sm.evacuation.victim
+    sm.evacuation.paths = {(2, 1): 1.0}
+    sm.evacuation.request_paths = Mock()
+    clock = SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=101_000_000_000))
+    wrapper = SimpleNamespace(sm=sm, node=SimpleNamespace(get_clock=lambda: clock))
+    msg = SimpleNamespace(data=json.dumps(observation(sm, position=(2.2, .5, .1), stamp=101)))
+
+    MissionROSNode._observation_callback(wrapper, msg)
+
+    assert sm.evacuation.victim is original
+    assert sm.evacuation.paths == {(2, 1): 1.0}
+    sm.evacuation.request_paths.assert_not_called()
+
+
+def test_confidence_threshold_06_accepts_and_059_rejects(sm):
+    sm.state = MissionState.SEARCHING_VICTIM
+    low = dict(observation(sm), confidence=0.59)
+    with pytest.raises(ValueError):
+        sm.evacuation.observe(low, 100)
+    assert not sm.victim_found
+
+    edge = dict(observation(sm), confidence=0.6)
+    sm.evacuation.observe(edge, 100)
+    assert sm.victim_found
+    assert sm.evacuation.victim.confidence == pytest.approx(0.6)
 
 
 def test_blocked_closest_cell_is_excluded(sm):
@@ -155,6 +183,7 @@ def test_full_attempt_and_evidence_export(sm):
     sm.evacuation.qr('Стабилен', sm.evacuation.qr_started+.1)
     assert not sm.qr_scanned
     sm.latest_qr_image_b64 = JPEG
+    sm.latest_qr_image_bytes = base64.b64decode(JPEG)
     sm.evacuation.qr_image_stamp = sm.evacuation.qr_started+.1
     sm.step(0)
     assert sm.state == MissionState.RETURNING_HOME
@@ -178,12 +207,91 @@ def test_new_attempt_clears_movable_evidence(sm):
         sm.evacuation.observe(previous, 100)
 
 
-def test_qualifier_must_be_observed_near_figure(sm):
+def test_optional_qualifier_is_still_recorded_in_protocol(sm):
     sm.command_interpretation.local_object_id = 'tanker_truck'
     found(sm)
-    assert not sm.victim_found
-    sm.evacuation.observe(observation(sm, 'tanker_truck'), 100)
     assert sm.victim_found
+    sm.evacuation.observe(observation(sm, 'tanker_truck'), 100)
+    assert 'tanker_truck' in sm.evacuation.observations
+
+
+def test_pre_read_qr_2s_old_is_accepted_after_full_5s_hold(sm):
+    at_victim(sm)
+    start = sm.evacuation.started
+    jpeg_raw = b'\xff\xd8preread\xff\xd9'
+    # Robot stands still starting at start+1
+    with patch('time.monotonic', return_value=start + 1.0):
+        sm.step(0)
+    # Valid QR + snapshot arrive 2.0s before 5s hold finishes (at start+4.0)
+    with patch('time.monotonic', return_value=start + 4.0):
+        sm.evacuation.qr('Пульс 75', start + 4.0)
+        sm.evacuation.cache_qr_image(jpeg_raw, start + 4.0)
+    # At 4.9s of hold (start+5.9), 5s hold must NOT be skipped
+    with patch('time.monotonic', return_value=start + 5.9):
+        sm.step(0)
+        assert sm.state == MissionState.WAIT_5_SECONDS
+        assert not sm.evacuation.standing_done
+        assert not sm.qr_scanned
+    # At 5.0s of hold (start+6.0), enters READING_QR cleanly
+    with patch('time.monotonic', return_value=start + 6.0):
+        sm.step(0)
+        assert sm.state == MissionState.READING_QR
+        assert sm.evacuation.standing_done
+    # Next step in READING_QR immediately validates the 2.0s-old pre-read QR
+    with patch('time.monotonic', return_value=start + 6.1):
+        sm.step(0)
+    assert sm.qr_scanned
+    assert sm.qr_code_data == 'Пульс 75'
+    assert sm.latest_qr_image_bytes == jpeg_raw
+    assert sm.state == MissionState.RETURNING_HOME
+
+
+def test_pre_read_qr_4s_old_and_previous_attempt_are_rejected(sm):
+    # Case 1: 4.0s-old pre-read QR (> 3.0s window) is rejected
+    at_victim(sm)
+    start = sm.evacuation.started
+    with patch('time.monotonic', return_value=start + 1.0):
+        sm.step(0)
+    with patch('time.monotonic', return_value=start + 2.0):
+        sm.evacuation.qr('Старый QR', start + 2.0)
+        sm.evacuation.cache_qr_image(b'\xff\xd8stale\xff\xd9', start + 2.0)
+    with patch('time.monotonic', return_value=start + 6.0):
+        sm.step(0)
+    assert sm.state == MissionState.READING_QR
+    with patch('time.monotonic', return_value=start + 6.1):
+        sm.step(0)
+    assert sm.state == MissionState.READING_QR
+    assert not sm.qr_scanned
+    assert sm.qr_code_data is None
+
+    # Case 2: previous attempt pre-read QR is cleared on new attempt start
+    sm.state = MissionState.WAIT_5_SECONDS
+    sm.evacuation.qr('От прошлой попытки', 500.0)
+    sm.evacuation.cache_qr_image(b'\xff\xd8prev\xff\xd9', 500.0)
+    assert sm.evacuation.pre_read_qr_text == 'От прошлой попытки'
+    sm.state = MissionState.READY_TO_START
+    sm.start_mission()
+    assert sm.evacuation.pre_read_qr_text is None
+    assert sm.evacuation.pre_read_qr_image_bytes is None
+
+
+def test_qr_photo_retries_leave_time_for_decoder_confirmation(sm):
+    at_victim(sm)
+    sm._trigger_photo_snapshot = Mock()
+    start = sm.evacuation.started
+    sm.evacuation.stationary_since = start
+    with patch('time.monotonic', return_value=start + 5.0):
+        sm.step(0)
+    assert sm.state == MissionState.READING_QR
+    assert sm._trigger_photo_snapshot.call_count == 1
+
+    for elapsed in (8.25, 8.5, 9.0, 9.5):
+        with patch('time.monotonic', return_value=start + elapsed):
+            sm.step(0)
+    assert sm._trigger_photo_snapshot.call_count == 2
+    with patch('time.monotonic', return_value=start + 9.75):
+        sm.step(0)
+    assert sm._trigger_photo_snapshot.call_count == 3
 
 
 def test_separate_start_signal(sm):
@@ -283,6 +391,23 @@ def test_early_qr_evidence_image_is_rejected(sm):
     frame = SimpleNamespace(data=b'\xff\xd8old', header=SimpleNamespace(stamp=SimpleNamespace(sec=99, nanosec=0)))
     MissionROSNode._qr_image_callback(wrapper, frame)
     assert sm.latest_qr_image_bytes is None
+
+
+def test_pre_read_qr_keeps_latest_image_from_current_attempt(sm):
+    clock = SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=101_000_000_000))
+    wrapper = SimpleNamespace(sm=sm, node=SimpleNamespace(get_clock=lambda: clock))
+    sm.evacuation.attempt_source_started = 99
+    sm.state = MissionState.APPROACHING_VICTIM
+
+    def receive(captured, data):
+        header = SimpleNamespace(stamp=SimpleNamespace(sec=captured, nanosec=0))
+        MissionROSNode._qr_image_callback(wrapper, SimpleNamespace(data=data, header=header))
+
+    receive(98, b'\xff\xd8previous')
+    assert sm.evacuation.pre_read_qr_image_bytes is None
+    receive(101, b'\xff\xd8current')
+    receive(100, b'\xff\xd8out-of-order')
+    assert sm.evacuation.pre_read_qr_image_bytes == b'\xff\xd8current'
 
 
 def test_nav_success_survives_stationary_settling(sm):

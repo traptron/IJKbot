@@ -15,6 +15,8 @@ from std_msgs.msg import Bool, String
 
 from .qr_decoder import QrConfirmation, annotate_qr_jpeg, decode_jpeg
 
+QR_READING_STATES = ('SEARCHING_VICTIM', 'APPROACHING_VICTIM', 'WAIT_5_SECONDS', 'READING_QR')
+
 
 class QrReaderNode(Node):
     """Decode QR codes on demand (snapshot mode) or from stream, publishing confirmed source text."""
@@ -53,7 +55,7 @@ class QrReaderNode(Node):
         self._last_saved_text: Optional[str] = None
         self._latest_image_msg: Optional[CompressedImage] = None
         self._current_mission_state: Optional[str] = None
-        self._allowed_states = ('SEARCHING_VICTIM', 'READING_QR')
+        self._allowed_states = QR_READING_STATES
 
         self._status_publisher = self.create_publisher(String, status_topic, 10)
         self._detected_publisher = self.create_publisher(Bool, detected_topic, 10)
@@ -82,7 +84,7 @@ class QrReaderNode(Node):
     def _mission_state_callback(self, message: String) -> None:
         new_state = message.data.strip()
         if new_state != self._current_mission_state:
-            allowed = getattr(self, '_allowed_states', ('SEARCHING_VICTIM', 'READING_QR'))
+            allowed = getattr(self, '_allowed_states', QR_READING_STATES)
             if self._current_mission_state in allowed and new_state not in allowed:
                 self._confirmation.reset()
                 self._last_stamp = None
@@ -110,7 +112,7 @@ class QrReaderNode(Node):
             return
         # Фильтрация потока по состоянию миссии
         if getattr(self, '_state_filter_enabled', True):
-            allowed = getattr(self, '_allowed_states', ('SEARCHING_VICTIM', 'READING_QR'))
+            allowed = getattr(self, '_allowed_states', QR_READING_STATES)
             current = getattr(self, '_current_mission_state', None)
             if current not in allowed:
                 return

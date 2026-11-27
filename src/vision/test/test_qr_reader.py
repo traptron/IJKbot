@@ -27,7 +27,6 @@ def harness(confirm_frames=3, state_filter_enabled=False, snapshot_mode=False, l
         _snapshot_mode=snapshot_mode,
         _state_filter_enabled=state_filter_enabled,
         _current_mission_state=None,
-        _allowed_states=('SEARCHING_VICTIM', 'READING_QR'),
         _save_snapshot=False,
         _log_dir=log_dir,
     )
@@ -86,7 +85,7 @@ def test_confirm_frames_one_confirms_immediately_d08():
 
 
 def test_stream_filtering_by_mission_state():
-    """Frames processed only when state is SEARCHING_VICTIM or READING_QR."""
+    """Process frames during search, approach, hold and active QR reading."""
     node = harness(confirm_frames=1, state_filter_enabled=True)
     result = QrDetection('filtered_victim')
 
@@ -106,12 +105,11 @@ def test_stream_filtering_by_mission_state():
     assert node._status_publisher.publish.call_count == 1
     assert node._status_publisher.publish.call_args.args[0].data == 'filtered_victim'
 
-    # READING_QR -> processed
-    result2 = QrDetection('reading_victim')
-    QrReaderNode._mission_state_callback(node, String(data='READING_QR'))
-    frame(node, 4, 11.5, result2)
-    assert node._status_publisher.publish.call_count == 2
-    assert node._status_publisher.publish.call_args.args[0].data == 'reading_victim'
+    for stamp, state in enumerate(('APPROACHING_VICTIM', 'WAIT_5_SECONDS', 'READING_QR'), start=4):
+        QrReaderNode._mission_state_callback(node, String(data=state))
+        frame(node, stamp, 10.2 + stamp, QrDetection(state))
+        assert node._status_publisher.publish.call_count == stamp - 2
+        assert node._status_publisher.publish.call_args.args[0].data == state
 
 
 def test_photo_trigger_bypasses_state_filter():

@@ -82,6 +82,12 @@ class Extrinsics:
     def identity(cls) -> 'Extrinsics':
         return cls(rotation=np.eye(3, dtype=np.float64), translation=np.zeros(3, dtype=np.float64))
 
+    @classmethod
+    def from_realsense(cls, rotation: Sequence[float], translation: Sequence[float]) -> 'Extrinsics':
+        """Build the transform from the column-major RealSense Extrinsics message."""
+        matrix = np.asarray(rotation, dtype=np.float64).reshape((3, 3), order='F')
+        return cls(rotation=matrix, translation=np.asarray(translation, dtype=np.float64))
+
 
 @dataclass(frozen=True)
 class DepthPointResult:

@@ -12,6 +12,34 @@ from std_msgs.msg import Bool  # noqa: E402
 from vision import zxing_qr_node  # noqa: E402
 
 
+def test_continuous_reader_republishes_after_mission_photo_reset(monkeypatch):
+    rclpy.init(args=['--ros-args', '-p', 'reset_topic:=/vision/take_photo'])
+    node = None
+    try:
+        node = zxing_qr_node.ZxingQrReader()
+        assert any(sub.topic_name == '/vision/take_photo' for sub in node.subscriptions)
+        now = 10.0
+        monkeypatch.setattr(zxing_qr_node, 'monotonic', lambda: now)
+        monkeypatch.setattr(node._decoder, 'decode_image', lambda *_args: 'Состояние')
+        messages = []
+        node._status = SimpleNamespace(publish=messages.append)
+
+        for stamp in range(1, 7):
+            if stamp == 5:
+                assert len(messages) == 1
+                node._on_reset(Bool(data=True))
+            now += 0.2
+            image = Image(width=1, height=1, encoding='mono8', step=1, data=[255])
+            image.header.stamp.sec = stamp
+            node._on_image(image)
+
+        assert [msg.data for msg in messages] == ['Состояние', 'Состояние']
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.try_shutdown()
+
+
 def test_trigger_requires_fresh_distinct_frames_and_rearms_same_qr(monkeypatch):
     rclpy.init(args=['--ros-args', '-p', 'require_trigger:=true'])
     node = None

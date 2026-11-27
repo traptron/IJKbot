@@ -22,7 +22,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, SetEnvironmentVariable
-from launch.conditions import IfCondition, LaunchConfigurationEquals
+from launch.conditions import IfCondition, LaunchConfigurationEquals, LaunchConfigurationNotEquals
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -51,6 +51,10 @@ def generate_launch_description():
     )
     declare_color_profile = DeclareLaunchArgument('color_profile', default_value='640x480x15')
     declare_depth_profile = DeclareLaunchArgument('depth_profile', default_value='640x480x15')
+    declare_victim_model = DeclareLaunchArgument(
+        'victim_model_path', default_value='',
+        description='Локальный путь к двухклассовой модели YOLO для камеры D435',
+    )
 
     declare_enable_camera = DeclareLaunchArgument(
         'enable_camera',
@@ -235,9 +239,21 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(pkg_vision, 'launch', 'zxing_qr.launch.py')),
             condition=LaunchConfigurationEquals('qr_backend', 'zxing'),
+            launch_arguments={
+                'reset_topic': '/vision/take_photo',
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }.items(),
         ),
     ],
         condition=IfCondition(LaunchConfiguration('enable_qr'))
+    )
+    victim_yolo_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(pkg_vision, 'launch', 'victim_yolo.launch.py')),
+        condition=LaunchConfigurationNotEquals('victim_model_path', ''),
+        launch_arguments={
+            'model_path': LaunchConfiguration('victim_model_path'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }.items(),
     )
 
     return LaunchDescription([
@@ -247,6 +263,7 @@ def generate_launch_description():
         declare_qr_backend,
         declare_color_profile,
         declare_depth_profile,
+        declare_victim_model,
         declare_enable_camera,
         declare_enable_motors,
         declare_enable_lidar,
@@ -273,5 +290,6 @@ def generate_launch_description():
         navigation_launch,
         brain_node,
         qr_reader_launch,
+        victim_yolo_launch,
     ])
 

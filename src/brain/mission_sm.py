@@ -779,6 +779,7 @@ class MissionStateMachine:
         with self.lock:
             self.previous_state = self.state
             self._preparation_generation += 1
+            self.evacuation.clear_pre_read_qr()
             self.state = MissionState.EMERGENCY_STOP
             self._cancel_nav_goal()
             if self.ros_node and hasattr(self.ros_node, "send_emergency_stop"):
@@ -1377,11 +1378,6 @@ class MissionROSNode:
     def _qr_callback(self, msg: Any) -> None:
         with self.sm.lock:
             self.sm.evacuation.qr(msg.data, time.monotonic())
-            if self.sm.state == MissionState.READING_QR:
-                if not msg.data.strip():
-                    return
-                self.sm.latest_qr_text = msg.data
-                self.sm.latest_qr_received_at = self.sm._now_str()
 
     def _qr_image_callback(self, msg: Any) -> None:
         try:
@@ -1389,17 +1385,20 @@ class MissionROSNode:
             if not data.startswith(b'\xff\xd8') or len(data) > 2_000_000:
                 return
             with self.sm.lock:
-                if self.sm.state != MissionState.READING_QR:
-                    return
                 header = msg.header.stamp
                 captured = header.sec + header.nanosec / 1e9
-                started = self.sm.evacuation.qr_source_started
                 now = self.node.get_clock().now().nanoseconds / 1e9
-                if started is None or captured < started or not 0 <= now-captured <= 1:
+                if self.sm.state == MissionState.READING_QR:
+                    started = self.sm.evacuation.qr_source_started
+                    if (self.sm.evacuation.has_qr_evidence() or started is None
+                            or captured < started or not 0 <= now-captured <= 1):
+                        return
+                    self.sm.evacuation.qr_image_stamp = time.monotonic()
+                    self.sm.latest_qr_image_bytes = data
+                    self.sm.latest_qr_image_b64 = base64.b64encode(data).decode('ascii')
                     return
-                self.sm.evacuation.qr_image_stamp = time.monotonic()
-                self.sm.latest_qr_image_bytes = data
-                self.sm.latest_qr_image_b64 = base64.b64encode(data).decode('ascii')
+                if 0 <= now - captured <= self.sm.evacuation.pre_read_qr_max_age_sec:
+                    self.sm.evacuation.cache_qr_image(data, time.monotonic(), source_stamp=captured)
         except Exception as e:
             self.sm._log("WARN", f"Ошибка обработки снимка QR: {e}")
 

@@ -52,7 +52,7 @@ def setup(context, temporary):
 
     sim = arg('use_sim_time')
     use_sim_time = ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)
-    return [
+    actions = [
         include(bringup / 'launch/robot.launch.py',
                 enable_camera='false', enable_lidar=arg('enable_lidar'),
                 enable_motors=arg('enable_motors'),
@@ -76,6 +76,11 @@ def setup(context, temporary):
             parameters=[{'use_sim_time': use_sim_time}],
         ),
     ]
+    if model_path := arg('victim_model_path'):
+        vision = Path(get_package_share_directory('vision'))
+        actions.append(include(vision / 'launch/victim_yolo.launch.py',
+                               model_path=model_path, use_sim_time=sim))
+    return actions
 
 
 def generate_launch_description():
@@ -84,6 +89,7 @@ def generate_launch_description():
         'map': '', 'bridge_reference': '', 'mock_hardware': 'true', 'enable_lidar': 'true', 'enable_motors': 'true',
         'replay': 'false', 'use_sim_time': 'false', 'sensor_mounts_file': '',
         'enable_qr': 'true', 'lidar_serial_port': '/dev/ttyUSB0',
+        'victim_model_path': '',
         'lidar_serial_baudrate': '115200', 'motors_serial_port': '/dev/ttySTS',
         'wheel_diameter': '.075', 'wheel_separation': '.225',
     }

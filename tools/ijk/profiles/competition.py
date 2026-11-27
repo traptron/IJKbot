@@ -28,6 +28,8 @@ def run_competition(
     sensor_mounts_file: str = "",
 ) -> None:
     arena_file = os.environ.get('IJKBOT_ARENA_FILE')
+    victim_model_path = os.environ.get('IJKBOT_VICTIM_MODEL_PATH', '').strip()
+    victim_launch_args = [f'victim_model_path:={victim_model_path}'] if victim_model_path else []
     if terrain_3d and not arena_file:
         raise ValueError('Для --3d укажите IJKBOT_ARENA_FILE с утверждённой картой')
     map_file = None
@@ -80,7 +82,7 @@ def run_competition(
                        f'lidar_serial_port:={config.hardware.lidar_port}',
                        f'lidar_serial_baudrate:={config.hardware.lidar_baudrate}',
                        f'motors_serial_port:={config.hardware.motors_port}',
-                       f'sensor_mounts_file:={sensor_mounts_file}']
+                       f'sensor_mounts_file:={sensor_mounts_file}', *victim_launch_args]
             if mock or runner.local:
                 runner.run_local_process(command + [f'map:={map_file}', f'bridge_reference:={reference}',
                                                     'mock_hardware:=true', 'enable_lidar:=false', 'replay:=true'])
@@ -122,6 +124,8 @@ def run_competition(
                 f"mock_hardware:=false max_linear_velocity:={speed_limit} "
                 f"wheel_diameter:={wheel_d} wheel_separation:={wheel_sep}"
             )
+            if victim_launch_args:
+                remote_launch += ' ' + shlex.join(victim_launch_args)
             if map_file:
                 remote_map = f'{runner.remote_ws}/src/nav2/maps/{map_file.name}'
                 remote_launch += ' map:=' + shlex.quote(remote_map)

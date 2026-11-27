@@ -154,6 +154,219 @@ class TestMissionStateMachine(unittest.TestCase):
         self.assertIsNone(self.sm.latest_victim_image_bytes)
         self.assertIsNone(self.sm.latest_victim_image_b64)
 
+    def test_variant_a_confirms_victim_without_landmark_and_checks_confidence_06(self):
+        import base64
+        self.sm.parse_task_with_llm()
+        self.sm.start_mission()
+        self.sm.state = MissionState.SEARCHING_VICTIM
+        self.sm.inspection_waypoints = [Waypoint(x=2.0, y=0.5, name='target')]
+        jpeg_b64 = base64.b64encode(b'\xff\xd8victim\xff\xd9').decode('ascii')
+
+        def make_obs(conf: float) -> dict:
+            return {
+                'attempt_id': self.sm.evacuation.attempt_id,
+                'label': 'victim',
+                'stamp': 100.0,
+                'frame_id': 'map',
+                'position': [2.1, 0.5, 0.1],
+                'image_jpeg_b64': jpeg_b64,
+                'confidence': conf,
+            }
+
+        with self.assertRaises(ValueError):
+            self.sm.evacuation.observe(make_obs(0.59), now=100.2)
+        self.assertFalse(self.sm.victim_found)
+
+        self.sm.evacuation.observe(make_obs(0.6), now=100.2)
+        self.assertTrue(self.sm.victim_found)
+        self.assertTrue(self.sm.evacuation.landmark_confirmed)
+
+    def test_pre_read_qr_3s_accepted_preserving_5s_hold_and_evidence(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from brain.mission_sm import MissionROSNode
+
+        self.sm.parse_task_with_llm()
+        self.sm.start_mission()
+        self.sm.evacuation.selected_cell = (int(self.sm.robot_x / 0.8), int(self.sm.robot_y / 0.8))
+        self.sm.current_waypoint = Waypoint(x=self.sm.robot_x, y=self.sm.robot_y, name='victim_approach')
+        self.sm.state = MissionState.WAIT_5_SECONDS
+
+        ros_clock_sec = 200.0
+        mono_now = 100.0
+        jpeg_raw = b'\xff\xd8qr3s\xff\xd9'
+        clock = SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=int(ros_clock_sec * 1e9)))
+        wrapper = SimpleNamespace(sm=self.sm, node=SimpleNamespace(get_clock=lambda: clock))
+        self.sm.ros_node = wrapper
+
+        with patch('time.monotonic', side_effect=lambda: mono_now):
+            self.sm.step(0)  # t=100: starts 5s hold
+            self.assertEqual(self.sm.state, MissionState.WAIT_5_SECONDS)
+
+            # QR and image arrive exactly three seconds before READING_QR entry.
+            mono_now = 102.0
+            ros_clock_sec = 202.0
+            MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='Пульс: 82'))
+            MissionROSNode._qr_image_callback(
+                wrapper,
+                SimpleNamespace(
+                    data=jpeg_raw,
+                    header=SimpleNamespace(stamp=SimpleNamespace(sec=202, nanosec=0)),
+                ),
+            )
+            self.assertIsNone(self.sm.qr_code_data)
+
+            # t=104.9 (only 4.9s held): 5-second stop must NOT be skipped
+            mono_now = 104.9
+            ros_clock_sec = 204.9
+            self.sm.step(0)
+            self.assertEqual(self.sm.state, MissionState.WAIT_5_SECONDS)
+            self.assertFalse(self.sm.evacuation.standing_done)
+            self.assertFalse(self.sm.qr_scanned)
+
+            # t=105.0 (full 5.0s held): moves to READING_QR
+            mono_now = 105.0
+            ros_clock_sec = 205.0
+            self.sm.step(0)
+            self.assertEqual(self.sm.state, MissionState.READING_QR)
+            self.assertTrue(self.sm.evacuation.standing_done)
+
+            mono_now = 105.1
+            ros_clock_sec = 205.1
+            MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='Следующий QR'))
+            MissionROSNode._qr_image_callback(
+                wrapper,
+                SimpleNamespace(
+                    data=b'\xff\xd8other',
+                    header=SimpleNamespace(stamp=SimpleNamespace(sec=205, nanosec=0)),
+                ),
+            )
+            self.sm.step(0)
+            self.assertTrue(self.sm.qr_scanned)
+            self.assertEqual(self.sm.qr_code_data, 'Пульс: 82')
+            self.assertEqual(self.sm.latest_qr_image_bytes, jpeg_raw)
+            self.assertEqual(self.sm.state, MissionState.RETURNING_HOME)
+
+    def test_pre_read_qr_4s_stale_and_previous_attempt_rejected(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from brain.mission_sm import MissionROSNode
+
+        self.sm.parse_task_with_llm()
+        self.sm.start_mission()
+        self.sm.evacuation.selected_cell = (int(self.sm.robot_x / 0.8), int(self.sm.robot_y / 0.8))
+        self.sm.current_waypoint = Waypoint(x=self.sm.robot_x, y=self.sm.robot_y, name='victim_approach')
+        self.sm.state = MissionState.WAIT_5_SECONDS
+
+        ros_clock_sec = 300.0
+        mono_now = 100.0
+        clock = SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=int(ros_clock_sec * 1e9)))
+        wrapper = SimpleNamespace(sm=self.sm, node=SimpleNamespace(get_clock=lambda: clock))
+
+        with patch('time.monotonic', side_effect=lambda: mono_now):
+            self.sm.step(0)  # t=100: starts 5s hold
+            # t=101 (4.0s before READING_QR entry -> exceeds PRE_READ_QR_MAX_AGE_SEC=3.0)
+            mono_now = 101.0
+            ros_clock_sec = 301.0
+            MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='Просроченный QR'))
+            MissionROSNode._qr_image_callback(
+                wrapper,
+                SimpleNamespace(
+                    data=b'\xff\xd8stale\xff\xd9',
+                    header=SimpleNamespace(stamp=SimpleNamespace(sec=301, nanosec=0)),
+                ),
+            )
+            mono_now = 105.0
+            ros_clock_sec = 305.0
+            self.sm.step(0)
+            self.assertEqual(self.sm.state, MissionState.READING_QR)
+            mono_now = 105.1
+            self.sm.step(0)
+            self.assertEqual(self.sm.state, MissionState.READING_QR)
+            self.assertFalse(self.sm.qr_scanned)
+            self.assertIsNone(self.sm.qr_code_data)
+
+            # Pre-read from previous attempt must not leak after starting a new attempt
+            self.sm.state = MissionState.APPROACHING_VICTIM
+            self.sm.evacuation.qr('Чужая попытка', 105.5)
+            self.sm.evacuation.cache_qr_image(b'\xff\xd8prev\xff\xd9', 105.5)
+            self.sm.state = MissionState.READY_TO_START
+            self.sm.start_mission()
+            self.assertIsNone(self.sm.evacuation.pre_read_qr_text)
+            self.assertIsNone(self.sm.evacuation.pre_read_qr_image_bytes)
+
+    def test_pre_read_qr_cache_overwrites_old_with_fresh_and_clears_on_exit(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from brain.mission_sm import MissionROSNode
+
+        self.sm.parse_task_with_llm()
+        self.sm.start_mission()
+        self.sm.evacuation.selected_cell = (int(self.sm.robot_x / 0.8), int(self.sm.robot_y / 0.8))
+        self.sm.current_waypoint = Waypoint(x=self.sm.robot_x, y=self.sm.robot_y, name='victim_approach')
+        self.sm.state = MissionState.WAIT_5_SECONDS
+
+        ros_clock_sec = 400.0
+        mono_now = 0.0
+        old_jpeg = b'\xff\xd8oldqr\xff\xd9'
+        fresh_jpeg = b'\xff\xd8freshqr\xff\xd9'
+        clock = SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=int(ros_clock_sec * 1e9)))
+        wrapper = SimpleNamespace(sm=self.sm, node=SimpleNamespace(get_clock=lambda: clock))
+
+        with patch('time.monotonic', side_effect=lambda: mono_now):
+            # t=0.0: stale QR arrives (age at t=5.0 would be 5.0s > 3.0s); also starts 5s hold
+            self.sm.step(0)
+            MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='Старый QR'))
+            MissionROSNode._qr_image_callback(
+                wrapper,
+                SimpleNamespace(
+                    data=old_jpeg,
+                    header=SimpleNamespace(stamp=SimpleNamespace(sec=400, nanosec=0)),
+                ),
+            )
+            self.assertEqual(self.sm.evacuation.pre_read_qr_text, 'Старый QR')
+
+            # t=4.0: fresh QR arrives while still in WAIT_5_SECONDS -> MUST overwrite old cache & stamp
+            mono_now = 4.0
+            ros_clock_sec = 404.0
+            MissionROSNode._qr_callback(wrapper, SimpleNamespace(data='Свежий QR'))
+            MissionROSNode._qr_image_callback(
+                wrapper,
+                SimpleNamespace(
+                    data=fresh_jpeg,
+                    header=SimpleNamespace(stamp=SimpleNamespace(sec=404, nanosec=0)),
+                ),
+            )
+            self.assertEqual(self.sm.evacuation.pre_read_qr_text, 'Свежий QR')
+            self.assertEqual(self.sm.evacuation.pre_read_qr_stamp, 4.0)
+
+            # t=5.0: hold finishes and enters READING_QR -> fresh cache age=1.0 <= 3.0 is accepted
+            mono_now = 5.0
+            ros_clock_sec = 405.0
+            self.sm.step(0)
+            self.assertEqual(self.sm.state, MissionState.READING_QR)
+            self.assertTrue(self.sm.evacuation.standing_done)
+
+            mono_now = 5.1
+            self.sm.step(0)
+            self.assertTrue(self.sm.qr_scanned)
+            self.assertEqual(self.sm.qr_code_data, 'Свежий QR')
+            self.assertEqual(self.sm.latest_qr_image_bytes, fresh_jpeg)
+            self.assertEqual(self.sm.state, MissionState.RETURNING_HOME)
+
+        # Verify cache is cleared on return_home / finish / E-STOP
+        for action in (
+            lambda: self.sm.evacuation.return_home('abort'),
+            lambda: self.sm.evacuation.finish(),
+            lambda: self.sm.trigger_emergency_stop(),
+        ):
+            self.sm.state = MissionState.APPROACHING_VICTIM
+            self.sm.evacuation.qr('Временный QR', 200.0)
+            self.sm.evacuation.cache_qr_image(fresh_jpeg, 200.0)
+            action()
+            self.assertIsNone(self.sm.evacuation.pre_read_qr_text)
+            self.assertIsNone(self.sm.evacuation.pre_read_qr_image_bytes)
+
 
     def setUp(self):
         self.mock_llm = DummyLLMClient("smoke_tower")

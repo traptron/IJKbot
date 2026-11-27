@@ -10,8 +10,10 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', [
-            'launch/qr_reader.launch.py', 'launch/rpi_qr.launch.py', 'launch/zxing_qr.launch.py']),
-        ('share/' + package_name + '/config', ['config/qr_reader.yaml', 'config/zxing_qr.yaml']),
+            'launch/qr_reader.launch.py', 'launch/rpi_qr.launch.py',
+            'launch/zxing_qr.launch.py', 'launch/victim_yolo.launch.py']),
+        ('share/' + package_name + '/config', [
+            'config/qr_reader.yaml', 'config/zxing_qr.yaml', 'config/victim_yolo.yaml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,6 +26,7 @@ setup(
         'console_scripts': [
             'qr_reader_node = vision.qr_reader_node:main',
             'zxing_qr_reader_node = vision.zxing_qr_node:main',
+            'victim_yolo_node = vision.victim_yolo_node:main',
             'rpi_camera_node = vision.rpi_camera_node:main',
             'city_sign_node = vision.city_sign_node:main',
         ],
