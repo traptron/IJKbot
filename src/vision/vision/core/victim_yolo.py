@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from io import BytesIO
 import logging
@@ -22,12 +23,8 @@ from .depth_3d import (
     estimate_bbox_3d,
 )
 
-CLASS_NAMES: dict[int, str] = {
-    0: 'victim',
-    1: 'qr_code',
-}
 VICTIM_CLASS_ID = 0
-QR_CLASS_ID = 1
+CLASS_NAMES = {VICTIM_CLASS_ID: 'victim'}
 MAX_OBSERVATION_JPEG_BYTES = 2_000_000
 MIN_OBSERVATION_CONFIDENCE = 0.6
 DEFAULT_SNAPSHOT_MAX_WIDTH = 640
@@ -49,7 +46,6 @@ class FrameProcessResult:
 
     stamp_sec: float
     victim_detections: tuple[YoloDetection, ...] = ()
-    qr_detections: tuple[YoloDetection, ...] = ()
     best_victim: YoloDetection | None = None
     point_optical: DepthPointResult | None = None
     point_map: tuple[float, float, float] | None = None
@@ -293,70 +289,41 @@ def _decode_yolo_output(
     iou_threshold: float,
     class_names: dict[int, str],
 ) -> list[YoloDetection]:
-    """Decode raw Ultralytics/ONNX/TRT head output ((1,4+C,N), (1,N,4+C), or end2end (1,N,6))."""
+    """Decode a single-class raw head or scored boxes from an export with built-in NMS."""
     arr = np.asarray(output, dtype=np.float32)
-    if arr.ndim == 3:
+    if arr.ndim == 3 and arr.shape[0] == 1:
         arr = arr[0]
-    if arr.ndim != 2 or arr.shape[0] == 0:
+    if arr.ndim != 2:
         return []
 
-    pad_w, pad_h = pad_wh
-    img_w, img_h = img_wh
-
-    # End-to-end exported YOLO26/YOLOv8/v10 with built-in NMS: (N, 6) [x1, y1, x2, y2, conf, cls]
-    if arr.shape[1] == 6 and np.all(np.isin(arr[:, 5], tuple(class_names))):
-        detections: list[YoloDetection] = []
-        for row in arr:
-            conf = float(row[4])
-            if not conf_threshold <= conf <= 1.0 or not np.all(np.isfinite(row[:4])):
-                continue
-            cls_id = int(row[5])
-            x1 = max(0.0, min(float(img_w), (float(row[0]) - pad_w) / scale))
-            y1 = max(0.0, min(float(img_h), (float(row[1]) - pad_h) / scale))
-            x2 = max(0.0, min(float(img_w), (float(row[2]) - pad_w) / scale))
-            y2 = max(0.0, min(float(img_h), (float(row[3]) - pad_h) / scale))
-            if x2 > x1 and y2 > y1:
-                detections.append(YoloDetection(cls_id, class_names[cls_id], conf, (x1, y1, x2, y2)))
-        return detections
-
-    # Standard dense head: (4+C, N) -> transpose to (N, 4+C)
-    channels = 4 + len(class_names)
-    if arr.shape[0] == channels:
+    # Prefer the standard channels-first YOLO11 layout for ambiguous shapes.
+    if arr.shape[0] == 5:
         arr = arr.T
-    if arr.shape[1] != channels:
+    if arr.shape[1] not in (5, 6):
         return []
 
-    cx, cy, bw, bh = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
-    scores_all = arr[:, 4:]
-    cls_ids = np.argmax(scores_all, axis=1)
-    confs = scores_all[np.arange(arr.shape[0]), cls_ids]
-    mask = (confs >= conf_threshold) & (confs <= 1.0) & np.isfinite(arr[:, :4]).all(axis=1)
-    if not np.any(mask):
-        return []
+    raw_head = arr.shape[1] == 5
+    scores = arr[:, 4]
+    mask = (scores >= conf_threshold) & (scores <= 1.0) & np.isfinite(arr[:, :4]).all(axis=1)
+    if not raw_head:
+        mask &= arr[:, 5] == VICTIM_CLASS_ID
+    boxes, scores = arr[mask, :4], scores[mask]
+    if raw_head:
+        half_size = boxes[:, 2:] / 2.0
+        boxes = np.column_stack((boxes[:, :2] - half_size, boxes[:, :2] + half_size))
 
-    cx, cy, bw, bh = cx[mask], cy[mask], bw[mask], bh[mask]
-    cls_ids, confs = cls_ids[mask], confs[mask]
-
-    x1 = np.clip((cx - bw / 2.0 - pad_w) / scale, 0.0, float(img_w))
-    y1 = np.clip((cy - bh / 2.0 - pad_h) / scale, 0.0, float(img_h))
-    x2 = np.clip((cx + bw / 2.0 - pad_w) / scale, 0.0, float(img_w))
-    y2 = np.clip((cy + bh / 2.0 - pad_h) / scale, 0.0, float(img_h))
-    boxes = np.column_stack((x1, y1, x2, y2))
+    # Convert input coordinates back into the source image before suppression.
+    pad = np.asarray(pad_wh * 2, dtype=np.float32)
+    boxes = np.clip((boxes - pad) / scale, 0.0, np.asarray(img_wh * 2, dtype=np.float32))
+    valid = (boxes[:, 2:] > boxes[:, :2]).all(axis=1)
+    boxes, scores = boxes[valid], scores[valid]
+    keep = _nms_xyxy(boxes, scores, iou_threshold) if raw_head else range(len(boxes))
+    label = class_names[VICTIM_CLASS_ID]
 
     detections = []
-    for cls_id in np.unique(cls_ids):
-        cid = int(cls_id)
-        if cid not in class_names:
-            continue
-        cls_mask = cls_ids == cls_id
-        cls_boxes = boxes[cls_mask]
-        cls_scores = confs[cls_mask]
-        for idx in _nms_xyxy(cls_boxes, cls_scores, iou_threshold):
-            bx1, by1, bx2, by2 = (float(v) for v in cls_boxes[idx])
-            if bx2 > bx1 and by2 > by1:
-                detections.append(
-                    YoloDetection(cid, class_names[cid], float(cls_scores[idx]), (bx1, by1, bx2, by2))
-                )
+    for idx in keep:
+        x1, y1, x2, y2 = (float(v) for v in boxes[idx])
+        detections.append(YoloDetection(VICTIM_CLASS_ID, label, float(scores[idx]), (x1, y1, x2, y2)))
     return detections
 
 
@@ -371,7 +338,7 @@ class YoloDetector:
         conf_threshold: float = MIN_OBSERVATION_CONFIDENCE,
         iou_threshold: float = 0.45,
         input_size: int = 640,
-        class_names: dict[int, str] | None = None,
+        class_names: Mapping[int, str] | Sequence[str] | None = None,
         detector_fn: Callable[[np.ndarray, float], Sequence[YoloDetection]] | None = None,
     ) -> None:
         if not 0.0 < conf_threshold <= 1.0:
@@ -385,7 +352,17 @@ class YoloDetector:
         self.conf_threshold = float(conf_threshold)
         self.iou_threshold = float(iou_threshold)
         self.input_size = int(input_size)
-        self.class_names = dict(class_names or CLASS_NAMES)
+        if class_names is None:
+            names = {}
+        elif isinstance(class_names, Mapping):
+            names = dict(class_names)
+        elif isinstance(class_names, Sequence) and not isinstance(class_names, (str, bytes)):
+            names = dict(enumerate(class_names))
+        else:
+            raise ValueError("class_names must be empty or specify only class 0 ('victim')")
+        if names and names != CLASS_NAMES:
+            raise ValueError("class_names must be empty or specify only class 0 ('victim')")
+        self.class_names = dict(CLASS_NAMES)
         self._detector_fn = detector_fn
         self.backend = self._resolve_backend(backend, self.model_path, detector_fn)
         self._runtime: Any = None
@@ -485,9 +462,9 @@ class YoloDetector:
                     continue
                 for box in boxes:
                     cls_id = int(box.cls[0])
-                    if cls_id not in self.class_names:
-                        continue
                     conf = float(box.conf[0])
+                    if cls_id != VICTIM_CLASS_ID or not self.conf_threshold <= conf <= 1.0:
+                        continue
                     x1, y1, x2, y2 = (float(v) for v in box.xyxy[0].tolist())
                     detections.append(YoloDetection(cls_id, self.class_names[cls_id], conf, (x1, y1, x2, y2)))
             return detections
@@ -567,20 +544,17 @@ class VictimObservationPipeline:
         monotonic_sec: float,
         point_transformer: Callable[[tuple[float, float, float]], tuple[float, float, float] | None] | None = None,
     ) -> FrameProcessResult:
-        """Detect victim & qr_code, estimate 3D pose, transform to map, and update Victim3DFilter."""
+        """Detect a victim, estimate 3D pose, transform to map, and update Victim3DFilter."""
         detections = self.detector.detect(bgr_image)
         victims = tuple(
             d for d in detections
             if d.class_id == VICTIM_CLASS_ID and self.min_observation_confidence <= d.confidence <= 1.0
         )
-        qrs = tuple(d for d in detections if d.class_id == QR_CLASS_ID)
-
         if not victims or depth_image is None or depth_intrinsics is None or extrinsics is None:
             self.victim_filter.observe(None, monotonic_sec)
             return FrameProcessResult(
                 stamp_sec=stamp_sec,
                 victim_detections=victims,
-                qr_detections=qrs,
             )
 
         best = max(victims, key=lambda d: d.confidence)
@@ -598,7 +572,6 @@ class VictimObservationPipeline:
             return FrameProcessResult(
                 stamp_sec=stamp_sec,
                 victim_detections=victims,
-                qr_detections=qrs,
                 best_victim=best,
             )
 
@@ -616,7 +589,6 @@ class VictimObservationPipeline:
             return FrameProcessResult(
                 stamp_sec=stamp_sec,
                 victim_detections=victims,
-                qr_detections=qrs,
                 best_victim=best,
                 point_optical=point_3d,
             )
@@ -626,7 +598,6 @@ class VictimObservationPipeline:
         return FrameProcessResult(
             stamp_sec=stamp_sec,
             victim_detections=victims,
-            qr_detections=qrs,
             best_victim=best,
             point_optical=point_3d,
             point_map=point_map,

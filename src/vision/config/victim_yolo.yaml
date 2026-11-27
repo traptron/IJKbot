@@ -2,6 +2,7 @@ victim_yolo_node:
   ros__parameters:
     model_path: ""
     backend: auto
+    class_names: [victim]
     conf_threshold: 0.6
     min_observation_confidence: 0.6
     iou_threshold: 0.45
@@ -25,4 +26,3 @@ victim_yolo_node:
     attempt_id_topic: /mission/attempt_id
     observations_topic: /vision/observations
     victim_snapshot_topic: /vision/victim/image/compressed
-    qr_debug_topic: /vision/yolo/qr_detections

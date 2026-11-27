@@ -53,7 +53,7 @@ def generate_launch_description():
     declare_depth_profile = DeclareLaunchArgument('depth_profile', default_value='640x480x15')
     declare_victim_model = DeclareLaunchArgument(
         'victim_model_path', default_value='',
-        description='Локальный путь к двухклассовой модели YOLO для камеры D435',
+        description='Локальный путь к модели YOLO с одним классом victim для камеры D435',
     )
 
     declare_enable_camera = DeclareLaunchArgument(

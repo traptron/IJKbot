@@ -14,7 +14,7 @@ def generate_launch_description() -> LaunchDescription:
     params_file = Path(get_package_share_directory('vision')) / 'config' / 'victim_yolo.yaml'
     return LaunchDescription([
         DeclareLaunchArgument('params_file', default_value=str(params_file)),
-        DeclareLaunchArgument('model_path', default_value=''),
+        DeclareLaunchArgument('model_path', default_value='', description='Path to a single-class victim model'),
         DeclareLaunchArgument('use_sim_time', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('backend', default_value='auto', choices=['auto', 'tensorrt', 'onnx', 'ultralytics', 'mock']),
         DeclareLaunchArgument('image_reliability', default_value='best_effort', choices=['best_effort', 'reliable']),

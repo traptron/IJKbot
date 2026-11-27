@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 from collections import deque
-import json
 from math import isfinite
 from time import monotonic
 from typing import Any
 
 import numpy as np
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -21,8 +21,8 @@ from std_msgs.msg import String
 
 from .core.depth_3d import CameraIntrinsics, Extrinsics, Victim3DFilter
 from .core.victim_yolo import (
+    CLASS_NAMES,
     VictimObservationPipeline,
-    YoloDetection,
     YoloDetector,
     depth_to_array,
     image_to_bgr,
@@ -78,6 +78,8 @@ class VictimYoloNode(Node):
         declared = self.declare_parameters('', [
             ('model_path', ''),
             ('backend', 'auto'),
+            # An empty YAML sequence does not carry a string-array type in ROS.
+            ('class_names', list(CLASS_NAMES.values()), ParameterDescriptor(dynamic_typing=True, read_only=True)),
             ('conf_threshold', 0.6),
             ('min_observation_confidence', 0.6),
             ('iou_threshold', 0.45),
@@ -101,7 +103,6 @@ class VictimYoloNode(Node):
             ('attempt_id_topic', '/mission/attempt_id'),
             ('observations_topic', '/vision/observations'),
             ('victim_snapshot_topic', '/vision/victim/image/compressed'),
-            ('qr_debug_topic', '/vision/yolo/qr_detections'),
         ])
         params = {p.name: p.value for p in declared}
 
@@ -138,6 +139,7 @@ class VictimYoloNode(Node):
                 conf_threshold=detector_conf,
                 iou_threshold=float(params['iou_threshold']),
                 input_size=int(params['input_size']),
+                class_names=params['class_names'],
             )
 
         victim_filter = Victim3DFilter(
@@ -175,8 +177,6 @@ class VictimYoloNode(Node):
 
         self._obs_pub = self.create_publisher(String, str(params['observations_topic']), 10)
         self._snap_pub = self.create_publisher(CompressedImage, str(params['victim_snapshot_topic']), 10)
-        qr_debug_topic = str(params['qr_debug_topic']).strip()
-        self._qr_debug_pub = self.create_publisher(String, qr_debug_topic, 10) if qr_debug_topic else None
 
         sensor_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -302,26 +302,6 @@ class VictimYoloNode(Node):
             )
             return None
 
-    def _emit_qr_debug(self, qr_detections: tuple[YoloDetection, ...], stamp_sec: float) -> None:
-        if not qr_detections:
-            return
-        best_qr = max(qr_detections, key=lambda d: d.confidence)
-        self.get_logger().debug(
-            f'YOLO qr_code detection conf={best_qr.confidence:.2f} bbox={best_qr.bbox_xyxy}'
-        )
-        if self._qr_debug_pub is not None:
-            payload = {
-                'stamp': stamp_sec,
-                'detections': [
-                    {
-                        'confidence': d.confidence,
-                        'bbox_xyxy': list(d.bbox_xyxy),
-                    }
-                    for d in qr_detections
-                ],
-            }
-            self._qr_debug_pub.publish(String(data=json.dumps(payload)))
-
     def _process_latest(self) -> None:
         now = monotonic()
         if now < self._next_process_at or self._latest_color is None:
@@ -383,7 +363,6 @@ class VictimYoloNode(Node):
                 xyz, color_msg.header.frame_id, color_msg.header.stamp
             ),
         )
-        self._emit_qr_debug(result.qr_detections, stamp_sec)
 
         map_xyz = result.confirmed_map_xyz
         if map_xyz is None or result.best_victim is None:

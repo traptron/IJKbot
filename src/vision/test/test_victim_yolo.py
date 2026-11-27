@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import base64
 from collections import deque
+from importlib.util import find_spec
 import json
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -25,7 +28,6 @@ from vision.core.victim_yolo import (  # noqa: E402
     DEFAULT_SNAPSHOT_MAX_WIDTH,
     MAX_OBSERVATION_JPEG_BYTES,
     MIN_OBSERVATION_CONFIDENCE,
-    QR_CLASS_ID,
     VICTIM_CLASS_ID,
     VictimObservationPipeline,
     YoloDetection,
@@ -86,7 +88,7 @@ class TestVictimYolo(unittest.TestCase):
         )
 
     def test_module_imports_lazily_without_gpu_backends(self):
-        self.assertEqual(CLASS_NAMES, {0: 'victim', 1: 'qr_code'})
+        self.assertEqual(CLASS_NAMES, {0: 'victim'})
         # Selecting an unavailable runtime should only fail when _ensure_loaded() runs, not on import/init.
         det_ort = YoloDetector('/tmp/nonexistent_model.onnx', backend='auto')
         self.assertEqual(det_ort.backend, 'onnx')
@@ -95,13 +97,45 @@ class TestVictimYolo(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             det_ort.detect(self.bgr_frame)
 
+    def test_class_names_accepts_default_and_explicit_victim(self):
+        import yaml
+
+        params_file = _VISION_ROOT / 'config' / 'victim_yolo.yaml'
+        names = yaml.safe_load(params_file.read_text())['victim_yolo_node']['ros__parameters']['class_names']
+        self.assertEqual(names, ['victim'])
+        for value in (None, [], {}, names, {0: 'victim'}):
+            with self.subTest(class_names=value):
+                self.assertEqual(YoloDetector(backend='mock', class_names=value).class_names, {0: 'victim'})
+        for value in ('victim', ['other'], ['victim', 'other'], {1: 'victim'}):
+            with self.subTest(class_names=value), self.assertRaisesRegex(ValueError, 'class_names'):
+                YoloDetector(backend='mock', class_names=value)
+
+    @unittest.skipUnless(find_spec('rclpy'), 'ROS 2 is unavailable')
+    def test_ros_node_accepts_empty_and_single_class_yaml_arrays(self):
+        import rclpy
+        from vision import victim_yolo_node
+
+        with TemporaryDirectory() as directory, patch.object(victim_yolo_node, 'Buffer', None):
+            params_file = Path(directory) / 'victim.yaml'
+            for names in ('[]', '[victim]'):
+                with self.subTest(class_names=names):
+                    params_file.write_text(
+                        f'victim_yolo_node:\n  ros__parameters:\n    class_names: {names}\n'
+                    )
+                    rclpy.init(args=['--ros-args', '--params-file', str(params_file)])
+                    node = None
+                    try:
+                        node = victim_yolo_node.VictimYoloNode()
+                        self.assertEqual(node._pipeline.detector.class_names, {0: 'victim'})
+                    finally:
+                        if node is not None:
+                            node.destroy_node()
+                        rclpy.try_shutdown()
+
     def test_confirmed_victim_produces_valid_evacuation_observation_and_jpeg(self):
         from evacuation import Observation  # direct contract check against src/brain/evacuation.py
 
-        detections = [
-            YoloDetection(VICTIM_CLASS_ID, 'victim', 0.60, self.bbox),
-            YoloDetection(QR_CLASS_ID, 'qr_code', 0.96, (820.0, 500.0, 960.0, 640.0)),
-        ]
+        detections = [YoloDetection(VICTIM_CLASS_ID, 'victim', 0.60, self.bbox)]
         detector = YoloDetector(backend='mock', detector_fn=lambda _img, _c: detections)
         self.assertEqual(MIN_OBSERVATION_CONFIDENCE, 0.6)
         self.assertEqual(detector.conf_threshold, 0.6)
@@ -128,7 +162,7 @@ class TestVictimYolo(unittest.TestCase):
         )
         self.assertIsNone(res1.confirmed_map_xyz)
         self.assertIsNone(res2.confirmed_map_xyz)
-        self.assertEqual(len(res1.qr_detections), 1)
+        self.assertEqual(res1.victim_detections, tuple(detections))
 
         res3 = pipeline.process_frame(
             self.bgr_frame, self.depth_frame, self.color_intr, self.depth_intr, self.extrinsics,
@@ -316,9 +350,9 @@ class TestVictimYolo(unittest.TestCase):
         self.assertIsNotNone(res_ok.confirmed_map_xyz)
         self.assertAlmostEqual(res_ok.confirmed_map_xyz[0], 2.0, delta=0.05)
 
-    def test_qr_only_detections_never_publish_victim(self):
-        qr_only = [YoloDetection(QR_CLASS_ID, 'qr_code', 0.99, self.bbox)]
-        detector = YoloDetector(backend='mock', conf_threshold=0.6, detector_fn=lambda _img, _c: qr_only)
+    def test_unknown_class_never_confirms_a_victim(self):
+        detections = [YoloDetection(1, 'other', 0.99, self.bbox)]
+        detector = YoloDetector(backend='mock', conf_threshold=0.6, detector_fn=lambda _img, _c: detections)
         pipeline = VictimObservationPipeline(
             detector=detector,
             victim_filter=Victim3DFilter(confirm_count=1),
@@ -328,7 +362,6 @@ class TestVictimYolo(unittest.TestCase):
             stamp_sec=200.0, monotonic_sec=20.0,
         )
         self.assertEqual(res.victim_detections, ())
-        self.assertEqual(len(res.qr_detections), 1)
         self.assertIsNone(res.best_victim)
         self.assertIsNone(res.confirmed_map_xyz)
 
@@ -428,20 +461,74 @@ class TestVictimYolo(unittest.TestCase):
         point = extrinsics.rotation @ (1, 0, 0) + extrinsics.translation
         np.testing.assert_array_equal(point, [1, 3, 3])
 
-    def test_yolo_two_class_output_layouts(self):
-        dense = np.array([[100, 100, 80, 60, .8, .1], [50, 50, 60, 80, .1, .7]], dtype=np.float32)
-        end_to_end = np.zeros((6, 6), dtype=np.float32)
-        end_to_end[:2] = [[60, 70, 140, 130, .8, 0], [20, 10, 80, 90, .7, 1]]
-        for output in (dense, dense.T, end_to_end):
+    def test_yolo11n_single_class_raw_head_applies_inclusive_threshold_and_nms(self):
+        dense = np.array([
+            [100, 100, 80, 60, .92],
+            [104, 103, 80, 60, .81],  # Suppressed by the higher-scoring overlapping box.
+            [250, 100, 40, 20, .60],
+            [350, 100, 40, 20, np.nextafter(np.float32(.60), np.float32(0))],
+            [450, 100, 40, 20, 1.01],
+            [0, 0, 0, 0, 0],
+        ], dtype=np.float32)
+        head = dense.T[None, ...]
+        self.assertEqual(head.shape, (1, 5, 6))
+        for output in (head, head[0], dense[None, ...], dense):
             with self.subTest(shape=output.shape):
                 detections = _decode_yolo_output(
-                    output[None], scale=1, pad_wh=(0, 0), img_wh=(640, 480),
+                    output, scale=1, pad_wh=(0, 0), img_wh=(640, 480),
                     conf_threshold=0.6, iou_threshold=0.45, class_names=CLASS_NAMES,
                 )
-                self.assertEqual([d.label for d in detections], ['victim', 'qr_code'])
-                self.assertEqual(detections[0].bbox_xyxy, (60, 70, 140, 130))
+                self.assertEqual([(d.class_id, d.label) for d in detections], [(0, 'victim')] * 2)
+                self.assertEqual([d.bbox_xyxy for d in detections], [(60, 70, 140, 130), (230, 90, 270, 110)])
+                np.testing.assert_allclose([d.confidence for d in detections], [.92, .60])
 
-    def test_raw_image_and_depth_buffers_and_yolo_head_decoder(self):
+    def test_single_class_packed_head_filters_unknown_ids_without_second_nms(self):
+        packed = np.zeros((1, 6, 6), dtype=np.float32)
+        packed[0, :3] = [
+            [60, 70, 140, 130, .8, 0],
+            [60, 70, 140, 130, .7, 0],
+            [20, 10, 80, 90, .9, 1],
+        ]
+        detections = _decode_yolo_output(
+            packed, scale=.5, pad_wh=(10, 20), img_wh=(640, 480),
+            conf_threshold=.6, iou_threshold=.45, class_names=CLASS_NAMES,
+        )
+        self.assertEqual([(d.class_id, d.label) for d in detections], [(0, 'victim')] * 2)
+        self.assertEqual([d.bbox_xyxy for d in detections], [(100, 100, 260, 220)] * 2)
+
+    def test_onnx_and_tensorrt_backends_decode_single_class_raw_output(self):
+        head = np.array([[[32], [32], [20], [24], [.75]]], dtype=np.float32)
+        image = np.zeros((64, 64, 3), dtype=np.uint8)
+        expected = [YoloDetection(0, 'victim', .75, (22.0, 20.0, 42.0, 44.0))]
+
+        ort = YoloDetector('model.onnx', input_size=64)
+        session = SimpleNamespace(run=Mock(return_value=[head]))
+        ort._runtime = (session, 'input')
+        self.assertEqual(ort.detect(image), expected)
+        self.assertEqual(session.run.call_args.args[1]['input'].shape, (1, 3, 64, 64))
+
+        trt = YoloDetector('model.engine', input_size=64)
+        engine = SimpleNamespace(get_tensor_name=('input', 'output').__getitem__)
+        context = Mock()
+        context.get_tensor_shape.return_value = head.shape
+        cuda = Mock()
+        cuda.mem_alloc.side_effect = [1, 2]
+        cuda.memcpy_dtoh_async.side_effect = lambda host, *_: np.copyto(host, head)
+        trt._runtime = (engine, context, cuda)
+        self.assertEqual(trt.detect(image), expected)
+        context.execute_async_v3.assert_called_once()
+
+    def test_ultralytics_backend_accepts_class_zero_only_at_or_above_threshold(self):
+        detector = YoloDetector('model.pt', input_size=64)
+        coords = np.array([[22, 20, 42, 44]], dtype=np.float32)
+        boxes = [SimpleNamespace(cls=[cls], conf=[conf], xyxy=coords)
+                 for cls, conf in ((0, .60), (0, .59), (1, .90))]
+        detector._runtime = SimpleNamespace(predict=Mock(return_value=[SimpleNamespace(boxes=boxes)]))
+
+        self.assertEqual(detector.detect(np.zeros((64, 64, 3), dtype=np.uint8)),
+                         [YoloDetection(0, 'victim', .60, (22.0, 20.0, 42.0, 44.0))])
+
+    def test_raw_image_and_depth_buffers_and_observation_jpeg(self):
         # Verify RGB->BGR conversion with padded stride and 16UC1 depth conversion
         rgb = np.zeros((2, 2, 3), dtype=np.uint8)
         rgb[0, 0] = [10, 20, 30]
@@ -456,20 +543,6 @@ class TestVictimYolo(unittest.TestCase):
         parsed_d = depth_to_array(raw_d.tobytes(), 2, 2, 4, '16UC1')
         np.testing.assert_array_equal(parsed_d, raw_d)
 
-        # Verify dense YOLO output decoding ((1, 6, 10) -> cx, cy, w, h, victim_score, qr_score)
-        head = np.zeros((1, 6, 10), dtype=np.float32)
-        head[0, :, 0] = [320.0, 240.0, 100.0, 200.0, 0.92, 0.05]
-        head[0, :, 1] = [200.0, 200.0, 50.0, 50.0, 0.10, 0.88]
-        decoded = _decode_yolo_output(
-            head,
-            scale=0.5,
-            pad_wh=(0.0, 0.0),
-            img_wh=(1280, 960),
-            conf_threshold=0.8,
-            iou_threshold=0.45,
-            class_names=CLASS_NAMES,
-        )
-        self.assertEqual({d.label for d in decoded}, {'victim', 'qr_code'})
         jpeg = encode_observation_jpeg(self.bgr_frame, snapshot_max_width=640, max_height=480, quality=80)
         self.assertTrue(jpeg.startswith(b'\xff\xd8'))
         self.assertLessEqual(len(jpeg), MAX_OBSERVATION_JPEG_BYTES)
