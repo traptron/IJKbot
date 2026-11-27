@@ -14,6 +14,21 @@ PRE_READ_QR_STATES = ('APPROACHING_VICTIM', 'WAIT_5_SECONDS')
 QR_PHOTO_RETRY_SEC = 1.5
 
 
+def ros_time_seconds(now: Any) -> float | None:
+    """Convert ROS time to seconds when a clock reading is available."""
+    nanoseconds = getattr(now, 'nanoseconds', None)
+    if nanoseconds is not None:
+        return nanoseconds / 1e9
+
+    to_msg = getattr(now, 'to_msg', None)
+    stamp = to_msg() if callable(to_msg) else None
+    seconds = getattr(stamp, 'sec', None)
+    remainder = getattr(stamp, 'nanosec', None)
+    if seconds is None or remainder is None:
+        return None
+    return seconds + remainder / 1e9
+
+
 @dataclass(frozen=True)
 class Observation:
     attempt_id: str
@@ -89,7 +104,7 @@ class Evacuation:
         self.attempt_id = uuid.uuid4().hex
         self.started = time.monotonic()
         if sm.ros_node and getattr(sm.ros_node, 'node', None):
-            self.attempt_source_started = sm.ros_node.node.get_clock().now().nanoseconds / 1e9
+            self.attempt_source_started = ros_time_seconds(sm.ros_node.node.get_clock().now())
         self.home = type(sm.current_waypoint)(sm.robot_x, sm.robot_y, sm.robot_yaw,
                                               (int(sm.robot_x / .8), int(sm.robot_y / .8)), 'start')
         sm.victim_found = sm.victim_detected = sm.qr_scanned = sm.evacuated_home = False
@@ -365,7 +380,7 @@ class Evacuation:
                 sm.state = type(sm.state).READING_QR
                 self.qr_started = now
                 if sm.ros_node and getattr(sm.ros_node, 'node', None):
-                    self.qr_source_started = sm.ros_node.node.get_clock().now().nanoseconds / 1e9
+                    self.qr_source_started = ros_time_seconds(sm.ros_node.node.get_clock().now())
                 sm.qr_code_data = None
                 sm._log('STATE', 'Пять секунд неподвижности подтверждены; чтение QR')
                 if self._consume_pre_read_qr(now):

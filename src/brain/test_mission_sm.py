@@ -1077,15 +1077,26 @@ class TestMissionStateMachine(unittest.TestCase):
         from unittest.mock import patch
         import brain.mission_sm as sm_mod
 
-        with patch.object(sm_mod, 'NAV2_ACTION_AVAILABLE', False):
-            # Создаем ноду в окружении, где NAV2_ACTION_AVAILABLE = False
-            ros_node = sm_mod.MissionROSNode(self.sm)
-            if ros_node.node:
+        if not sm_mod.ROS2_AVAILABLE:
+            self.skipTest("ROS 2 недоступен")
+
+        ros_node = None
+        try:
+            with patch.object(sm_mod, 'NAV2_ACTION_AVAILABLE', False):
+                # Создаем ноду в окружении, где NAV2_ACTION_AVAILABLE = False
+                ros_node = sm_mod.MissionROSNode(self.sm)
+                self.assertIsNotNone(ros_node.node)
                 self.assertIsNone(ros_node.nav_action_client)
                 self.assertIsNotNone(ros_node.goal_pub)
                 self.assertIsNotNone(ros_node.cmd_vel_sm_pub)
                 self.assertIsNotNone(ros_node.cmd_vel_emergency_pub)
-                ros_node.node.destroy_node()
+        finally:
+            try:
+                if ros_node is not None and ros_node.node is not None:
+                    ros_node.node.destroy_node()
+            finally:
+                if sm_mod.rclpy.ok():
+                    sm_mod.rclpy.shutdown()
 
 
     def test_system_launcher_safe_launch_guard_d25(self):

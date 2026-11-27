@@ -101,7 +101,7 @@ except ImportError:
         CommandInterpretation
     )
 
-from brain.evacuation import Evacuation
+from brain.evacuation import Evacuation, ros_time_seconds
 
 # NiceGUI
 NICEGUI_AVAILABLE = False
@@ -1252,8 +1252,9 @@ class MissionROSNode:
     def _observation_callback(self, msg: Any) -> None:
         try:
             with self.sm.lock:
-                now = self.node.get_clock().now().nanoseconds / 1e9
-                self.sm.evacuation.observe(json.loads(msg.data), now)
+                now = ros_time_seconds(self.node.get_clock().now())
+                if now is not None:
+                    self.sm.evacuation.observe(json.loads(msg.data), now)
         except (ValueError, TypeError, KeyError) as error:
             self.sm._log('WARN', f'Наблюдение отклонено: {error}')
 
@@ -1279,7 +1280,8 @@ class MissionROSNode:
                 rclpy.time.Time()
             )
             stamp = t.header.stamp.sec + t.header.stamp.nanosec / 1e9
-            if self.node.get_clock().now().nanoseconds / 1e9 - stamp > .5:
+            now = ros_time_seconds(self.node.get_clock().now())
+            if now is None or now - stamp > .5:
                 return False
             with self.sm.lock:
                 self.sm.robot_x = t.transform.translation.x
@@ -1387,7 +1389,9 @@ class MissionROSNode:
             with self.sm.lock:
                 header = msg.header.stamp
                 captured = header.sec + header.nanosec / 1e9
-                now = self.node.get_clock().now().nanoseconds / 1e9
+                now = ros_time_seconds(self.node.get_clock().now())
+                if now is None:
+                    return
                 if self.sm.state == MissionState.READING_QR:
                     started = self.sm.evacuation.qr_source_started
                     if (self.sm.evacuation.has_qr_evidence() or started is None

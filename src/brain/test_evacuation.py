@@ -53,6 +53,16 @@ def at_victim(sm):
     assert sm.state == MissionState.WAIT_5_SECONDS
 
 
+def test_begin_accepts_ros_time_exposed_as_a_message(sm):
+    stamp = SimpleNamespace(sec=100, nanosec=125_000_000)
+    clock = SimpleNamespace(now=lambda: SimpleNamespace(to_msg=lambda: stamp))
+    sm.ros_node = SimpleNamespace(node=SimpleNamespace(get_clock=lambda: clock))
+
+    sm.evacuation.begin()
+
+    assert sm.evacuation.attempt_source_started == 100.125
+
+
 def test_qr_before_figure_does_not_complete_search(sm):
     sm.state = MissionState.SEARCHING_VICTIM
     MissionROSNode._qr_callback(SimpleNamespace(sm=sm), SimpleNamespace(data='Стабилен'))
