@@ -49,8 +49,8 @@ def generate_launch_description():
         'qr_backend', default_value='opencv', choices=['opencv', 'zxing'],
         description='Бортовой QR-ридер: существующий OpenCV или ZXing на сыром изображении'
     )
-    declare_color_profile = DeclareLaunchArgument('color_profile', default_value='640x480x15')
-    declare_depth_profile = DeclareLaunchArgument('depth_profile', default_value='640x480x15')
+    declare_color_profile = DeclareLaunchArgument('color_profile', default_value='1920x1080x15')
+    declare_depth_profile = DeclareLaunchArgument('depth_profile', default_value='848x480x15')
     declare_victim_model = DeclareLaunchArgument(
         'victim_model_path', default_value='',
         description='Локальный путь к модели YOLO с одним классом victim для камеры D435',

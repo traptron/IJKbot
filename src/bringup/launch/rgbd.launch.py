@@ -121,7 +121,7 @@ def generate_launch_description():
             'camera_name': 'camera',
             'camera_namespace': '',
             'rgb_camera.color_profile': LaunchConfiguration('color_profile'),
-            'depth_module.depth_profile': '640x480x15',
+            'depth_module.depth_profile': LaunchConfiguration('depth_profile'),
             'enable_color': 'true',
             'enable_depth': 'true',
             'align_depth.enable': align_color_depth,
@@ -134,7 +134,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('replay', default_value='false'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('color_profile', default_value='640x480x15'),
+        DeclareLaunchArgument('color_profile', default_value='1920x1080x15'),
+        DeclareLaunchArgument('depth_profile', default_value='848x480x15'),
         DeclareLaunchArgument('mapping_3d', default_value='false'),
         DeclareLaunchArgument('depth_navigation', default_value='false'),
         DeclareLaunchArgument('fused_mapping', default_value='false'),

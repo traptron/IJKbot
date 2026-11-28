@@ -72,8 +72,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('require_trigger', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('image_reliability', default_value='best_effort',
                               choices=['best_effort', 'reliable']),
-        DeclareLaunchArgument('color_profile', default_value='640x480x15'),
-        DeclareLaunchArgument('depth_profile', default_value='640x480x15'),
+        DeclareLaunchArgument('color_profile', default_value='1920x1080x15'),
+        DeclareLaunchArgument('depth_profile', default_value='848x480x15'),
         GroupAction([
             # Replace CLI peer settings and bind DDS traffic to loopback.
             SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'),

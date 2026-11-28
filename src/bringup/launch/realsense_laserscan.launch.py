@@ -18,14 +18,14 @@ def generate_launch_description():
     # Аргументы запуска
     declare_color_profile = DeclareLaunchArgument(
         'color_profile',
-        default_value='640x480x15',
-        description='Профиль цветной камеры: разрешение и FPS (640x480x15)'
+        default_value='1920x1080x15',
+        description='Профиль цветной камеры: разрешение и FPS (1920x1080x15)'
     )
 
     declare_depth_profile = DeclareLaunchArgument(
         'depth_profile',
-        default_value='640x480x15',
-        description='Профиль модуля глубины: разрешение и FPS (напр. 640x480x15)'
+        default_value='848x480x15',
+        description='Профиль модуля глубины: разрешение и FPS (напр. 848x480x15)'
     )
 
     declare_scan_config = DeclareLaunchArgument(

@@ -63,13 +63,13 @@ def generate_launch_description():
 
     declare_color_profile = DeclareLaunchArgument(
         'color_profile',
-        default_value='640x480x15',
+        default_value='1920x1080x15',
         description='Профиль цветной камеры RealSense: разрешение и FPS'
     )
 
     declare_depth_profile = DeclareLaunchArgument(
         'depth_profile',
-        default_value='640x480x15',
+        default_value='848x480x15',
         description='Профиль модуля глубины RealSense: разрешение и FPS'
     )
 
