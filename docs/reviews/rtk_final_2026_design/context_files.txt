@@ -1,0 +1,5 @@
+/home/lev/IJKbot/concepts_brief.md
+/home/lev/IJKbot/docs/reviews/rtk_final_2026/goldfish_review_report.md
+/home/lev/IJKbot/docs/reviews/rtk_final_2026/draft_reconciliation.md
+/home/lev/IJKbot/docs/reviews/rtk_final_2026/platform_decision.md
+/home/lev/IJKbot/docs/GOROD.md

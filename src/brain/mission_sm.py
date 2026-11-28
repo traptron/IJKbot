@@ -18,6 +18,7 @@ import sys
 import time
 import math
 import json
+import html
 import signal
 import base64
 import subprocess
@@ -100,6 +101,8 @@ except ImportError:
         CommandInterpretation
     )
 
+from brain.evacuation import Evacuation, ros_time_seconds
+
 # NiceGUI
 NICEGUI_AVAILABLE = False
 try:
@@ -165,9 +168,8 @@ STATIC_ARENA_CELLS: Dict[Tuple[int, int], Dict[str, Any]] = {
         "type": "start",
     },
     (1, 1): {
-        "title": "ОСТАНОВКА",
-        "subtitle": "Парковка",
-        "detail": "ОБЛОМКИ ЖЁЛТОГО ЗДАНИЯ",
+        "title": "ПАРКОВКА",
+        "subtitle": "Автомобили",
         "fill": "#78350f",
         "stroke": "#f59e0b",
         "text_color": "#fbbf24",
@@ -253,7 +255,7 @@ LANDMARK_WAYPOINTS: Dict[str, Waypoint] = {
         x=0.4, y=1.2, yaw=math.atan2(1.2, 0.8), cell=(0, 1), name="Жёлтое здание"
     ),
     "parking": Waypoint(
-        x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Остановка / парковка"
+        x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Парковка автомобилей"
     ),
     "yellow_building_debris": Waypoint(
         x=0.4, y=1.2, yaw=0.0, cell=(0, 1), name="Обломки жёлтого здания"
@@ -405,7 +407,7 @@ class MissionStateMachine:
 
     SCAN_OFFSETS = tuple(math.radians(deg) for deg in (-45, -15, 15, 45))
     SCAN_SETTLE_SECONDS = 2.0
-    SCAN_CHECK_SECONDS = 1.0
+    SCAN_CHECK_SECONDS = 1.5
     SCAN_YAW_TOLERANCE = math.radians(1.0)
 
     def __init__(self, llm_client: Optional[LLMClient] = None, mock_mode: bool = True):
@@ -421,6 +423,7 @@ class MissionStateMachine:
         self.llm_client = llm_client or LLMClient()
         self.current_task_text: str = DEFAULT_TASK_EXAMPLE
         self.command_interpretation: Optional[CommandInterpretation] = None
+        self._preparation_generation = 0
 
         # Токены LLM (стриминг и сохранение всех токенов)
         self.llm_raw_tokens: str = ""
@@ -466,6 +469,8 @@ class MissionStateMachine:
 
         # Состояние зрения и QR-кода
         self.victim_detected: bool = False
+        self.latest_victim_image_bytes: Optional[bytes] = None
+        self.latest_victim_image_b64: Optional[str] = None
         self.qr_code_data: Optional[str] = None
         self.latest_qr_text: Optional[str] = None
         self.latest_qr_received_at: Optional[str] = None
@@ -478,6 +483,8 @@ class MissionStateMachine:
 
         # ROS 2 узел (если инициализирован)
         self.ros_node: Optional[Any] = None
+
+        self.evacuation = Evacuation(self)
 
         # Инициализация первого лога
         self._log("SYS", "Конечный автомат миссии IJKbot инициализирован. Режим: " +
@@ -542,9 +549,13 @@ class MissionStateMachine:
         Запуск анализа задания моделью Qwen 3.5 9B.
         """
         with self.lock:
+            if self.state not in (MissionState.PREPARATION, MissionState.READY_TO_START, MissionState.MISSION_COMPLETE):
+                raise ValueError('Завершите текущую попытку перед новым заданием')
             if not self.current_task_text:
                 raise ValueError("Текст задания судей не может быть пустым")
 
+            self._preparation_generation += 1
+            generation = self._preparation_generation
             self.previous_state = self.state
             self.state = MissionState.LLM_PARSING
             self.command_interpretation = None
@@ -593,6 +604,8 @@ class MissionStateMachine:
                     cell=(int(goal['x'] / 0.8), int(goal['y'] / 0.8)),
                     name=interp.target_landmark_id)
             else:
+                if not self.mock_mode:
+                    raise ValueError('Нет доступных точек осмотра выбранного ориентира')
                 waypoint = LANDMARK_WAYPOINTS.get(interp.target_landmark_id, START_WAYPOINT)
                 interp.nav2_goal = {
                     "frame_id": "map",
@@ -603,7 +616,8 @@ class MissionStateMachine:
         except Exception as e:
             with self.lock:
                 self.is_streaming = False
-                self.state = MissionState.PREPARATION
+                if self.state == MissionState.LLM_PARSING:
+                    self.state = MissionState.PREPARATION
                 self._log("ERROR", f"Сбой обработки LLM: {str(e)}")
             raise e
         finally:
@@ -611,6 +625,8 @@ class MissionStateMachine:
                 self.is_streaming = False
 
         with self.lock:
+            if generation != self._preparation_generation or self.state != MissionState.LLM_PARSING:
+                raise ValueError('Интерпретация отменена сменой состояния')
             if not getattr(interp, "raw_text", None):
                 interp.raw_text = json.dumps(interp.to_dict(), ensure_ascii=False, indent=2)
                 interp.token_count = len(interp.raw_text.split())
@@ -618,6 +634,11 @@ class MissionStateMachine:
                 self.streaming_tokens = interp.raw_text
             else:
                 self.streaming_tokens = interp.raw_text or self.streaming_tokens
+            if not self.mock_mode and (
+                    interp.source != 'llm' or interp.target_landmark_id not in self.llm_client.arena.get('objects', {})
+                    or interp.nav2_goal is None):
+                self.state = MissionState.PREPARATION
+                raise ValueError('LLM должна выбрать известный ориентир из проверенной карты')
             self.command_interpretation = interp
             self.llm_parsed = True
             lm_id = interp.target_landmark_id
@@ -682,6 +703,9 @@ class MissionStateMachine:
             if not self._navigation_odometry_ready():
                 return False
 
+            if self.state not in (MissionState.NAVIGATING_TO_LANDMARK, MissionState.APPROACHING_VICTIM, MissionState.RETURNING_HOME):
+                self._log("WARN", "Движение разрешается отдельным сигналом старта")
+                return False
             self._publish_goal_pose(self.current_waypoint)
             yaw_deg = int(math.degrees(self.current_waypoint.yaw)) % 360
             total_wp = len(self.waypoints_queue) if self.waypoints_queue else 1
@@ -705,19 +729,22 @@ class MissionStateMachine:
         with self.lock:
             if not self._navigation_odometry_ready():
                 return
-            if self.state not in [MissionState.READY_TO_START, MissionState.PREPARATION]:
-                self._log("WARN", f"Повторный старт миссии из состояния {self.state}: сброс и перезапуск...")
-                self._cancel_nav_goal()
-                self.victim_found = False
-                self.qr_scanned = False
-                self.evacuated_home = False
-
-            if not self.command_interpretation:
-                if self.current_task_text:
-                    self.parse_task_with_llm()
-                else:
-                    self.set_task_description(DEFAULT_TASK_EXAMPLE)
-                    self.parse_task_with_llm()
+            if self.state != MissionState.READY_TO_START or not self.command_interpretation:
+                self._log("WARN", "Старт доступен после интерпретации задания")
+                return
+            if not self.mock_mode:
+                arena = self.llm_client.arena
+                from brain.semantic_map import validate_snapshot
+                try:
+                    validate_snapshot(arena)
+                except (ValueError, OSError, KeyError) as error:
+                    self._log('ERROR', str(error))
+                    return
+                if (arena.get('training_state') != 'MAP_READY' or not arena.get('version') or
+                        self.command_interpretation.source != 'llm'):
+                    self._log("ERROR", "Нужны проверенная карта и ответ локальной LLM")
+                    return
+            self.evacuation.begin()
 
             self.mission_start_time = time.time()
             self.mission_end_time = None
@@ -751,6 +778,8 @@ class MissionStateMachine:
         """Аварийная остановка робота (E-STOP)."""
         with self.lock:
             self.previous_state = self.state
+            self._preparation_generation += 1
+            self.evacuation.clear_pre_read_qr()
             self.state = MissionState.EMERGENCY_STOP
             self._cancel_nav_goal()
             if self.ros_node and hasattr(self.ros_node, "send_emergency_stop"):
@@ -764,6 +793,8 @@ class MissionStateMachine:
         with self.lock:
             if self.state == MissionState.EMERGENCY_STOP:
                 self.state = self.previous_state or MissionState.PREPARATION
+                if self.state == MissionState.LLM_PARSING:
+                    self.state = MissionState.PREPARATION
                 self._log("SYS", f"E-STOP сброшен. Возврат в состояние: {self.state}")
                 if self.state in [
                     MissionState.NAVIGATING_TO_LANDMARK,
@@ -787,6 +818,7 @@ class MissionStateMachine:
             elif self.state not in [MissionState.PREPARATION, MissionState.MISSION_COMPLETE, MissionState.EMERGENCY_STOP]:
                 self.previous_state = self.state
                 self.state = MissionState.PAUSED
+                self.evacuation.stationary_since = None
                 self._cancel_nav_goal()
                 self._publish_zero_velocity()
                 self._log("STATE", "Миссия приостановлена (ПАУЗА)")
@@ -795,6 +827,8 @@ class MissionStateMachine:
         """Полный сброс автомата миссии к исходному состоянию."""
         with self.lock:
             self._cancel_nav_goal()
+            self.evacuation = Evacuation(self)
+            self._preparation_generation += 1
             self.state = MissionState.PREPARATION
             self.previous_state = MissionState.PREPARATION
             self.llm_parsed = False
@@ -817,6 +851,8 @@ class MissionStateMachine:
             self.spin_timer = 0.0
             self.spin_start_yaw = 0.0
             self.victim_detected = False
+            self.latest_victim_image_bytes = None
+            self.latest_victim_image_b64 = None
             self.qr_code_data = None
             self.latest_qr_text = None
             self.latest_qr_received_at = None
@@ -830,85 +866,8 @@ class MissionStateMachine:
     # ------------------------------------------------------------------------
     def step(self, dt: float = 0.1) -> None:
         with self.lock:
-            # Обновление координат через TF2 map -> base_footprint в реальном режиме
-            if not self.mock_mode and self.ros_node and hasattr(self.ros_node, "update_pose_from_tf"):
-                self.ros_node.update_pose_from_tf()
-
-            # 0. Проверка лимита времени (5 минут = 300 сек). При t >= 250 сек (< 50 сек до конца) — автовозврат на базу
-            elapsed = self.get_elapsed_mission_sec()
-            if elapsed >= 250.0 and self.state not in [
-                MissionState.PREPARATION,
-                MissionState.READY_TO_START,
-                MissionState.RETURNING_HOME,
-                MissionState.MISSION_COMPLETE,
-                MissionState.EMERGENCY_STOP,
-                MissionState.PAUSED,
-            ]:
-                self._log("WARN", f"ТАЙМАУТ МИССИИ ({elapsed:.1f}с / 300с)! До конца осталось менее 50с. Экстренный возврат на базу [0.4, 0.4]!")
-                self._cancel_nav_goal()
-                self.current_waypoint = START_WAYPOINT
-                self.state = MissionState.RETURNING_HOME
-                self._publish_goal_pose(START_WAYPOINT)
-
-            # 1. Симуляция движения в mock-режиме
-            if self.mock_mode and self.current_waypoint and self.state in [
-                MissionState.NAVIGATING_TO_LANDMARK,
-                MissionState.APPROACHING_VICTIM,
-                MissionState.RETURNING_HOME
-            ]:
-                self._step_mock_kinematics(dt)
-
-            # 2. Логика переходов автомата состояний
-            if self.state == MissionState.NAVIGATING_TO_LANDMARK:
-                if self._check_reached_waypoint(self.current_waypoint):
-                    total_wp = len(self.waypoints_queue) if self.waypoints_queue else 1
-                    self._log(
-                        "NAV",
-                        f"Робот прибыл в ячейку [{self.current_waypoint_idx + 1}/{total_wp}] «{self.current_waypoint.name}». "
-                        f"Начало осмотра сектора 90° к ориентиру (4 направления, остановка 3.0с)..."
-                    )
-                    self.state = MissionState.SEARCHING_VICTIM
-                    self._cancel_nav_goal()
-                    self.spin_step = 0
-                    self.spin_phase = "ROTATE"
-                    self.spin_timer = 0.0
-                    self.spin_start_yaw = self.robot_yaw
-                    self.scan_center_yaw = self._landmark_bearing()
-                    self.qr_code_data = None
-                    self._log("VISION", f"Биссектриса сектора: {math.degrees(self.scan_center_yaw):.1f}° в map")
-                    self._publish_zero_velocity()
-
-            elif self.state == MissionState.SEARCHING_VICTIM:
-                self._handle_spin_and_scan(dt)
-
-            elif self.state == MissionState.APPROACHING_VICTIM:
-                if self._check_reached_waypoint(self.current_waypoint):
-                    self._log("NAV", "Робот прибыл в ячейку к пострадавшему. Начало регламентного 5-секундного удержания...")
-                    self.state = MissionState.WAIT_5_SECONDS
-                    self._cancel_nav_goal()
-                    self.wait_timer_start = time.time()
-                    self._publish_zero_velocity()
-
-            elif self.state == MissionState.WAIT_5_SECONDS:
-                self._publish_zero_velocity()
-                if self.wait_timer_start is not None:
-                    wait_elapsed = time.time() - self.wait_timer_start
-                    if wait_elapsed >= self.wait_duration_required:
-                        self._log("STATE", f"Регламентная 5-секундная фиксация выполнена ({wait_elapsed:.1f}с). Начало эвакуации в стартовую ячейку [0.4, 0.4]...")
-                        self.current_waypoint = START_WAYPOINT
-                        self.state = MissionState.RETURNING_HOME
-                        self._publish_goal_pose(START_WAYPOINT)
-
-            elif self.state == MissionState.READING_QR:
-                self._cancel_nav_goal()
-                self._handle_qr_reading(dt)
-
-            elif self.state == MissionState.RETURNING_HOME:
-                if self._check_reached_waypoint(START_WAYPOINT):
-                    self._handle_mission_completion()
-
-            # 3. Публикация статуса в топики ROS 2
-            if self.ros_node and hasattr(self.ros_node, "publish_mission_status"):
+            self.evacuation.tick(dt)
+            if self.ros_node and hasattr(self.ros_node, 'publish_mission_status'):
                 self.ros_node.publish_mission_status()
 
     # ------------------------------------------------------------------------
@@ -948,9 +907,9 @@ class MissionStateMachine:
           1. ROTATE: наведение по обратной связи yaw, не быстрее 0.4 рад/с.
           2. PAUSE: полная остановка на 2.0 сек для стабилизации камеры.
           3. CHECK: снимок и ожидание QR до 1.0 сек.
-             - Если QR считан: переход в WAIT_5_SECONDS.
+             - Наблюдение фигурки обрабатывается отдельно через /vision/observations.
              - Если нет: следующий шаг (spin_step += 1).
-        Если все направления проверены без QR: следующая ячейка из waypoints_queue.
+        Если все направления проверены без фигурки: следующая ячейка из waypoints_queue.
         Если все ячейки исчерпаны: возврат на базу [0.4, 0.4].
         """
         TURN_SPEED = 0.4  # рад/с
@@ -961,22 +920,6 @@ class MissionStateMachine:
             self.spin_phase = 'ROTATE'
             self.spin_timer = 0.0
             self.qr_code_data = None
-            return
-
-        # Принимать QR только после наведения внутри сектора осмотра
-        if self.qr_code_data and not self.qr_scanned and self._scan_view_ready():
-            self.victim_detected = True
-            self.victim_found = True
-            self.qr_scanned = True
-            self._log(
-                "QR",
-                f"QR-код успешно считан в ячейке [{self.current_waypoint_idx + 1}/{total_wp}] "
-                f"(шаг {self.spin_step + 1}/4):\n{self.qr_code_data}"
-            )
-            self.state = MissionState.WAIT_5_SECONDS
-            self.wait_timer_start = time.time()
-            self._publish_zero_velocity()
-            self._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
             return
 
         if self.spin_phase == "ROTATE":
@@ -1022,39 +965,13 @@ class MissionStateMachine:
                 self._log(
                     "VISION",
                     f"Ячейка [{self.current_waypoint_idx + 1}/{total_wp}], "
-                    f"шаг {self.spin_step + 1}/4 ({deg_turned}°): остановка 2.0с выдержана. Делаем снимок и проверяем QR..."
+                    f"шаг {self.spin_step + 1}/4 ({deg_turned}°): остановка 2.0с выдержана. Делаем снимок и проверяем наличие фигурки..."
                 )
                 self._trigger_photo_snapshot()
 
         elif self.spin_phase == "CHECK":
             self._publish_zero_velocity()
             self.spin_timer += dt
-
-            # В mock-режиме имитируем чтение QR на 4-м шаге первой ячейки
-            if self.mock_mode and not self.qr_code_data:
-                if self.current_waypoint_idx == 0 and self.spin_step == 3:
-                    self.qr_code_data = (
-                        "ПОСТРАДАВШИЙ #1\n"
-                        "ФИО: Иванов И.И.\n"
-                        "Состояние: Средней тяжести\n"
-                        "Пульс: 74 уд/мин, SpO2: 96%\n"
-                        "Травма: Перелом голени, сознание сохранено"
-                    )
-
-            if self.qr_code_data and not self.qr_scanned:
-                self.victim_detected = True
-                self.victim_found = True
-                self.qr_scanned = True
-                self._log(
-                    "QR",
-                    f"QR-код успешно считан в ячейке [{self.current_waypoint_idx + 1}/{total_wp}] "
-                    f"(шаг {self.spin_step + 1}/4):\n{self.qr_code_data}"
-                )
-                self.state = MissionState.WAIT_5_SECONDS
-                self.wait_timer_start = time.time()
-                self._publish_zero_velocity()
-                self._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
-                return
 
             # Даем ноде QR-детектора 1.0с на обработку снимка перед переходом к следующему повороту
             if self.spin_timer < self.SCAN_CHECK_SECONDS and not self.mock_mode:
@@ -1066,7 +983,7 @@ class MissionStateMachine:
                 self._log(
                     "VISION",
                     f"В ячейке [{self.current_waypoint_idx + 1}/{total_wp}] "
-                    f"({self.current_waypoint.name}) QR-код не обнаружен в секторе 90° к ориентиру."
+                    f"({self.current_waypoint.name}) Фигурка не обнаружена в секторе 90° к ориентиру."
                 )
                 if self.current_waypoint_idx + 1 < len(self.waypoints_queue):
                     self.current_waypoint_idx += 1
@@ -1080,9 +997,7 @@ class MissionStateMachine:
                     self._publish_goal_pose(self.current_waypoint)
                 else:
                     self._log("NAV", "Все ячейки проверены, QR-код не найден. Возврат на базу в стартовую ячейку [0.4, 0.4]...")
-                    self.current_waypoint = START_WAYPOINT
-                    self.state = MissionState.RETURNING_HOME
-                    self._publish_goal_pose(START_WAYPOINT)
+                    self.evacuation.return_home('Область поиска осмотрена; фигурка не найдена')
             else:
                 self.spin_phase = "ROTATE"
                 self.spin_start_yaw = self.robot_yaw
@@ -1095,44 +1010,10 @@ class MissionStateMachine:
     def _handle_qr_reading(self, dt: float) -> None:
         """Ожидание результата отдельной ноды ijkbot_vision/qr_reader_node."""
         self._publish_zero_velocity()
-        if self.mock_mode and not self.qr_code_data:
-            mock_qr = (
-                "ПОСТРАДАВШИЙ #1\n"
-                "ФИО: Иванов И.И.\n"
-                "Состояние: Средней тяжести\n"
-                "Пульс: 74 уд/мин, SpO2: 96%\n"
-                "Травма: Перелом голени, сознание сохранено"
-            )
-            self.qr_code_data = mock_qr
-
-        if not self.qr_code_data:
-            return
-
-        if not self.qr_scanned:
-            self.qr_scanned = True
-            self._log("QR", f"Данные с QR-кода состояния успешно считаны:\n{self.qr_code_data}")
-            self.victim_found = True
-            self.victim_detected = True
-            self.state = MissionState.WAIT_5_SECONDS
-            self.wait_timer_start = time.time()
-            self._publish_zero_velocity()
-            self._log("STATE", "QR получен: остановка на 5 секунд перед возвратом в стартовую ячейку")
 
     def _handle_mission_completion(self) -> None:
         """Фиксация успешной эвакуации и завершения миссии."""
-        self.evacuated_home = True
-        self.state = MissionState.MISSION_COMPLETE
-        self._cancel_nav_goal()
-        self.mission_end_time = time.time()
-        self._publish_zero_velocity()
-
-        self._log("STATE", "Пострадавший успешно эвакуирован в стартовую ячейку [0, 0]!")
-        self._log("STATE", "=== МИССИЯ ПОЛНОСТЬЮ ЗАВЕРШЕНА ===")
-
-        # Автоматическое сохранение протокола на диск в папку log/
-        saved_path = self.save_protocol_to_disk()
-        if saved_path:
-            self._log("SYS", f"Протокол миссии автоматически сохранен на диск: {saved_path}")
+        self.evacuation.finish()
 
     # ------------------------------------------------------------------------
     # Кинематика симулятора (Mock Differential Drive)
@@ -1176,6 +1057,9 @@ class MissionStateMachine:
     def _check_reached_waypoint(self, wp: Optional[Waypoint]) -> bool:
         if not wp:
             return False
+        if not self.mock_mode:
+            if not self.ros_node or self.ros_node.goal_status != GoalStatus.STATUS_SUCCEEDED:
+                return False
         dist = math.hypot(wp.x - self.robot_x, wp.y - self.robot_y)
         yaw_diff = abs((wp.yaw - self.robot_yaw + math.pi) % (2 * math.pi) - math.pi)
         tol_dist = 0.06 if self.mock_mode else 0.15
@@ -1186,7 +1070,7 @@ class MissionStateMachine:
         if not self.mock_mode and self.ros_node and getattr(self.ros_node, "goal_status", None) == GoalStatus.STATUS_SUCCEEDED:
             if dist < 0.25:
                 action_succeeded = True
-            self.ros_node.goal_status = None
+            # Keep success until a new goal is issued; stationary confirmation may arrive later.
 
         # Для ячеек поиска (где выполняется осмотр сектора 90°), подъезда к пострадавшему
         # и эвакуации на базу [0.4, 0.4] конечная ориентация робота не имеет значения:
@@ -1237,6 +1121,7 @@ class MissionStateMachine:
                 "document": "Протокол и хронология событий миссии IJKbot",
                 "competition": "Кубок РТК Высшая Лига — Хакатон «Эвакуация» (Ижевск)",
                 "timestamp": datetime.now().isoformat(),
+                "attempt": self.evacuation.protocol(),
                 "task_text": self.current_task_text,
                 "command_interpretation": self.command_interpretation.to_dict() if self.command_interpretation else None,
                 "execution_status": {
@@ -1250,6 +1135,7 @@ class MissionStateMachine:
                 "latest_qr_text": self.latest_qr_text,
                 "latest_qr_received_at": self.latest_qr_received_at,
                 "has_qr_snapshot": self.latest_qr_image_bytes is not None,
+                "has_victim_snapshot": self.latest_victim_image_bytes is not None,
                 "chronology": [asdict(l) for l in self.logs]
             }
 
@@ -1262,7 +1148,7 @@ class MissionStateMachine:
             log_dir = Path(os.environ.get("IJKBOT_LOG_DIR", Path.cwd() / "log"))
             log_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_path = log_dir / f"protocol_{ts}.json"
+            file_path = log_dir / f"protocol_{ts}_{self.evacuation.attempt_id or 'preparation'}.json"
             file_path.write_text(self.export_protocol_json(), encoding="utf-8")
             return str(file_path)
         except Exception as e:
@@ -1295,12 +1181,20 @@ class MissionROSNode:
         self._nav_goal_seq: int = 0
         self._nav_goal_pending: bool = False
         self.last_odom_received_at: Optional[float] = None
+        self.terrain_status: Optional[tuple[float, dict]] = None
 
         if ROS2_AVAILABLE:
             try:
                 if not rclpy.ok():
                     rclpy.init()
                 self.node = Node("mission_state_machine")
+
+                from brain.mission_navigation import MissionNavigation
+                self.navigation = MissionNavigation(self)
+                self.node.create_subscription(RosString, '/vision/observations', self._observation_callback, 10)
+                self.node.create_subscription(RosString, '/terrain/status', self._terrain_status_callback, 10)
+                self.protocol_pub = self.node.create_publisher(RosString, '/mission/protocol', 10)
+                self.attempt_pub = self.node.create_publisher(RosString, '/mission/attempt_id', 10)
 
                 # Публикаторы скоростей для twist_mux (/cmd_vel_sm, /cmd_vel_emergency)
                 self.cmd_vel_sm_pub = self.node.create_publisher(Twist, "/cmd_vel_sm", 10)
@@ -1333,15 +1227,42 @@ class MissionROSNode:
                 self.node.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_callback, 10)
                 self.node.create_subscription(RosString, "/victim_status", self._qr_callback, 10)
                 self.node.create_subscription(CompressedImage, "/vision/qr/image/compressed", self._qr_image_callback, 10)
+                self.node.create_subscription(
+                    CompressedImage, "/vision/victim/image/compressed", self._victim_image_callback, 10
+                )
                 self.node.create_subscription(RosBool, "/victim_detected", self._victim_detected_callback, 10)
                 self.node.create_subscription(RosBool, "/vision/qr/detected", self._qr_detected_callback, 10)
                 self.node.create_subscription(RosString, "/mission/judge_task", self._judge_task_callback, 10)
+                self.node.create_subscription(RosBool, '/mission/start', lambda msg: self.sm.start_mission() if msg.data else None, 10)
                 self.node.create_subscription(RosBool, "/emergency_stop", self._estop_callback, 10)
 
                 self.sm.ros_node = self
                 self.node.get_logger().info("MissionROSNode успешно запущен")
             except Exception as e:
                 print(f"[ROS2] Ошибка запуска ROS 2 ноды: {e}")
+
+    def _terrain_status_callback(self, msg: Any) -> None:
+        try:
+            status = json.loads(msg.data)
+            if isinstance(status, dict):
+                self.terrain_status = (time.monotonic(), status)
+        except ValueError:
+            pass
+
+    def _observation_callback(self, msg: Any) -> None:
+        try:
+            with self.sm.lock:
+                now = ros_time_seconds(self.node.get_clock().now())
+                if now is not None:
+                    self.sm.evacuation.observe(json.loads(msg.data), now)
+        except (ValueError, TypeError, KeyError) as error:
+            self.sm._log('WARN', f'Наблюдение отклонено: {error}')
+
+    def plan_cells(self, attempt_id: str) -> None:
+        self.navigation.plan_cells(attempt_id)
+
+    def plan_home(self, attempt_id: str) -> None:
+        self.navigation.plan_home(attempt_id)
 
     def has_fresh_odometry(self, max_age: float = 0.5) -> bool:
         """Проверить, что колёсная одометрия поступает в реальном времени."""
@@ -1358,6 +1279,10 @@ class MissionROSNode:
                 'base_footprint',
                 rclpy.time.Time()
             )
+            stamp = t.header.stamp.sec + t.header.stamp.nanosec / 1e9
+            now = ros_time_seconds(self.node.get_clock().now())
+            if now is None or now - stamp > .5:
+                return False
             with self.sm.lock:
                 self.sm.robot_x = t.transform.translation.x
                 self.sm.robot_y = t.transform.translation.y
@@ -1394,6 +1319,10 @@ class MissionROSNode:
             if self.sm.mock_mode:
                 return
         self.last_odom_received_at = time.monotonic()
+        with self.sm.lock:
+            if hasattr(msg, 'twist'):
+                v = msg.twist.twist
+                self.sm.evacuation.odometry(v.linear.x, v.linear.y, v.angular.z)
 
         # Попытка получить координаты из TF2 map -> base_footprint
         if self.update_pose_from_tf():
@@ -1421,59 +1350,72 @@ class MissionROSNode:
                 self.sm.path_history.append((self.sm.robot_x, self.sm.robot_y))
 
     def _victim_detected_callback(self, msg: Any) -> None:
-        with self.sm.lock:
-            if msg.data and not self.sm.victim_detected:
-                self.sm.victim_detected = True
+        # Coordinates and stamped evidence arrive through /vision/observations.
+        pass
 
     def _qr_detected_callback(self, msg: Any) -> None:
-        with self.sm.lock:
-            if msg.data and not self.sm.victim_detected:
-                self.sm.victim_detected = True
+        # Presence of a QR is independent of victim evidence.
+        pass
 
     def _judge_task_callback(self, msg: Any) -> None:
         text = msg.data.strip()
-        if text:
-            with self.sm.lock:
-                self.sm.set_task_description(text)
-            try:
-                self.sm.parse_task_with_llm()
-                self.sm.publish_nav2_goal()
-            except Exception as e:
-                self.sm._log("ERROR", f"Ошибка обработки топика /mission/judge_task: {e}")
+        if not text:
+            return
+        with self.sm.lock:
+            if self.sm.state not in (MissionState.PREPARATION, MissionState.READY_TO_START, MissionState.MISSION_COMPLETE):
+                self.sm._log('WARN', 'Новое задание отклонено во время попытки')
+                return
+            pending = getattr(self, '_llm_thread', None)
+            if pending is not None and pending.is_alive():
+                return
+            self.sm.set_task_description(text)
+            def interpret():
+                try:
+                    self.sm.parse_task_with_llm()
+                except Exception as error:
+                    self.sm._log('ERROR', f'Ошибка интерпретации задания: {error}')
+            self._llm_thread = threading.Thread(target=interpret, daemon=True)
+            self._llm_thread.start()
 
     def _qr_callback(self, msg: Any) -> None:
         with self.sm.lock:
-            if not msg.data.strip():
-                return
-            if msg.data != self.sm.latest_qr_text:
-                self.sm._log('QR', f'Получен текст QR:\n{msg.data}')
-            self.sm.latest_qr_text = msg.data
-            self.sm.latest_qr_received_at = self.sm._now_str()
-            if (self.sm.state == MissionState.READING_QR or
-                    (self.sm.state == MissionState.SEARCHING_VICTIM and self.sm._scan_view_ready())):
-                self.sm.qr_code_data = msg.data
-                if not self.sm.qr_scanned:
-                    self.sm.victim_detected = True
-                    self.sm.victim_found = True
-                    self.sm.qr_scanned = True
-                    self.sm._log("QR", f"Получены данные QR-кода из топика /victim_status:\n{msg.data.strip()}")
-                    self.sm.state = MissionState.WAIT_5_SECONDS
-                    if hasattr(self, 'cancel_nav_goal'):
-                        self.cancel_nav_goal()
-                    self.sm.wait_timer_start = time.time()
-                    self.sm._publish_zero_velocity()
-                    self.sm._log("STATE", "Фиксация в ячейке на 5 секунд по регламенту...")
+            self.sm.evacuation.qr(msg.data, time.monotonic())
 
     def _qr_image_callback(self, msg: Any) -> None:
+        try:
+            data = bytes(msg.data)
+            if not data.startswith(b'\xff\xd8') or len(data) > 2_000_000:
+                return
+            with self.sm.lock:
+                header = msg.header.stamp
+                captured = header.sec + header.nanosec / 1e9
+                now = ros_time_seconds(self.node.get_clock().now())
+                if now is None:
+                    return
+                if self.sm.state == MissionState.READING_QR:
+                    started = self.sm.evacuation.qr_source_started
+                    if (self.sm.evacuation.has_qr_evidence() or started is None
+                            or captured < started or not 0 <= now-captured <= 1):
+                        return
+                    self.sm.evacuation.qr_image_stamp = time.monotonic()
+                    self.sm.latest_qr_image_bytes = data
+                    self.sm.latest_qr_image_b64 = base64.b64encode(data).decode('ascii')
+                    return
+                if 0 <= now - captured <= self.sm.evacuation.pre_read_qr_max_age_sec:
+                    self.sm.evacuation.cache_qr_image(data, time.monotonic(), source_stamp=captured)
+        except Exception as e:
+            self.sm._log("WARN", f"Ошибка обработки снимка QR: {e}")
+
+    def _victim_image_callback(self, msg: Any) -> None:
         try:
             data = bytes(msg.data)
             if not data:
                 return
             with self.sm.lock:
-                self.sm.latest_qr_image_bytes = data
-                self.sm.latest_qr_image_b64 = base64.b64encode(data).decode('ascii')
+                self.sm.latest_victim_image_bytes = data
+                self.sm.latest_victim_image_b64 = base64.b64encode(data).decode('ascii')
         except Exception as e:
-            self.sm._log("WARN", f"Ошибка обработки снимка QR: {e}")
+            self.sm._log("WARN", f"Ошибка обработки снимка пострадавшего: {e}")
 
     def _estop_callback(self, msg: Any) -> None:
         if msg.data:
@@ -1485,6 +1427,11 @@ class MissionROSNode:
             s_msg = RosString()
             s_msg.data = self.sm.state.value
             self.state_pub.publish(s_msg)
+            self.attempt_pub.publish(RosString(data=self.sm.evacuation.attempt_id))
+            now = time.monotonic()
+            if now - getattr(self, '_last_protocol_at', 0.) >= 1.:
+                self.protocol_pub.publish(RosString(data=self.sm.export_protocol_json()))
+                self._last_protocol_at = now
 
     def send_cmd_vel(self, linear_x: float, angular_z: float) -> None:
         if abs(linear_x) > 1e-4 or abs(angular_z) > 1e-4:
@@ -1551,6 +1498,10 @@ class MissionROSNode:
                     self.sm._log("WARN", f"Ошибка отправки цели в ActionClient NavigateToPose: {e}")
                     use_action = False
 
+            if not use_action and not self.sm.mock_mode:
+                self.goal_status = GoalStatus.STATUS_ABORTED
+                self.sm._log('ERROR', 'Nav2 ActionServer недоступен; цель отклонена')
+                return
             if not use_action and self.goal_pub and self.node:
                 msg = PoseStamped()
                 msg.header.frame_id = "map"
@@ -1572,6 +1523,7 @@ class MissionROSNode:
                     self.sm._log("WARN", "Nav2 ActionServer отклонил цель /navigate_to_pose")
                     if seq == getattr(self, '_nav_goal_seq', 0):
                         self._nav_goal_pending = False
+                        self.goal_status = GoalStatus.STATUS_ABORTED
                     return
 
                 # Проверяем, не была ли цель отменена или заменена пока ожидался ответ
@@ -1696,6 +1648,11 @@ def build_judge_dashboard(sm: MissionStateMachine):
     # ОСНОВНОЙ КОНТЕНТ
     # ------------------------------------------------------------------------
     with ui.column().classes("w-full max-w-7xl mx-auto p-4 gap-4"):
+
+        with ui.card().classes("w-full"):
+            ui.label('Подтверждения попытки')
+            attempt_summary = ui.label('Подготовка')
+            victim_evidence = ui.image().classes('max-w-sm')
 
         # 0. ПАНЕЛЬ УПРАВЛЕНИЯ БОРТОВЫМ СТЕКОМ (system.launch.py)
         with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
@@ -1952,12 +1909,23 @@ def build_judge_dashboard(sm: MissionStateMachine):
 
                     # Статичные элементы арены (легенда)
                     with ui.row().classes("w-full justify-center gap-2 text-[11px] text-slate-300 pt-2 border-t border-slate-700/60 flex-wrap"):
-                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-emerald-700 border border-emerald-400 inline-block"></span> 0:0 Старт</span>')
-                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-amber-800 border border-amber-400 inline-block"></span> 1:1 Остановка/Парковка/Обломки</span>')
-                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-yellow-800 border border-yellow-400 inline-block"></span> 1:2, 1:3 Жёлтое зд.</span>')
-                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-blue-900 border border-blue-400 inline-block"></span> 3:1 Синее зд.</span>')
-                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-sky-900 border border-sky-400 inline-block"></span> 3:3 Река</span>')
-                        ui.html('<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-zinc-700 border border-zinc-400 inline-block"></span> 3:4, 4:3 Мосты</span>')
+                        for label, obj in sm.evacuation.map.get('objects', {}).items():
+                            ui.label(f"{label} · {obj.get('cells', [])} · {obj['description']}")
+
+                # Один снимок найденного пострадавшего (/vision/victim/image/compressed)
+                with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
+                    with ui.row().classes("w-full justify-between items-center mb-2"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.icon("person_search", size="1.4rem").classes("text-amber-400")
+                            ui.label("Найденный пострадавший (1 кадр)").classes("text-base font-semibold text-slate-200")
+                        victim_status_badge = ui.badge("Не обнаружен", color="gray-600").classes("text-xs font-mono px-2 py-0.5 rounded")
+                    victim_image_preview = ui.image().classes(
+                        "w-full max-h-64 object-contain rounded-lg border border-slate-700 bg-slate-950"
+                    )
+                    victim_empty_label = ui.label(
+                        "Ожидание одного кадра при обнаружении (/vision/victim/image/compressed)..."
+                    ).classes("text-xs font-mono text-slate-400 text-center w-full py-4")
+                    victim_image_preview.visible = False
 
             # ПРАВАЯ КОЛОНКА: КАРТОЧКА LLM И КАРТОЧКА QR-КОДА
             with ui.column().classes("w-5/4 gap-4"):
@@ -2061,13 +2029,15 @@ def build_judge_dashboard(sm: MissionStateMachine):
                         ui.label("Данные QR-кода пострадавшего").classes("text-base font-semibold text-slate-200")
 
                     qr_status_badge = ui.badge("QR не считан", color="gray-600").classes("text-xs w-fit mb-2")
-                    qr_text_label = ui.label("Ожидание считывания кода при приближении к человеку...").classes(
-                        "text-xs font-mono text-slate-300 whitespace-pre-line bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/50 w-full"
+                    qr_text_label = ui.label("Ожидание подтверждённого QR-кода с камеры...").classes(
+                        "text-sm font-mono text-slate-100 whitespace-pre-wrap break-words bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/50 w-full"
                     )
-                    qr_image_preview = ui.image().classes(
-                        "w-full max-h-48 object-contain rounded-lg border border-slate-700 mt-2 bg-slate-950"
-                    )
-                    qr_image_preview.visible = False
+                    with ui.column().classes("w-full gap-1") as qr_snapshot:
+                        ui.label("Последний снимок с QR-ридера").classes("text-xs text-slate-400")
+                        qr_image_preview = ui.image().classes(
+                            "w-full max-h-48 object-contain rounded-lg border border-slate-700 bg-slate-950"
+                        )
+                    qr_snapshot.visible = False
 
         # 3. НИЖНИЙ БЛОК: ПРОТОКОЛ И ХРОНОЛОГИЯ СОБЫТИЙ (ВО ВСЮ ШИРИНУ)
         with ui.card().classes("w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-lg"):
@@ -2105,6 +2075,13 @@ def build_judge_dashboard(sm: MissionStateMachine):
         ]
 
         # 25 ячеек полигона 5x5 (статичные объекты и координатная сетка)
+        display_cells = {}
+        for label, obj in sm.evacuation.map.get('objects', {}).items():
+            kind = 'bridge' if label == 'bridges' else label
+            template = next((value for value in STATIC_ARENA_CELLS.values() if value['type'] == kind), None)
+            if template:
+                for cell in obj.get('cells', []):
+                    display_cells[tuple(cell)] = dict(template, subtitle=html.escape(obj['description']), detail='')
         cell_px = 0.8 * scale
         for r in range(5):
             for c in range(5):
@@ -2112,8 +2089,8 @@ def build_judge_dashboard(sm: MissionStateMachine):
                 y = svg_size - (r + 1) * cell_px
                 coord_key = (c, r)
 
-                if coord_key in STATIC_ARENA_CELLS:
-                    st = STATIC_ARENA_CELLS[coord_key]
+                if coord_key in display_cells:
+                    st = display_cells[coord_key]
                     fill = st["fill"]
                     stroke = st["stroke"]
                     text_col = st["text_color"]
@@ -2263,9 +2240,23 @@ def build_judge_dashboard(sm: MissionStateMachine):
     # ПЕРИОДИЧЕСКИЙ ТАЙМЕР ОБНОВЛЕНИЯ ДАШБОРДА (10 Гц)
     # ------------------------------------------------------------------------
     last_rendered_log_count = 0
+    last_victim_image = None
 
     def update_dashboard():
-        nonlocal last_rendered_log_count
+        nonlocal last_rendered_log_count, last_victim_image
+
+        evidence = sm.evacuation.protocol()
+        attempt_summary.text = (
+            f"Карта {evidence['map_version']} · ячейка {evidence['selected_cell']} · "
+            f"стоянка {evidence['standing_seconds']:.1f} с · "
+            f"этап {evidence['last_stage']} · итог {evidence['outcome'] or 'выполняется'}"
+        )
+        if sm.evacuation.victim is None and last_victim_image is not None:
+            last_victim_image = None
+            victim_evidence.set_source('')
+        if sm.evacuation.victim and last_victim_image != sm.evacuation.victim.image_jpeg_b64:
+            last_victim_image = sm.evacuation.victim.image_jpeg_b64
+            victim_evidence.set_source('data:image/jpeg;base64,' + sm.evacuation.victim.image_jpeg_b64)
 
         # 1. Бейдж состояния
         st = sm.state
@@ -2371,7 +2362,7 @@ def build_judge_dashboard(sm: MissionStateMachine):
             wait_el = (time.time() - sm.wait_timer_start) if sm.wait_timer_start else 0.0
             scan_step_badge.text = f"ФИКСАЦИЯ 5с ({min(5.0, wait_el):.1f}/5.0с)"
             scan_step_badge.classes(replace="text-xs bg-cyan-600 text-white font-bold animate-pulse")
-            scan_info_label.text = "QR обнаружен! Остановка на 5 секунд по регламенту"
+            scan_info_label.text = "Фигурка найдена. Подтверждаем пять секунд неподвижности"
         else:
             scan_step_badge.text = "НЕАКТИВЕН"
             scan_step_badge.classes(replace="text-xs bg-gray-700 text-slate-400")
@@ -2383,49 +2374,64 @@ def build_judge_dashboard(sm: MissionStateMachine):
         else:
             hold_timer_label.text = "Удержание в ячейке: —"
 
-        # 5. Карточка QR-кода
-        if sm.latest_qr_text:
-            qr_status_badge.text = f"QR получен: {sm.latest_qr_received_at}"
-            qr_status_badge.classes(replace="bg-emerald-600 text-white text-xs w-fit mb-2 font-bold")
-            qr_text_label.text = sm.latest_qr_text
-        elif sm.mock_mode and sm.qr_code_data:
-            qr_status_badge.text = "QR: симуляция"
-            qr_status_badge.classes(replace="bg-amber-600 text-white text-xs w-fit mb-2")
-            qr_text_label.text = sm.qr_code_data
-        elif sm.qr_code_data:
-            qr_status_badge.text = "QR-код успешно считан"
-            qr_status_badge.classes(replace="bg-emerald-600 text-white text-xs w-fit mb-2 font-bold")
-            qr_text_label.text = sm.qr_code_data
+        # 5. Карточка QR-кода (текст + 1 снимок прочитанного QR)
+        with sm.lock:
+            confirmed_qr = sm.qr_code_data if sm.qr_scanned else None
+            latest_qr = sm.latest_qr_text
+            simulated = sm.mock_mode
+            snapshot_b64 = sm.latest_qr_image_b64
+            snapshot_bytes = sm.latest_qr_image_bytes
+            victim_detected = sm.victim_detected
+            victim_b64 = sm.latest_victim_image_b64
+            victim_bytes = sm.latest_victim_image_bytes
+
+        if confirmed_qr:
+            qr_text_label.text = confirmed_qr
+            if simulated:
+                qr_status_badge.text = "QR: симуляция"
+                qr_status_badge.classes(replace="bg-amber-600 text-white text-xs w-fit mb-2")
+            else:
+                qr_status_badge.text = "QR подтверждён"
+                qr_status_badge.classes(replace="bg-emerald-600 text-white text-xs w-fit mb-2 font-bold")
+        elif latest_qr and latest_qr.strip():
+            qr_text_label.text = latest_qr
+            qr_status_badge.text = "QR считан"
+            qr_status_badge.classes(replace="bg-cyan-600 text-white text-xs w-fit mb-2 font-bold")
         else:
             qr_status_badge.text = "QR не считан"
             qr_status_badge.classes(replace="bg-gray-600 text-white text-xs w-fit mb-2")
             qr_text_label.text = "Ожидание подтверждённого QR-кода с камеры..."
 
-        if sm.latest_qr_image_b64:
-            src = f"data:image/jpeg;base64,{sm.latest_qr_image_b64}"
-            if getattr(qr_image_preview, 'source', None) != src:
-                if hasattr(qr_image_preview, 'set_source'):
-                    qr_image_preview.set_source(src)
-                else:
-                    qr_image_preview.source = src
-            qr_image_preview.visible = True
-        elif sm.latest_qr_image_bytes:
-            b64_data = base64.b64encode(sm.latest_qr_image_bytes).decode('ascii')
-            sm.latest_qr_image_b64 = b64_data
-            src = f"data:image/jpeg;base64,{b64_data}"
-            if getattr(qr_image_preview, 'source', None) != src:
-                if hasattr(qr_image_preview, 'set_source'):
-                    qr_image_preview.set_source(src)
-                else:
-                    qr_image_preview.source = src
-            qr_image_preview.visible = True
+        if snapshot_bytes and not snapshot_b64:
+            snapshot_b64 = base64.b64encode(snapshot_bytes).decode('ascii')
+        source = f"data:image/jpeg;base64,{snapshot_b64}" if snapshot_b64 else ""
+        if qr_image_preview.source != source:
+            qr_image_preview.set_source(source)
+        qr_snapshot.visible = bool(source)
+
+        # 5b. Один снимок найденного пострадавшего
+        if victim_bytes and not victim_b64:
+            victim_b64 = base64.b64encode(victim_bytes).decode('ascii')
+        if victim_b64:
+            victim_source = f"data:image/jpeg;base64,{victim_b64}"
+            if victim_image_preview.source != victim_source:
+                victim_image_preview.set_source(victim_source)
+            victim_image_preview.visible = True
+            victim_empty_label.visible = False
+            victim_status_badge.text = "Пострадавший найден"
+            victim_status_badge.classes(replace="text-xs font-mono px-2 py-0.5 rounded bg-emerald-600 text-white font-bold")
+        elif victim_detected:
+            victim_image_preview.visible = False
+            victim_empty_label.text = "Пострадавший обнаружен, ожидание кадра (/vision/victim/image/compressed)..."
+            victim_empty_label.visible = True
+            victim_status_badge.text = "Обнаружен (без фото)"
+            victim_status_badge.classes(replace="text-xs font-mono px-2 py-0.5 rounded bg-amber-600 text-white font-bold")
         else:
-            if getattr(qr_image_preview, 'source', None):
-                if hasattr(qr_image_preview, 'set_source'):
-                    qr_image_preview.set_source('')
-                else:
-                    qr_image_preview.source = ''
-            qr_image_preview.visible = False
+            victim_image_preview.visible = False
+            victim_empty_label.text = "Ожидание одного кадра при обнаружении (/vision/victim/image/compressed)..."
+            victim_empty_label.visible = True
+            victim_status_badge.text = "Не обнаружен"
+            victim_status_badge.classes(replace="text-xs font-mono px-2 py-0.5 rounded bg-gray-600 text-white")
 
         # 6. Добавление новых строк в судейский лог
         current_len = len(sm.logs)

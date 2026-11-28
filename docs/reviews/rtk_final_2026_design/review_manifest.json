@@ -1,0 +1,252 @@
+{
+  "target": "/home/lev/IJKbot/docs/designs/rtk_final_2026.md",
+  "sha256": "023772a41b6bbf1f781f9b5b87c1d17c239bee5c9434d2776eba264731b14db1",
+  "preset": "interactive",
+  "stage": 8,
+  "feature_range": [
+    1,
+    531
+  ],
+  "detailed_range": [
+    532,
+    840
+  ],
+  "goldfish_context": [
+    "/home/lev/IJKbot/concepts_brief.md",
+    "/home/lev/IJKbot/docs/reviews/rtk_final_2026/goldfish_review_report.md",
+    "/home/lev/IJKbot/docs/reviews/rtk_final_2026/draft_reconciliation.md",
+    "/home/lev/IJKbot/docs/reviews/rtk_final_2026/platform_decision.md",
+    "/home/lev/IJKbot/docs/GOROD.md"
+  ],
+  "excluded_external_links": [
+    "https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/costmap_2d/costmap_plugins/voxel/",
+    "https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/costmap_2d/costmap_plugins/obstacle/",
+    "https://pointclouds.org/documentation/classpcl_1_1_organized_multi_plane_segmentation.html",
+    "https://pointclouds.org/documentation/classpcl_1_1_ground_plane_comparator.html",
+    "https://docs.nav2.org/jazzy/tutorials/general_tutorials/using_collision_monitor/using_collision_monitor/",
+    "https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/collision_monitor/configuring_collision_monitor_node/",
+    "https://docs.ultralytics.com/modes/train/",
+    "https://docs.opencv.org/4.x/dc/dc3/tutorial_py_matcher.html",
+    "https://github.com/realsenseai/librealsense/wiki/Projection-in-RealSense-SDK-2.0",
+    "https://github.com/realsenseai/realsense-ros#post-processing-filters",
+    "https://raw.githubusercontent.com/ros2/ros2_documentation/jazzy/source/Concepts/Basic/About-Interfaces.rst",
+    "https://docs.ultralytics.com/modes/predict/",
+    "https://docs.ultralytics.com/integrations/tensorrt/",
+    "https://docs.ultralytics.com/models/yolo11/",
+    "https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn.html",
+    "https://docs.pytorch.org/tutorials/intermediate/torchvision_tutorial.html"
+  ],
+  "missing_local_links": [],
+  "policy": "User explicitly restricted context to local files. External sources are excluded; no browsing or hardware access. Reviewers may inspect relevant repository code. No production edits.",
+  "stage_status": "superseded_by_field_plan",
+  "next_stage": null,
+  "stage_5_reaudits_used": 0,
+  "stage_5_reports": [
+    "zoom_out_report.md",
+    "zoom_out_raw.md",
+    "inventive_raw.md"
+  ],
+  "stage_5_findings": {
+    "Blocker": 0,
+    "Major": 2,
+    "Nit": 0
+  },
+  "stage_5_actions": {
+    "S5-01": "open",
+    "S5-02": "open"
+  },
+  "stage_5_checkpoint": "Author chose proceed to Stage 6; S5-01 and S5-02 remain open",
+  "stage_6_reaudits_used": 0,
+  "stage_6_context": "Target alone; no standard or supporting context",
+  "stage_6_report": "comprehension_report.md",
+  "stage_6_findings": {
+    "Blocker": 0,
+    "Major": 1,
+    "Nit": 0
+  },
+  "stage_6_actions": {
+    "C-01": "open"
+  },
+  "stage_6_parent_check": "Target-only keyword check supports missing definition/link; paraphrase is consistent with stated design. No target changes.",
+  "stage_6_checkpoint": "Author chose proceed to Stage 7 with C-01 open",
+  "stage_7_round": 5,
+  "stage_7_semantic_target": "Feature specification before the primary Detailed Implementation Plan heading",
+  "stage_7_reviewers": {
+    "egm-design": "feature-spec-standard",
+    "egm-structural": "feature-spec-standard",
+    "egm-style": null
+  },
+  "stage_7_review_mode": "Direct dispatch; local context; no production or target edits without resolution approval",
+  "stage_7_round_status": "clean",
+  "stage_7_clean_rounds": 2,
+  "stage_7_round_cap": 5,
+  "stage_7_reviewer_status": {
+    "egm-design": "completed",
+    "egm-structural": "completed",
+    "egm-style": "completed"
+  },
+  "stage_7_findings": {
+    "Blocker": 0,
+    "Major": 0,
+    "Nit": 0
+  },
+  "stage_7_actions": {
+    "design-1-1": "fixed_pending_fresh_review",
+    "style-1-1": "fixed_pending_fresh_review",
+    "style-1-2": "fixed_pending_fresh_review",
+    "style-1-3": "fixed_pending_fresh_review"
+  },
+  "stage_7_reports": [
+    "critic_report.md",
+    "critic_design_round_1.md",
+    "critic_structural_round_1.md",
+    "critic_style_round_1.md",
+    "goldfish_review_report.md",
+    "critic_round_1_proposed_edits.json"
+  ],
+  "stage_7_resolution_workflow": "egm-resolve; awaiting author gate",
+  "previous_sha256": "c6de09ea7dd6ba2f0ce4dc217c9ff2720326716d7a36c48e8ba5e150b9cb007a",
+  "stage_7_resolution_counts": {
+    "accepted_fixes": 4,
+    "contested": 0,
+    "escalated": 0,
+    "declined": 0,
+    "remaining_unaddressed_round_1": 0
+  },
+  "stage_7_author_decision": "A — apply all four proposed document fixes",
+  "stage_7_pending_implementation_alignment": "Earlier approved mission-owner lease policy only; target-association policy withdrawn",
+  "stage_7_round_2_author_decision": "A — run another fresh review round",
+  "stage_7_round_2_sha256": "c6de09ea7dd6ba2f0ce4dc217c9ff2720326716d7a36c48e8ba5e150b9cb007a",
+  "stage_7_round_2_actions": {
+    "style-2-1": "declined_editorial_nit_without_fix",
+    "style-2-2": "declined_editorial_nit_without_fix",
+    "style-2-3": "declined_editorial_nit_without_fix"
+  },
+  "stage_7_settled_findings": [
+    {
+      "id": "style-2-1",
+      "category": "DECLINE",
+      "scope": "Non-Goals, line 59",
+      "issue": "model candidate versus validation wording"
+    },
+    {
+      "id": "style-2-2",
+      "category": "DECLINE",
+      "scope": "T5/T8 lines 307,333",
+      "issue": "drafting-state sentences"
+    },
+    {
+      "id": "style-2-3",
+      "category": "DECLINE",
+      "scope": "City line 370",
+      "issue": "repeated rules/source caveat"
+    },
+    {
+      "id": "design-3-1",
+      "category": "ESCALATE",
+      "scope": "single-pair competition target evidence",
+      "issue": "hypothetical multiple-figure/banner association",
+      "author_resolution": "Exactly one adjacent figure/QR pair; no multi-target association policy"
+    }
+  ],
+  "stage_7_round_2_resolution_counts": {
+    "accepted_fixes": 0,
+    "contested": 0,
+    "escalated": 0,
+    "declined": 3
+  },
+  "stage_7_round_2_report": "critic_round_2_report.md",
+  "stage_7_round_2_churn": false,
+  "stage_7_round_3_author_decision": "A — run fresh confirming round",
+  "stage_7_round_3_sha256": "c6de09ea7dd6ba2f0ce4dc217c9ff2720326716d7a36c48e8ba5e150b9cb007a",
+  "stage_7_round_3_actions": {
+    "design-3-1": "escalated_settled_by_author_single_pair_clarification",
+    "style-3-1": "settled_duplicate_of_style-2-3_declined"
+  },
+  "stage_7_round_3_report": "critic_round_3_report.md",
+  "stage_7_round_3_churn": false,
+  "stage_7_round_3_failed_prior_fix": false,
+  "stage_7_round_3_resolution_counts": {
+    "accepted_original_fixes": 0,
+    "contested": 0,
+    "escalated": 1,
+    "author_resolved_escalations": 1,
+    "declined_duplicates": 1,
+    "remaining_unaddressed_round_3": 0
+  },
+  "stage_7_round_3_author_clarification": "One QR and one victim figure, positioned next to each other; record single-pair scope and withdraw multi-target proposal",
+  "stage_7_round_4_author_decision": "A — run fresh review with confirmed single-pair scope",
+  "stage_7_round_4_sha256": "023772a41b6bbf1f781f9b5b87c1d17c239bee5c9434d2776eba264731b14db1",
+  "stage_7_round_4_actions": {},
+  "stage_7_round_4_resolution_counts": {
+    "accepted_fixes": 0,
+    "contested": 0,
+    "escalated": 0,
+    "declined": 0,
+    "remaining_unaddressed_round_4": 0
+  },
+  "stage_7_round_4_report": "critic_round_4_report.md",
+  "stage_7_round_4_clean": true,
+  "stage_7_next_round": null,
+  "stage_7_round_5_author_decision": "A — run fifth ordinary review round",
+  "stage_7_round_5_date": "2026-11-17",
+  "stage_7_round_5_sha256": "023772a41b6bbf1f781f9b5b87c1d17c239bee5c9434d2776eba264731b14db1",
+  "stage_7_loop_outcome": "converged_after_five_rounds",
+  "stage_7_completed_date": "2026-11-17",
+  "stage_7_round_5_actions": {},
+  "stage_7_round_5_resolution_counts": {
+    "accepted_fixes": 0,
+    "contested": 0,
+    "escalated": 0,
+    "declined": 0,
+    "remaining_unaddressed_round_5": 0
+  },
+  "stage_7_round_5_report": "critic_round_5_report.md",
+  "stage_7_round_5_clean": true,
+  "stage_7_checkpoint": "Author chose proceed to Stage 8; earlier findings remain open",
+  "stage_8_sha256": "023772a41b6bbf1f781f9b5b87c1d17c239bee5c9434d2776eba264731b14db1",
+  "stage_8_context": [
+    "/home/lev/IJKbot/concepts_brief.md",
+    "/home/lev/IJKbot/docs/reviews/rtk_final_2026/goldfish_review_report.md",
+    "/home/lev/IJKbot/docs/reviews/rtk_final_2026/draft_reconciliation.md",
+    "/home/lev/IJKbot/docs/reviews/rtk_final_2026/platform_decision.md",
+    "/home/lev/IJKbot/docs/GOROD.md",
+    "/home/lev/IJKbot/docs/reviews/rtk_final_2026_design/zoom_out_report.md",
+    "/home/lev/IJKbot/docs/reviews/rtk_final_2026_design/comprehension_report.md",
+    "/home/lev/IJKbot/docs/reviews/rtk_final_2026_design/critic_report.md"
+  ],
+  "stage_8_reaudits_used": 0,
+  "stage_8_date": "2026-11-17",
+  "stage_8_report": "intermediate_zoom_out_report.md",
+  "stage_8_reviewer_status": {
+    "egm-zoom-out": "completed"
+  },
+  "stage_8_findings": {
+    "Blocker": 0,
+    "Major": 4,
+    "Nit": 0
+  },
+  "stage_8_actions": {
+    "IZO-01": {
+      "status": "open_duplicate",
+      "original": "S5-01"
+    },
+    "IZO-02": {
+      "status": "open_duplicate",
+      "original": "S5-02"
+    },
+    "IZO-03": {
+      "status": "open_duplicate",
+      "original": "C-01"
+    },
+    "IZO-04": {
+      "status": "open_implementation_alignment",
+      "original": "design-1-1"
+    }
+  },
+  "stage_8_parent_check": "Cited guard patterns, cancellation path and inherited inflation rule verified locally; no target changes.",
+  "previous_stage_status": "complete_awaiting_checkpoint",
+  "superseded_on": "2026-11-23",
+  "superseded_by": "/home/lev/IJKbot/docs/designs/rtk_final_2026_field_plan.md",
+  "supersession_reason": "Team confirmed Evacuation and Ice Challenge and installed Jetson Orin Nano DevKit 8 GB with updated sensor placement. Stage 8 remains the last completed review of the old target."
+}

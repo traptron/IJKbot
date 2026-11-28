@@ -6,10 +6,17 @@
   const mapCanvas=$('#mission-map'), radar=$('#radar'), mapImage=new Image();
   const camera={zoom:0,x:0,y:0}, pointers=new Map();
   let pick=false,pickStart=null,pinchDistance=0;
-  const safe=fn=>async()=>{try{notice();await fn();}catch(e){notice(e.message);}};
+  const safe=fn=>{let busy=false;return async event=>{if(busy)return;busy=true;const button=event?.currentTarget,label=button?.textContent?.trim()||'Действие';if(button){button.disabled=true;button.setAttribute('aria-busy','true');}try{notice(label+': выполняется…','running');await fn();const result={
+'execute-plan':'Задача запущена. Ход выполнения показан в блоке «Задача»',
+'interpret-command':'План подготовлен. Движение начнётся только после «Выполнить»',
+'nav-pause':'Запрос паузы обработан. Текущее состояние показано в блоке «Задача»',
+'nav-resume':'Продолжение запрошено. Следите за состоянием задачи',
+'nav-cancel':'Запрос отмены обработан. Проверьте подтверждение в блоке «Задача»',
+'link-test':'Тест передачи запущен. Результат появится в блоке качества связи'
+}[button?.id]||(['Ехать сюда','Подготовить'].includes(label)?'План подготовлен. Проверьте его перед выполнением':label+': готово');notice(result,'success');}catch(e){notice(e.message);}finally{busy=false;if(button){button.disabled=false;button.removeAttribute('aria-busy');}}};};
   const selected=()=>settings.profiles.navigate.map;
   const uid=prefix=>prefix+'_'+crypto.randomUUID().replaceAll('-','');
-  const fmt=(value,digits=1)=>Number.isFinite(Number(value))&&value!==null&&value!==undefined?Number(value).toFixed(digits):'нет данных';
+  const fmt=(value,digits=1)=>Number.isFinite(Number(value))&&value!==null&&value!==undefined?Number(value).toFixed(digits):'—';
   const age=s=>s?.age_s==null?'нет данных':s.age_s<1?`${Math.round(s.age_s*1000)} мс`:`${s.age_s.toFixed(1)} с`;
   const setText=(id,text)=>{$(id).textContent=text;};
   function row(container,label,value,stale=false){const div=document.createElement('div');div.className='telemetry-row'+(stale?' stale':'');const key=document.createElement('span'),val=document.createElement('strong');key.textContent=label;val.textContent=value;div.append(key,val);container.append(div);}
@@ -22,28 +29,34 @@
         rtts=rtts.filter(v=>performance.now()-v.t<30000);return;
       }
       if(data.type!=='telemetry')return;
-      telemetry=data;lastFrame=performance.now();controlLeaseReady=!!data.control.ready;
-      $('#claim-control').textContent=controlId?'Восстановить управление':'Взять управление';
-      $('#claim-control').disabled=!!state.estopped||(!controlId&&data.control.owned);
+      telemetry=data;lastFrame=performance.now();controlLeaseReady=!!data.control.ready;controlOwned=!!data.control.owned;manualDriveReason=data.manual_drive_reason;state.mock=!!data.mock;state.control_error=data.control.error||null;
+      $('#claim-control').textContent=!controlId?'Взять управление':data.control.broken?'Восстановить управление':data.control.ready?'Управление получено':'Подключение…';
+      $('#claim-control').disabled=modeBusy||!!data.control.error||!!state.estopped||(!controlId&&data.control.owned)||(!!controlId&&!data.control.broken);
       $('#release-control').hidden=!controlId;
-      setText('#lease-status',controlId?(data.control.ready?'Вы управляете · Pi подтверждает связь':data.control.broken?'Связь потеряна · требуется восстановление':'Ожидание подтверждения Pi'):data.control.owned?'Управляет другая вкладка':'Наблюдение');
+      const sessionText=data.control.error?'Ошибка управляющего цикла · требуется перезапуск пульта':controlId
+        ? data.control.ready
+          ? data.mock?'Вы управляете симуляцией':'Сессия подтверждена бортовым узлом'
+          : data.control.broken?'Управляющая сессия потеряна · требуется восстановление'
+            : data.mock?'Подключается локальная симуляция':'Ожидание подтверждения сессии от робота'
+        : data.control.owned?'Управляет другая вкладка':data.mock?'Наблюдение · симуляция':'Наблюдение';
+      setText('#lease-status',sessionText);
       setText('#health-summary',data.summary);setText('#health-detail',data.summary);
       renderSignals();
       renderTelemetry();renderNavigation();drawRadar();drawMap();updateControls();
     };
-    socket.onclose=()=>{reconnects++;controlLeaseReady=false;setText('#health-summary','Телеметрия отключена');setTimeout(connect,1500);};
+    socket.onclose=()=>{reconnects++;controlLeaseReady=false;setText('#health-summary','Телеметрия отключена');setText('#lease-status','Нет свежих данных о состоянии сессии');updateControls();setTimeout(connect,1500);};
   }
   setInterval(()=>{
     if(socket?.readyState===WebSocket.OPEN){const seq=++pingSeq;pings.set(seq,performance.now());socket.send(JSON.stringify({type:'ping',seq}));}
     for(const [key,start]of pings)if(performance.now()-start>3000)pings.delete(key);
-    if(lastFrame&&performance.now()-lastFrame>1500){controlLeaseReady=false;setText('#health-summary','Телеметрия устарела');$$('.telemetry-row,.health-signal').forEach(row=>row.classList.add('stale'));updateControls();drawRadar();drawMap();}
+    if(lastFrame&&performance.now()-lastFrame>1500){controlLeaseReady=false;setText('#health-summary','Телеметрия устарела');setText('#lease-status','Нет свежих данных о состоянии сессии');$$('.telemetry-row,.health-signal').forEach(row=>row.classList.add('stale'));updateControls();drawRadar();drawMap();}
     const samples=rtts.map(v=>v.ms).sort((a,b)=>a-b);
     setText('#browser-link',`Браузер ↔ сервер: RTT p50 ${fmt(samples[Math.floor(samples.length/2)])} мс · p95 ${fmt(samples[Math.max(0,Math.ceil(samples.length*.95)-1)])} мс · переподключений ${reconnects} · ответов ${samples.length}`);
   },500);
   function renderSignals(){
     const topics=telemetry.topics,drive=topics.diagnostics.data?.sts3215_drive,nav=topics.nav.data||{},container=$('#health-signals');
     container.replaceChildren();
-    const signals=[['E-STOP',telemetry.estopped?'АКТИВЕН':'снят',telemetry.estopped],
+    const signals=[['E-STOP',telemetry.estopped?'активен':'снят',telemetry.estopped],
       ['Приводы',!drive||drive.stale?'нет данных':drive.level>=2?'ошибка':drive.level===1?'предупреждение':'готовы',!drive||drive.stale||drive.level>=2],
       ['Odom',topics.odom.stale?'нет свежих данных':'свежая',topics.odom.stale],
       ['Scan',topics.scan.stale?'нет свежих данных':'свежий',topics.scan.stale],
@@ -51,7 +64,7 @@
       ['AMCL',!topics.nav.stale&&nav.amcl_active&&topics.amcl.data?'активен':'не готов',topics.nav.stale||!nav.amcl_active||!topics.amcl.data],
       ['Nav2',!topics.nav.stale&&nav.ready&&nav.navigator_active?'готов':'не готов',topics.nav.stale||!nav.ready||!nav.navigator_active],
       ['Задача',['idle','complete','cancelled'].includes(telemetry.navigation.state)?'Ожидание команды':telemetry.navigation.point||telemetry.navigation.label||'Ожидание команды',false]];
-    for(const [name,value,unavailable]of signals){const chip=document.createElement('span');chip.className='health-signal'+(unavailable?' stale':'');chip.textContent=`${name}: ${value}`;container.append(chip);}
+    for(const [name,value,unavailable]of signals){const chip=document.createElement('span');chip.className='health-signal'+(unavailable?' stale':'');if(name==='E-STOP'&&telemetry.estopped)chip.dataset.state='danger';chip.textContent=`${name}: ${value}`;container.append(chip);}
   }
   function renderTelemetry(){
     const topics=telemetry.topics,drive=topics.diagnostics.data?.sts3215_drive;
@@ -67,10 +80,10 @@
     row(servo,'Возраст диагностики',drive?`${fmt(drive.age_s)} с`:'нет данных',!drive||drive.stale);
     const pi=$('#pi-data');pi.replaceChildren();const system=topics.system.data||{};
     for(const [label,value]of [['CPU',`${fmt(system.cpu_temp_c)} °C`],['Загрузка CPU',`${fmt(system.cpu_percent)} %`],['Доступная память',`${fmt(system.memory_available_mb)} / ${fmt(system.memory_total_mb)} МиБ`],['Сигнал Wi-Fi',`${fmt(system.wifi_dbm)} dBm`]])row(pi,label,value,topics.system.stale);
-    const link=$('#link-data');link.replaceChildren();const net=telemetry.link,stale=net.echo_age_s==null||net.echo_age_s>.5;
-    for(const [label,value]of [['DDS RTT p50',`${fmt(net.rtt_p50_ms)} мс`],['DDS RTT p95',`${fmt(net.rtt_p95_ms)} мс`],['Колебание RTT',`${fmt(net.jitter_ms)} мс`],['Пропущенные ответы',`${fmt(net.missing_percent)} % (${net.received}/${net.samples})`],['Последний ответ Pi',net.echo_age_s==null?'нет данных':`${fmt(net.echo_age_s)} с назад`]])row(link,label,value,stale);
+    const link=$('#link-data');link.replaceChildren();const net=telemetry.mock?{samples:0,received:0,missing_percent:null,rtt_p50_ms:null,rtt_p95_ms:null,jitter_ms:null,echo_age_s:null}:telemetry.link,stale=net.echo_age_s==null||net.echo_age_s>.5;
+    for(const [label,value]of [['DDS RTT p50',`${fmt(net.rtt_p50_ms)} мс`],['DDS RTT p95',`${fmt(net.rtt_p95_ms)} мс`],['Колебание RTT',`${fmt(net.jitter_ms)} мс`],['Пропущенные ответы',telemetry.mock?'Не измеряются в симуляции':`${fmt(net.missing_percent)} % (${net.received}/${net.samples})`],['Последний ответ Pi',telemetry.mock?'Pi не подключена':net.echo_age_s==null?'нет данных':`${fmt(net.echo_age_s)} с назад`]])row(link,label,value,stale);
     const topic=$('#topic-data');topic.replaceChildren();
-    const labels={odom:'Одометрия',scan:'Лидар /scan',pose:'TF map → base_footprint',diagnostics:'Диагностика',system:'Состояние Pi',guard:'Контроль связи Pi',nav:'Nav2 / AMCL',amcl:'Последняя оценка AMCL'};
+    const labels={odom:'Одометрия',scan:'Лидар /scan',pose:'TF map → base_footprint',diagnostics:'Диагностика',system:'Состояние Pi',guard:telemetry.mock?'Локальная сессия (симуляция)':'Контроль связи Pi',nav:'Nav2 / AMCL',amcl:'Последняя оценка AMCL'};
     for(const [key,sample]of Object.entries(topics))row(topic,labels[key]||key,`${age(sample)} · ${sample.hz==null?'—':fmt(sample.hz)} Гц${sample.stale?' · нет свежих данных':''}`,sample.stale);
     if(topics.odom.data)row(topic,'Скорость по одометрии',`${fmt(topics.odom.data.v,2)} м/с · ${fmt(topics.odom.data.w,2)} рад/с`,topics.odom.stale);
     $('#link-test').disabled=!controlId||!!linkJob||!topics.odom.data||topics.odom.stale||['running','waiting','pausing','cancelling'].includes(telemetry.navigation.state);
@@ -89,13 +102,13 @@
   function drawRadar(){
     const screen=surface(radar);if(!screen)return;const {ctx,width,height}=screen;
     const radius=Number($('#radar-range').value),scale=(Math.min(width,height)-35)/(2*radius),cx=width/2,cy=height/2;
-    ctx.strokeStyle='#294742';ctx.fillStyle='#78928e';ctx.font='11px system-ui';
+    ctx.strokeStyle='#36363b';ctx.fillStyle='#929299';ctx.font='12px IBM Plex Mono, monospace';
     for(let n=1;n<=4;n++){ctx.beginPath();ctx.arc(cx,cy,n*radius/4*scale,0,Math.PI*2);ctx.stroke();}
-    ctx.fillText('ВПЕРЁД',cx-25,15);
+    ctx.fillText('Вперёд',cx-24,20);
     const scan=telemetry?.topics.scan,valid=scan&&!scan.stale&&performance.now()-lastFrame<1500;
-    if(valid){ctx.fillStyle='#6be1c5';for(const [x,y]of scan.data.points){if(Math.hypot(x,y)<=radius)ctx.fillRect(cx-y*scale-1,cy-x*scale-1,2,2);}}
-    ctx.strokeStyle='#e1eef2';ctx.strokeRect(cx-.125*scale,cy-.05*scale,.25*scale,.23*scale);
-    ctx.beginPath();ctx.moveTo(cx,cy+5);ctx.lineTo(cx,cy-10);ctx.stroke();
+    if(valid){ctx.fillStyle='#78c83c';for(const [x,y]of scan.data.points){if(Math.hypot(x,y)<=radius)ctx.fillRect(cx-y*scale-1,cy-x*scale-1,2,2);}}
+    ctx.strokeStyle='#b2b2b9';ctx.strokeRect(cx-.125*scale,cy-.05*scale,.25*scale,.23*scale);
+    ctx.fillStyle='#78c83c';ctx.beginPath();ctx.moveTo(cx,cy-12);ctx.lineTo(cx+7,cy+8);ctx.lineTo(cx,cy+4);ctx.lineTo(cx-7,cy+8);ctx.closePath();ctx.fill();
     setText('#radar-info',valid?`Ближайшее видимое препятствие от центра: ${fmt(scan.data.nearest_m,2)} м · скан ${age(scan)} · радиус ${radius} м`:'Нет свежего скана или TF. Старые точки скрыты.');
   }
   $('#radar-range').oninput=drawRadar;
@@ -104,18 +117,18 @@
   function pixelToWorld(p){const m=mapInfo(),[ox,oy,a]=m.origin,x=p.x*m.resolution,y=(m.height-p.y)*m.resolution;return {x:ox+Math.cos(a)*x-Math.sin(a)*y,y:oy+Math.sin(a)*x+Math.cos(a)*y};}
   function fitMap(){const m=mapInfo(),rect=mapCanvas.getBoundingClientRect();if(!m||rect.width<10)return;camera.zoom=Math.min((rect.width-30)/m.width,(rect.height-30)/m.height);camera.x=(rect.width-m.width*camera.zoom)/2;camera.y=(rect.height-m.height*camera.zoom)/2;drawMap();}
   mapImage.onload=fitMap;
-  function arrow(ctx,p,color,label){const m=mapInfo(),point=worldToPixel(p),angle=p.yaw-m.origin[2],size=12/camera.zoom;ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=2/camera.zoom;ctx.beginPath();ctx.arc(point.x,point.y,4/camera.zoom,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.moveTo(point.x,point.y);ctx.lineTo(point.x+Math.cos(angle)*size,point.y-Math.sin(angle)*size);ctx.stroke();if(label){ctx.font=`${12/camera.zoom}px system-ui`;ctx.fillText(label,point.x+6/camera.zoom,point.y-6/camera.zoom);}}
+  function arrow(ctx,p,color,label){const m=mapInfo(),point=worldToPixel(p),angle=p.yaw-m.origin[2],size=12/camera.zoom;ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=2/camera.zoom;ctx.beginPath();ctx.arc(point.x,point.y,4/camera.zoom,0,Math.PI*2);ctx.fill();ctx.save();ctx.translate(point.x,point.y);ctx.rotate(-angle);ctx.beginPath();ctx.moveTo(size,0);ctx.lineTo(-size*.5,size*.5);ctx.lineTo(-size*.25,0);ctx.lineTo(-size*.5,-size*.5);ctx.closePath();ctx.fill();ctx.restore();if(label){ctx.font=`${12/camera.zoom}px system-ui`;ctx.fillText(label,point.x+6/camera.zoom,point.y-6/camera.zoom);}}
   function drawMap(){
     const screen=surface(mapCanvas);if(!screen)return;const {ctx,width,height}=screen;
     if(!mapInfo()||!mapImage.complete||!mapImage.naturalWidth){ctx.fillStyle='#8da1ad';ctx.font='14px system-ui';ctx.fillText('Выберите доступную карту',15,30);return;}
     if(!camera.zoom){fitMap();return;}
     ctx.translate(camera.x,camera.y);ctx.scale(camera.zoom,camera.zoom);ctx.imageSmoothingEnabled=false;ctx.drawImage(mapImage,0,0);
-    if(documentData){for(const place of documentData.places)arrow(ctx,place,'#197cb4',place.name);}
+    if(documentData){for(const place of documentData.places)arrow(ctx,place,'#444c56',place.name);}
     const shownPoints=telemetry?.navigation.map_id===selected()&&['running','waiting','paused','pausing'].includes(telemetry.navigation.state)?telemetry.navigation.points||routePoints:routePoints;
-    if(shownPoints.length){ctx.strokeStyle='#bd672b';ctx.lineWidth=2/camera.zoom;ctx.beginPath();shownPoints.forEach((p,i)=>{const v=worldToPixel(p);i?ctx.lineTo(v.x,v.y):ctx.moveTo(v.x,v.y);});ctx.stroke();shownPoints.forEach((p,i)=>arrow(ctx,p,'#bd672b',`${i+1}. ${p.label}`));}
-    if(placeDraft)arrow(ctx,placeDraft,'#bd234e','Новое место');
+    if(shownPoints.length){ctx.strokeStyle='#4d8e25';ctx.lineWidth=2/camera.zoom;ctx.beginPath();shownPoints.forEach((p,i)=>{const v=worldToPixel(p);i?ctx.lineTo(v.x,v.y):ctx.moveTo(v.x,v.y);});ctx.stroke();shownPoints.forEach((p,i)=>arrow(ctx,p,'#4d8e25',`${i+1}. ${p.label}`));}
+    if(placeDraft)arrow(ctx,placeDraft,'#9a671d','Новое место');
     const pose=telemetry?.topics.pose;
-    if(state.active_options?.map===selected()&&pose?.data&&!pose.stale&&performance.now()-lastFrame<1500){arrow(ctx,pose.data,'#b620dc','Робот');setText('#map-pose',`Робот в map: X ${fmt(pose.data.x,2)}, Y ${fmt(pose.data.y,2)}, угол ${fmt(pose.data.yaw*180/Math.PI)}° · TF ${age(pose)}`);}
+    if(state.active_options?.map===selected()&&pose?.data&&!pose.stale&&performance.now()-lastFrame<1500){arrow(ctx,pose.data,'#397622','Робот');setText('#map-pose',`Робот в map: X ${fmt(pose.data.x,2)}, Y ${fmt(pose.data.y,2)}, угол ${fmt(pose.data.yaw*180/Math.PI)}° · TF ${age(pose)}`);}
     else setText('#map-pose','Нет свежего положения робота на выбранной карте');
   }
   function eventPoint(event){const rect=mapCanvas.getBoundingClientRect();return {x:event.clientX-rect.left,y:event.clientY-rect.top};}
@@ -140,7 +153,8 @@
   mapCanvas.addEventListener('wheel',event=>{event.preventDefault();if(!camera.zoom)return;const p=eventPoint(event),wx=(p.x-camera.x)/camera.zoom,wy=(p.y-camera.y)/camera.zoom;camera.zoom=Math.min(50,Math.max(.1,camera.zoom*Math.exp(-event.deltaY*.001)));camera.x=p.x-wx*camera.zoom;camera.y=p.y-wy*camera.zoom;drawMap();},{passive:false});
   $('#map-pick').onclick=()=>{pick=!pick;$('#map-pick').textContent=pick?'Укажите точку и направление':'Выбрать место на карте';};
   $('#map-reset').onclick=fitMap;
-  const observer=new ResizeObserver(()=>{drawRadar();if(!camera.zoom)fitMap();else drawMap();});observer.observe(mapCanvas);observer.observe(radar);
+  let mapSurfaceWidth=0;
+  const observer=new ResizeObserver(()=>{drawRadar();const width=mapCanvas.getBoundingClientRect().width;if(width>0&&Math.abs(width-mapSurfaceWidth)>1){mapSurfaceWidth=width;fitMap();}else drawMap();});observer.observe(mapCanvas);observer.observe(radar);
   function showPlacePose(){setText('#place-coordinate',placeDraft?`X ${fmt(placeDraft.x,2)} · Y ${fmt(placeDraft.y,2)}`:'Выберите точку на карте или сохраните текущую позицию');$('#place-yaw').value=placeDraft?Math.round(placeDraft.yaw*180/Math.PI):0;}
   $('#place-yaw').oninput=()=>{if(placeDraft){placeDraft.yaw=Number($('#place-yaw').value)*Math.PI/180;drawMap();}};
   function newPlace(){placeId=null;placeDraft=null;$('#place-name').value='';showPlacePose();drawMap();}

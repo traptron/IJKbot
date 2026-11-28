@@ -116,8 +116,7 @@ class TestNavigationGoals(unittest.TestCase):
                     self.assertAlmostEqual(goal["y"], (row + 0.5) * cell_size)
                     self.assertNotIn([col, row], self.arena["blocked_cells"])
                     self.assertEqual(validate_nav2_goal(goal, landmark, self.arena), goal)
-        self.assertEqual(default_nav2_goals("yellow_building_debris", self.arena),
-                         default_nav2_goals("parking", self.arena))
+        self.assertEqual(default_nav2_goals("yellow_building_debris", self.arena), [])
 
     def test_accepts_configured_approach_pose(self):
         goal = validate_nav2_goal(
@@ -158,7 +157,7 @@ class TestHeuristicFallback(unittest.TestCase):
             ("Бензовоз опрокинулся около реки. Искать рядом с ним.", "river"),
             ("Дерево свалилось на голубой дом. Искать рядом с деревом.", "blue_building"),
             ("Бензовоз рядом с жёлтым зданием", "yellow_building"),
-            ("Дерево лежит у остановки", "parking"),
+            ("Дерево лежит у парковки", "parking"),
             ("Человек у бензовоза возле мостов", "bridges"),
             ("На парковке синие машины", "parking"),
             ("У синего здания упала берёза", "blue_building"),
@@ -180,21 +179,16 @@ class TestHeuristicFallback(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "требует распознавания локальной LLM"):
             self.client.fallback_heuristic_parse("Пострадавший у обломков жёлтого здания")
 
-    def test_llm_selects_yellow_building_debris_and_uses_cell_1_1_route(self):
+    def test_llm_treats_debris_as_movable_qualifier(self):
         answer = json.dumps(dict(
-            target_landmark_id="yellow_building_debris",
-            search_strategy="inspect",
-            reasoning="Обломки жёлтого здания указаны как отдельный ориентир.",
-            local_object_id=None,
+            target_landmark_id="yellow_building", search_strategy="inspect",
+            reasoning="Обломки рядом с жёлтым зданием.", local_object_id="debris_pvc",
         ), ensure_ascii=False)
         with patch.object(self.client, "_query_ollama", return_value=answer):
-            result = self.client.interpret("Найти пострадавшего у обломков жёлтого здания", use_fallback=False)
-
-        self.assertEqual(result.target_landmark_id, "yellow_building_debris")
-        self.assertEqual(self.client.arena["objects"]["yellow_building_debris"]["cells"], [[1, 1]])
-        self.assertEqual(result.nav2_goals, default_nav2_goals("yellow_building_debris", self.client.arena))
-        self.assertIn("yellow_building_debris", self.client.navigation_prompt())
-        self.assertIn("выбирай yellow_building_debris", self.client.navigation_prompt())
+            result = self.client.interpret("Найти у обломков рядом с жёлтым зданием", use_fallback=False)
+        self.assertEqual(result.local_object_id, "debris_pvc")
+        self.assertNotIn("yellow_building_debris", self.client.arena["objects"])
+        self.assertEqual(result.nav2_goals, default_nav2_goals("yellow_building", self.client.arena))
 
 
 class TestStaticTargetRegression(unittest.TestCase):

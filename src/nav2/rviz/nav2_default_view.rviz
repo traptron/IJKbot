@@ -25,6 +25,28 @@ Panels:
 Visualization Manager:
   Class: ""
   Displays:
+    - Class: rviz_default_plugins/Map
+      Name: Local 3D obstacles
+      Enabled: true
+      Alpha: 0.55
+      Color Scheme: costmap
+      Topic:
+        Value: /local_costmap/costmap
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Depth: 1
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Состояние мостов
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /terrain/markers
+      Value: true
+
     - Alpha: 0.5
       Cell Size: 0.8
       Class: rviz_default_plugins/Grid
@@ -273,14 +295,14 @@ Visualization Manager:
       Max Value: 1
       Median window: 5
       Min Value: 0
-      Name: Raw Camera View
+      Name: RealSense Preview
       Normalize Range: false
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /camera/color/image_raw
+        Value: /camera/preview/image_raw
       Transport Hint: compressed
       Value: false
 

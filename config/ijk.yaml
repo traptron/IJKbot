@@ -8,6 +8,8 @@ network:
     - "10.197.37.154"
     - "192.168.1.10"
   mdns_hostname: "ijkbot.local"
+  mdns_aliases:
+    - "tokmachka.local"
   subnet_scan_timeout_sec: 2.0
   remote_ws: "/home/otmorozki/IJKbot"
 
@@ -24,6 +26,7 @@ hardware:
     wheel_separation: 0.225
   camera:
     type: "csi"  # csi | realsense | none
+    color_profile: "1920x1080x15"
 
 wifi:
   profiles:
@@ -48,6 +51,7 @@ gamepad:
 profiles:
   competition:
     description: "Полный соревновательный заезд (LLM + Nav2 + QR + Dashboard)"
+    qr_backend: zxing
     max_linear_velocity: 0.25
     enable_brain: true
     enable_vision: true

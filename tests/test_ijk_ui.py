@@ -86,6 +86,28 @@ class WebControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 400)
         await first.close()
 
+    async def test_heartbeat_timeout_frees_ownership_without_rearming(self):
+        self.center.active_profile = 'teleop'
+        first = await self.client.ws_connect('/ws/teleop')
+        await first.receive_json()
+        await first.send_json({'type': 'claim'})
+        self.assertEqual((await first.receive_json())['type'], 'claimed')
+        self.center.control_seen -= 1
+        for _ in range(20):
+            if self.center.control_id is None:
+                break
+            await asyncio.sleep(.025)
+        self.assertIsNone(self.center.control_id)
+        self.assertFalse(self.center.lease_ready())
+        self.assertEqual(self.published[-1], (0, 0, False))
+
+        await first.send_json({'type': 'heartbeat'})
+        self.assertEqual((await first.receive_json())['type'], 'released')
+        replacement = await self.control_socket()
+        self.assertTrue(self.center.lease_ready())
+        await first.close()
+        await replacement.close()
+
     async def test_profile_lifecycle_and_log_stream(self):
         self.center.command = lambda parts: [sys.executable, '-u', '-c',
             'import time; print("profile ready", flush=True); time.sleep(30)']
@@ -123,6 +145,22 @@ class WebControlTests(unittest.IsolatedAsyncioTestCase):
         await self.client.post('/api/estop')
         response = await self.client.post('/api/profile/start', json={'profile': 'mapping'})
         self.assertEqual(response.status, 409)
+
+    async def test_mapping_3d_start_option(self):
+        commands = []
+        async def fake_run(profile, parts):
+            commands.append(parts)
+            self.center.active_profile = profile
+        self.center.run_process = fake_run
+        for options, expected in [({}, ['mapping']), ({'terrain_3d': True}, ['mapping', '--3d'])]:
+            response = await self.client.post('/api/profile/start', json={'profile': 'mapping', 'options': options})
+            self.assertEqual(response.status, 200)
+            self.assertEqual(commands[-1], expected)
+            self.assertEqual(self.center.active_options['terrain_3d'], '--3d' in expected)
+        for profile, value in [('teleop', True), ('mapping', 'false')]:
+            response = await self.client.post('/api/profile/start', json={'profile': profile, 'options': {'terrain_3d': value}})
+            self.assertEqual(response.status, 400)
+        self.assertEqual(len(commands), 2)
 
     async def test_web_teleop_does_not_start_gamepad(self):
         commands = []
@@ -441,3 +479,158 @@ class WebControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await first.receive_json())['type'],'claimed')
         self.assertEqual((await second.receive_json())['type'],'error')
         await second.close();await first.close()
+
+    async def test_maintenance_tracks_output_and_exit_status(self):
+        self.center.command=lambda parts:[sys.executable,'-u','-c','import time; print("Checking Wi-Fi",flush=True); time.sleep(.15); print("no interface",flush=True); raise SystemExit(2)']
+        response=await self.client.post('/api/ops/wifi',json={'profile':'list'})
+        self.assertEqual(response.status,202)
+        identifier=(await response.json())['job_id']
+        await asyncio.sleep(.08)
+        current=await (await self.client.get('/api/maintenance')).json()
+        self.assertEqual(current['job']['state'],'running')
+        self.assertEqual((await self.client.post('/api/ops/wifi',json={})).status,409)
+        for _ in range(30):
+            job=await (await self.client.get('/api/jobs/'+identifier)).json()
+            if job['state']!='running':break
+            await asyncio.sleep(.05)
+        self.assertEqual(job['state'],'failed')
+        self.assertTrue(any('Checking Wi-Fi' in line for line in job['output']))
+        self.assertTrue(any('no interface' in line for line in job['output']))
+        self.assertIn('2',job['error'])
+        self.assertIsNotNone(job['finished_at'])
+
+    async def test_maintenance_success_and_stop(self):
+        self.center.command=lambda parts:[sys.executable,'-u','-c','print("Wi-Fi list received")']
+        await self.client.post('/api/ops/wifi',json={})
+        for _ in range(30):
+            job=(await (await self.client.get('/api/maintenance')).json())['job']
+            if job['state']!='running':break
+            await asyncio.sleep(.05)
+        self.assertEqual(job['state'],'succeeded')
+        self.center.command=lambda parts:[sys.executable,'-u','-c','import time; time.sleep(30)']
+        await self.client.post('/api/ops/wifi',json={})
+        await self.client.post('/api/profile/stop')
+        await asyncio.sleep(.1)
+        job=(await (await self.client.get('/api/maintenance')).json())['job']
+        self.assertEqual(job['state'],'cancelled')
+
+    async def test_mock_discovery_really_searches_without_enabling_hardware(self):
+        from unittest.mock import patch
+        def search(config, **kwargs):
+            kwargs['progress']('Проверяем адрес 192.0.2.42')
+            return '192.0.2.42'
+        original_bridge=self.center.bridge
+        with patch('tools.ijk.web.server.discover_robot',side_effect=search) as discovery:
+            response=await self.client.post('/api/discovery',json={})
+            self.assertEqual((await response.json())['robot_ip'],'192.0.2.42')
+            discovery.assert_called_once()
+        job=(await (await self.client.get('/api/maintenance')).json())['job']
+        self.assertEqual(job['state'],'succeeded')
+        self.assertIn('192.0.2.42',job['message'])
+        self.assertIn('симуляции',job['message'])
+        self.assertTrue(any('Проверяем адрес' in line for line in job['output']))
+        self.assertTrue(self.center.mock)
+        self.assertIs(self.center.bridge,original_bridge)
+
+    async def test_discovery_reports_actual_not_found(self):
+        from unittest.mock import patch
+        with patch('tools.ijk.web.server.discover_robot',return_value=None) as search:
+            response=await self.client.post('/api/discovery',json={})
+            self.assertIsNone((await response.json())['robot_ip'])
+            search.assert_called_once()
+        job=(await (await self.client.get('/api/maintenance')).json())['job']
+        self.assertEqual(job['state'],'failed')
+        self.assertIn('Робот не найден',job['message'])
+
+    async def test_simulation_toggle_changes_commands_and_clears_plans(self):
+        from unittest.mock import patch
+        from tools.ijk.web.ros_bridge import Bridge
+        def bridge(config,mock,ip):
+            replacement=Bridge(config,True)
+            replacement.mock=mock
+            return replacement
+        self.center.plans['old']={}
+        with patch('tools.ijk.web.server.Bridge',side_effect=bridge):
+            response=await self.client.post('/api/mode',json={'mock':False})
+            self.assertEqual(response.status,200)
+            self.assertFalse((await response.json())['mock'])
+            self.assertNotIn('--mock',self.center.command(['teleop']))
+            self.assertFalse(self.center.plans)
+            response=await self.client.post('/api/mode',json={'mock':True})
+            self.assertTrue((await response.json())['mock'])
+            self.assertIn('--mock',self.center.command(['teleop']))
+        self.assertIsNone(self.center.active_profile)
+
+    async def test_simulation_toggle_rejects_owner_active_job_and_invalid_input(self):
+        self.assertEqual((await self.client.post('/api/mode',json={'mock':'false'})).status,400)
+        self.center.control_id='owner'
+        self.assertEqual((await self.client.post('/api/mode',json={'mock':False})).status,409)
+        self.center.control_id=None
+        self.center.maintenance_job={'state':'running'}
+        self.assertEqual((await self.client.post('/api/mode',json={'mock':False})).status,409)
+        self.center.maintenance_job=None
+        self.center.command=lambda parts:[sys.executable,'-u','-c','import time;time.sleep(30)']
+        await self.client.post('/api/profile/start',json={'profile':'mapping'})
+        self.assertEqual((await self.client.post('/api/mode',json={'mock':False})).status,409)
+        self.assertTrue(self.center.mock)
+
+    async def test_default_server_is_real_and_failed_ros_switch_is_explicit(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        with patch('tools.ijk.web.server.Bridge',return_value=self.center.bridge):
+            default=ControlCenterServer(IjkConfig())
+            self.assertFalse(default.mock)
+            self.assertNotIn('--mock',default.command(['teleop']))
+        with patch('tools.ijk.web.server.Bridge',return_value=SimpleNamespace(error='ROS not installed')):
+            response=await self.client.post('/api/mode',json={'mock':False})
+            self.assertEqual(response.status,503)
+            self.assertIn('ROS not installed',await response.text())
+        self.assertTrue(self.center.mock)
+
+    async def test_switch_mode_does_not_probe_closing_bridge_and_lease_stays_alive(self):
+        import time
+        from unittest.mock import patch
+        from tools.ijk.web.ros_bridge import Bridge
+        old=self.center.bridge
+        self.center.mock=False
+        closing=False
+        original_probe=old.probe
+        def probe(seq):
+            if closing:raise RuntimeError('DDS publisher already destroyed')
+            original_probe(seq)
+        def close():
+            nonlocal closing
+            closing=True
+            time.sleep(.25)
+        old.probe=probe;old.close=close
+        replacement=Bridge(IjkConfig(),True)
+        with patch('tools.ijk.web.server.Bridge',return_value=replacement):
+            response=await self.client.post('/api/mode',json={'mock':True})
+            self.assertEqual(response.status,200)
+        self.assertFalse(self.center.control_task.done(),'Control heartbeat loop died while the old bridge was closing')
+        ws=await self.control_socket()
+        await asyncio.sleep(.8)
+        self.assertTrue(self.center.lease_ready(),'Lease must keep renewing after a mode switch')
+        sample=self.center.bridge.telemetry.snapshot()['topics']['guard']
+        self.assertLess(sample['age_s'],.3)
+        self.published.clear()
+        replacement.publish=lambda v=0,w=0,emergency=False:self.published.append((v,w,emergency))
+        await ws.send_json({'type':'twist','v':.1,'w':.2})
+        await asyncio.sleep(.1)
+        self.assertIn((.1,.2,False),self.published)
+        await ws.send_json({'type':'twist','v':0,'w':0})
+        await asyncio.sleep(.05)
+        self.assertEqual(self.published[-1],(0.,0.,False))
+        await ws.close()
+
+    async def test_failed_control_loop_is_reported_not_shown_as_connecting(self):
+        self.center.control_task.cancel()
+        await asyncio.gather(self.center.control_task,return_exceptions=True)
+        async def fail():raise RuntimeError('control loop failed')
+        self.center.control_task=asyncio.create_task(fail())
+        await asyncio.sleep(0)
+        response=await self.client.get('/api/telemetry')
+        telemetry=await response.json()
+        self.assertEqual(telemetry['control']['error'],'control loop failed')
+        self.assertFalse(telemetry['control']['ready'])
+        self.assertIn('Ошибка управляющей сессии',telemetry['summary'])

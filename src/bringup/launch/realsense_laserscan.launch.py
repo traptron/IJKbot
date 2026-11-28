@@ -5,6 +5,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -31,6 +32,11 @@ def generate_launch_description():
         'scan_config_file',
         default_value=os.path.join(pkg_bringup, 'config', 'realsense_laserscan.yaml'),
         description='Путь к конфигурационному файлу для depthimage_to_laserscan'
+    )
+
+    declare_enable_depth_scan = DeclareLaunchArgument(
+        'enable_depth_scan', default_value='true',
+        description='Публиковать /depth/scan из кадров глубины RealSense'
     )
 
     color_profile = LaunchConfiguration('color_profile')
@@ -60,6 +66,7 @@ def generate_launch_description():
         package='depthimage_to_laserscan',
         executable='depthimage_to_laserscan_node',
         name='depthimage_to_laserscan',
+        condition=IfCondition(LaunchConfiguration('enable_depth_scan')),
         parameters=[scan_config_file],
         remappings=[
             ('depth', '/camera/depth/image_rect_raw'),
@@ -73,6 +80,11 @@ def generate_launch_description():
         declare_color_profile,
         declare_depth_profile,
         declare_scan_config,
+        declare_enable_depth_scan,
         realsense_launch,
+        Node(
+            package='bringup', executable='mapping_camera_preview.py',
+            parameters=[os.path.join(pkg_bringup, 'config', 'mapping_camera.yaml')],
+        ),
         depthimage_to_laserscan_node,
     ])

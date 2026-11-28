@@ -1,0 +1,8 @@
+<library path="bridge_layer">
+  <class type="terrain::BridgeLayer" base_class_type="nav2_costmap_2d::Layer">
+    <description>Adds current bridge hazards without clearing other layers.</description>
+  </class>
+  <class type="terrain::FloorVoxelLayer" base_class_type="nav2_costmap_2d::Layer">
+    <description>Clears old low depth marks where the floor is observed again.</description>
+  </class>
+</library>

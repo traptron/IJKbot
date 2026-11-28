@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Optional
+import shlex
 import time
 
 from tools.ijk.config import IjkConfig
@@ -56,9 +57,27 @@ def run_mapping(
     record: bool = False,
     bag_name: Optional[str] = None,
     rviz: bool = True,
+    terrain_3d: bool = False,
+    terrain_session: Optional[str] = None,
+    sensor_mounts_file: str = "",
+    bridge_survey: bool = False,
 ) -> None:
     prof = config.profiles.get("mapping")
     speed_limit = prof.max_linear_velocity if prof else 0.20
+    color_profile_arg = config.color_profile_arg("mapping")
+    terrain_args = []
+    if terrain_3d:
+        speed_limit = min(speed_limit, .1)
+        session = terrain_session or time.strftime("~/.ros/ijk-terrain/%Y%m%d-%H%M%S")
+        terrain_args = ["enable_3d:=true", f"terrain_session:={session}"]
+        if bridge_survey:
+            terrain_args += ["mapping_frame:=slam_map", "mapping_topic:=/terrain/slam_grid"]
+        else:
+            terrain_args.append("fused_mapping:=true")
+        mounts_file = sensor_mounts_file or (prof.sensor_mounts_file if prof else "")
+        if mounts_file:
+            terrain_args.append(f"sensor_mounts_file:={mounts_file}")
+        print(f"[mapping] База 3D-карты RTAB-Map: {session}/rtabmap.db", flush=True)
 
     print(f"\n==================================================================")
     print(f"  IJKbot — Картографирование помещения (SLAM) [mapping]            ")
@@ -68,21 +87,38 @@ def run_mapping(
     if record:
         runner.start_bag_recording(bag_name=bag_name)
 
+    drive_args = [
+        f"max_linear_velocity:={speed_limit}",
+        f"wheel_diameter:={config.hardware.wheel_diameter}",
+        f"wheel_separation:={config.hardware.wheel_separation}",
+    ]
+
     # 1. Start SLAM stack
     if mock or runner.local:
-        print("[mapping] Запуск SLAM Toolbox локально (mock_hardware:=true)...")
+        print("[mapping] Запуск SLAM локально (mock_hardware:=true)...")
         cmd = [
             "ros2", "launch", "bringup", "mapping.launch.py",
             "mock_hardware:=true",
-            f"max_linear_velocity:={speed_limit}",
+            "enable_lidar:=false",
+            color_profile_arg,
+            *drive_args,
+            *terrain_args,
+            *(["replay:=true"] if terrain_3d else []),
         ]
         runner.run_local_process(cmd)
     elif runner.robot_ip:
-        print(f"[mapping] Запуск SLAM Toolbox и лидара на Raspberry Pi ({runner.robot_ip})...")
-        remote_launch = (
-            f"ros2 launch bringup mapping.launch.py "
-            f"mock_hardware:=false max_linear_velocity:={speed_limit}"
-        )
+        print(f"[mapping] Запуск SLAM и лидара на роботе ({runner.robot_ip})...")
+        camera_preview = config.hardware.camera_type == "realsense" and not terrain_3d
+        remote_launch = shlex.join([
+            "ros2", "launch", "bringup", "mapping.launch.py", "mock_hardware:=false",
+            color_profile_arg,
+            f"mapping_camera:={str(camera_preview).lower()}",
+            f"lidar_serial_port:={config.hardware.lidar_port}",
+            f"lidar_serial_baudrate:={config.hardware.lidar_baudrate}",
+            f"motors_serial_port:={config.hardware.motors_port}",
+            *drive_args,
+            *terrain_args,
+        ])
         runner.start_remote_launch(remote_launch)
 
     # 2. RViz locally
@@ -90,7 +126,7 @@ def run_mapping(
         print("[mapping] Запуск RViz2 (отображение сетки и строящейся карты /map)...")
         rviz_cmd = [
             "ros2", "run", "rviz2", "rviz2",
-            "-d", "src/nav2/rviz/nav2_default_view.rviz",
+            "-d", str(REPO_DIR / "src/nav2/rviz/mapping.rviz"),
         ]
         runner.run_local_process(rviz_cmd)
 

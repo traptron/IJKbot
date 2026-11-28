@@ -105,11 +105,61 @@ def test_navigate_help():
     assert "--use-amcl" in proc.stdout
 
 
+@pytest.mark.parametrize(('choice', 'terrain_3d'), [('4', False), ('14', True)])
+def test_mapping_menu_mode(monkeypatch, choice, terrain_3d):
+    from tools.ijk import cli
+    calls = []
+    monkeypatch.setattr('builtins.input', lambda prompt: choice)
+    monkeypatch.setattr(cli, 'run_mapping', lambda *args, **kwargs: calls.append(kwargs))
+    assert cli.main(['--mock']) == 0
+    assert calls[0]['terrain_3d'] is terrain_3d
+
+
+@pytest.mark.parametrize(('mounts_file', 'configured_mounts', 'expected'), [
+    ('', '', ''),
+    ('', '~/.ros/ijk/orin-mapping-mounts.yaml', '~/.ros/ijk/orin-mapping-mounts.yaml'),
+    ('/calibration/sensor mounts.yaml', '/default.yaml', '/calibration/sensor mounts.yaml'),
+])
+def test_mapping_3d_optional_mounts_argument(monkeypatch, mounts_file, configured_mounts, expected):
+    import shlex
+    from tools.ijk.profiles.mapping import run_mapping
+
+    config = load_config()
+    config.profiles['mapping'].sensor_mounts_file = configured_mounts
+    runner = Runner(config, robot_ip='192.0.2.2')
+    launches = []
+    monkeypatch.setattr(runner, 'start_remote_launch', launches.append)
+    monkeypatch.setattr(runner, 'wait_with_ctrl_c', lambda: None)
+    run_mapping(runner, config, terrain_3d=True, rviz=False, sensor_mounts_file=mounts_file)
+    args = shlex.split(launches[0])
+    assert 'enable_3d:=true' in args
+    assert 'fused_mapping:=true' in args
+    assert [arg for arg in args if arg.startswith('sensor_mounts_file:=')] == (
+        [f'sensor_mounts_file:={expected}'] if expected else [])
+
+
 def test_mapping_help():
     proc = subprocess.run([str(REPO_DIR / "ijk"), "mapping", "--help"], stdout=subprocess.PIPE, text=True, timeout=5)
     assert proc.returncode == 0
     assert "--teleop" in proc.stdout
     assert "--save-map" in proc.stdout
+
+
+@pytest.mark.parametrize(('terrain_3d', 'rviz', 'views'), [
+    (False, True, ['mapping.rviz']),
+    (True, True, ['mapping.rviz']),
+    (True, False, []),
+])
+def test_mapping_rviz_views(monkeypatch, terrain_3d, rviz, views):
+    from tools.ijk.profiles.mapping import run_mapping
+
+    runner = Runner(load_config(), robot_ip='192.0.2.2')
+    commands = []
+    monkeypatch.setattr(runner, 'start_remote_launch', lambda command: None)
+    monkeypatch.setattr(runner, 'run_local_process', commands.append)
+    monkeypatch.setattr(runner, 'wait_with_ctrl_c', lambda: None)
+    run_mapping(runner, load_config(), terrain_3d=terrain_3d, rviz=rviz)
+    assert [Path(cmd[cmd.index('-d') + 1]).name for cmd in commands] == views
 
 
 def test_unreachable_robot_clean_exit():
@@ -161,8 +211,39 @@ def test_cyclonedds_config_uses_route_address(tmp_path, monkeypatch):
     monkeypatch.setattr(env.tempfile, 'gettempdir', lambda: str(tmp_path))
     uri = env.configure_cyclonedds('192.168.0.191')
     xml = Path(uri.removeprefix('file://')).read_text()
+    assert '<AllowMulticast>false</AllowMulticast>' in xml
+    assert '<Peer address="192.168.0.187"/>' in xml
     assert 'address="192.168.0.187"' in xml
     assert '<Peer address="192.168.0.191"/>' in xml
+
+
+@pytest.mark.parametrize('backend', ['zxing', 'opencv'])
+def test_competition_runs_qr_and_configured_yolo_on_robot_only(backend, monkeypatch):
+    import shlex
+    from types import SimpleNamespace
+
+    from tools.ijk.profiles.competition import run_competition
+
+    cfg = load_config()
+    cfg.profiles['competition'].qr_backend = backend
+    cfg.profiles['competition'].color_profile = '1280x720x15'
+    model_path = '/opt/robot models/victim.onnx'
+    monkeypatch.setenv('IJKBOT_VICTIM_MODEL_PATH', model_path)
+    local, remote = [], []
+    runner = SimpleNamespace(
+        robot_ip='192.0.2.2', local=False, domain_id=42,
+        start_remote_launch=remote.append, run_local_process=local.append,
+        wait_with_ctrl_c=lambda: None,
+    )
+
+    run_competition(runner, cfg, rviz=False)
+
+    assert len(remote) == len(local) == 1
+    assert f'qr_backend:={backend}' in remote[0]
+    assert 'enable_qr:=true' in remote[0] and 'enable_camera:=true' in remote[0]
+    assert 'color_profile:=1280x720x15' in remote[0] and 'depth_profile:=640x480x15' in remote[0]
+    assert f'victim_model_path:={model_path}' in shlex.split(remote[0])
+    assert 'laptop.launch.py' in local[0] and 'enable_vision:=false' in local[0]
 
 
 def test_remote_launch_configures_cyclonedds_without_hardware(monkeypatch):
@@ -182,6 +263,8 @@ def test_remote_launch_configures_cyclonedds_without_hardware(monkeypatch):
     runner.start_remote_launch('ros2 launch bringup robot.launch.py')
     encoded = commands[1].split('printf %s ', 1)[1].split(' |', 1)[0]
     remote_xml = base64.b64decode(encoded).decode()
+    assert '<AllowMulticast>false</AllowMulticast>' in remote_xml
+    assert '<Peer address="192.168.0.191"/>' in remote_xml
     assert 'address="192.168.0.191"' in remote_xml
     assert '<Peer address="192.168.0.187"/>' in remote_xml
     assert 'CYCLONEDDS_URI=file:///tmp/cyclonedds_ijkbot_remote.xml' in commands[-1]
@@ -233,3 +316,88 @@ def test_recording_does_not_skip_mock_teleop_hardware(monkeypatch):
         run_local_process=lambda cmd: launches.append(cmd),wait_with_ctrl_c=lambda:None)
     run_teleop(runner,load_config(),web_mode=True,mock=True,record=True)
     assert any('robot.launch.py' in command for command in launches)
+
+@pytest.mark.parametrize('action,handler',[('wifi','run_ops_wifi'),('timesync','run_ops_timesync')])
+def test_maintenance_propagates_failure_exit_code(monkeypatch,action,handler):
+    from tools.ijk import cli
+    monkeypatch.setattr(cli,handler,lambda *a,**kw:1)
+    monkeypatch.setattr(sys,'argv',['ijk','--mock','ops',action])
+    assert cli.main()==1
+
+def test_subnet_discovery_keeps_late_success(monkeypatch):
+    import time
+    from tools.ijk import discovery
+    monkeypatch.setattr(discovery,'is_port_open',lambda *a,**kw:True)
+    def ssh(ip,*a,**kw):
+        time.sleep(.02 if ip.endswith('.1') else .06)
+        return ip.endswith('.2')
+    monkeypatch.setattr(discovery,'is_ssh_responsive',ssh)
+    progress=[]
+    assert discovery.scan_subnet_for_ssh('192.0.2.0/30','robot',timeout_sec=.001,progress=progress.append)=='192.0.2.2'
+    assert any('192.0.2.2' in line for line in progress)
+
+def test_discovery_excludes_virtual_networks(monkeypatch):
+    from tools.ijk import discovery
+    from types import SimpleNamespace
+    monkeypatch.setattr(discovery.subprocess,'run',lambda *a,**kw:SimpleNamespace(stdout='10.82.218.0/24 dev wlo1 scope link\n172.17.0.0/16 dev docker0 scope link\n172.19.0.0/30 dev happ-xray scope link\n'))
+    assert discovery.get_local_subnets()==['10.82.218.0/24']
+
+def test_discovery_tries_tokmachka_with_configured_ssh_user(monkeypatch, tmp_path):
+    from tools.ijk import config, discovery
+    monkeypatch.setattr(config, 'LOCAL_CONFIG_FILE', tmp_path / 'ijk.local.yaml')
+    monkeypatch.delenv('ROBOT_USER', raising=False)
+    cfg=load_config()
+    assert cfg.network.default_user=='otmorozki'
+    assert 'tokmachka.local' in cfg.network.mdns_aliases
+    names=[];users=[];cached=[]
+    monkeypatch.delenv('ROBOT_IP',raising=False);monkeypatch.delenv('PI_HOST',raising=False)
+    monkeypatch.setattr(discovery,'get_cached_ip',lambda:None)
+    def resolve(name):
+        names.append(name)
+        return '192.0.2.42' if name=='tokmachka.local' else None
+    def ssh(ip,user,timeout):
+        users.append((ip,user))
+        return True
+    monkeypatch.setattr(discovery,'resolve_mdns',resolve)
+    monkeypatch.setattr(discovery,'is_ssh_responsive',ssh)
+    monkeypatch.setattr(discovery,'save_last_ip',cached.append)
+    assert discovery.discover_robot(cfg,verbose=False)=='192.0.2.42'
+    assert names==['ijkbot.local','tokmachka.local']
+    assert users==[('192.0.2.42','otmorozki')]
+    assert cached==['192.0.2.42']
+
+
+def test_competition_uses_training_occupancy_map(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from tools.ijk.profiles.competition import run_competition
+    occupancy = tmp_path / 'occupancy.yaml'
+    occupancy.write_text('image: occupancy.pgm\n')
+    arena = tmp_path / 'arena.json'
+    arena.write_text(json.dumps({'training_state': 'MAP_READY', 'version': 'reviewed',
+                                 'occupancy_map': str(occupancy)}))
+    monkeypatch.setenv('IJKBOT_ARENA_FILE', str(arena))
+    launches = []
+    runner = SimpleNamespace(local=True, domain_id=42, robot_ip=None,
+                             run_local_process=launches.append, wait_with_ctrl_c=lambda: None)
+    run_competition(runner, load_config(), mock=True, rviz=False)
+    assert f'map:={occupancy}' in launches[0]
+
+
+def test_navigate_realsense_uses_calibrated_depth_pipeline(monkeypatch):
+    import shlex
+    from tools.ijk.profiles import navigate
+    cfg = load_config()
+    cfg.hardware.camera_type = 'realsense'
+    cfg.profiles['mapping'].sensor_mounts_file = '~/.ros/ijk/mounts.yaml'
+    runner = Runner(cfg, robot_ip='192.0.2.2')
+    commands = []
+    monkeypatch.setattr(navigate, 'sync_map_to_pi', lambda *args: None)
+    monkeypatch.setattr(runner, 'start_remote_launch', commands.append)
+    monkeypatch.setattr(runner, 'wait_with_ctrl_c', lambda: None)
+    navigate.run_navigate(runner, cfg, map_name='polygon_empty_4x4.yaml', use_amcl=True, rviz=False)
+    args = shlex.split(commands[0])
+    assert 'navigation_depth.launch.py' in args
+    assert 'sensor_mounts_file:=~/.ros/ijk/mounts.yaml' in args
+    assert 'use_amcl:=true' in args
+    assert 'color_profile:=1920x1080x15' in args

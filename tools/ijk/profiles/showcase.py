@@ -16,6 +16,8 @@ def run_showcase(
 ) -> None:
     prof = config.profiles.get("showcase")
     speed_limit = prof.max_linear_velocity if prof else 0.25
+    color_profile_arg = config.color_profile_arg("showcase")
+    enable_camera = not (mock or runner.local) and config.hardware.camera_type == "realsense"
 
     print(f"\n==================================================================")
     print(f"  IJKbot — Презентация сенсоров на ДОД [showcase]                 ")
@@ -33,6 +35,7 @@ def run_showcase(
             "enable_lidar:=false",
             "enable_camera:=false",
             "mock_hardware:=true",
+            color_profile_arg,
             f"max_linear_velocity:={speed_limit}",
             f"wheel_diameter:={config.hardware.wheel_diameter}",
             f"wheel_separation:={config.hardware.wheel_separation}",
@@ -44,7 +47,7 @@ def run_showcase(
         remote_launch = (
             f"{gamepad_cmd}"
             f"ros2 launch bringup robot.launch.py "
-            f"enable_lidar:=true enable_camera:=false mock_hardware:=false "
+            f"enable_lidar:=true enable_camera:={str(enable_camera).lower()} mock_hardware:=false {color_profile_arg} "
             f"max_linear_velocity:={speed_limit} "
             f"wheel_diameter:={config.hardware.wheel_diameter} "
             f"wheel_separation:={config.hardware.wheel_separation}"
@@ -62,6 +65,8 @@ def run_showcase(
 
     print("[showcase] Запуск ноды детекции QR-кодов...")
     vision_cmd = ["ros2", "launch", "vision", "qr_reader.launch.py"]
+    if enable_camera:
+        vision_cmd.append("image_topic:=/camera/preview/image_raw/compressed")
     runner.run_local_process(vision_cmd)
 
     # If keyboard was chosen instead of gamepad, start keyboard teleop in interactive mode

@@ -91,7 +91,7 @@ LANDMARK_DETAILS: Dict[LandmarkID, Dict[str, Any]] = {
 
 MAP_OBJECT_DETAILS: Dict[str, Dict[str, Any]] = {
     "start": {"name_ru": "Старт / пункт сбора", "aliases": ["старт", "пункт сбора"]},
-    "parking": {"name_ru": "Парковка / остановка", "aliases": ["парковк", "остановк"]},
+    "parking": {"name_ru": "Парковка", "aliases": ["парковк"]},
     "yellow_building_debris": {"name_ru": "Обломки жёлтого здания", "aliases": ["обломки жёлтого здания", "обломки желтого здания"]},
     "yellow_building": {"name_ru": "Жёлтое здание", "aliases": ["жёлт", "желт"]},
     "blue_building": {"name_ru": "Синее здание", "aliases": ["синее", "синего", "синему"]},
@@ -117,11 +117,11 @@ ALLOWED_TARGET_IDS = [
 ]
 
 
-STATIC_TARGET_IDS = ["yellow_building", "parking", "yellow_building_debris", "blue_building", "river", "bridges"]
+STATIC_TARGET_IDS = ["yellow_building", "parking", "blue_building", "river", "bridges"]
 STATIC_PATTERNS = {
     "blue_building": r"\b(?:(?:син\w*|голуб\w*)\s+(?:здани\w*|дом\w*)|(?:здани\w*|дом\w*)\s+(?:син\w*|голуб\w*))\b",
     "yellow_building": r"\b(?:желт\w*\s+(?:здани\w*|дом\w*)|(?:здани\w*|дом\w*)\s+желт\w*)\b",
-    "parking": r"\b(?:останов\w*|парков\w*)\b",
+    "parking": r"\b(?:парков\w*)\b",
     "river": r"\b(?:рек(?:а|и|е|у|ой|ою)|речк\w*)\b",
     "bridges": r"\b(?:мост(?:а|у|ом|е|ы|ов|ам|ами|ах|овой|ового|овым|овые|овых)?|эстакад\w*|путепровод\w*)\b",
 }
@@ -330,7 +330,16 @@ class CommandInterpretation:
 
 
 # Системный промпт с описанием правил и ориентиров полигона
-SYSTEM_PROMPT = 'Определи СТАТИЧНЫЙ ориентир района поиска пострадавшего. Верни JSON по схеме.\nДопустимы только: yellow_building — жёлтое здание в ячейках 1:2 и 1:3; parking — автобусная остановка и парковка в ячейке 1:1; yellow_building_debris — обломки жёлтого здания в ячейке 1:1; blue_building — синий или голубой дом/здание; river — река/берег реки; bridges — мост/эстакада/путепровод. Если в задании указаны обломки жёлтого здания, выбирай yellow_building_debris, а не yellow_building или parking. Это отдельный статичный ориентир, расположенный в той же ячейке 1:1, что остановка и парковка.\nБензовоз, упавшее дерево и автомобили могут уточнять место рядом со статичным ориентиром, но обломки жёлтого здания — самостоятельная цель. «Бензовоз опрокинулся около реки, искать рядом с этим объектом»: target_landmark_id=river, local_object_id=tanker_truck. «Дерево свалилось на голубой дом, искать рядом с деревом»: target_landmark_id=blue_building, local_object_id=fallen_tree.\nlocal_object_id: tanker_truck — бензовоз; fallen_tree — упавшее дерево; car_jam — затор машин; debris_pvc — обломки ПВХ; smoke_tower — Стакан; panel_house — панельный дом; null — не указан.\nУчитывай отрицания и исправления задания. Уже проверенные места и объекты по пути не являются целью поиска. Цвет машины не означает цвет здания. Если статичный ориентир не указан или район неоднозначен, верни unknown. Не выдумывай привязку к карте. search_strategy=inspect_perimeter. reasoning — краткое обоснование на русском, включающее локальный объект. Координаты вычисляет программа по карте, не генерируй их.'
+SYSTEM_PROMPT = (
+    'Определи район поиска по сохранённой семантической карте. Верни JSON по схеме. '
+    'Статичные ориентиры: yellow_building, blue_building, bridges, river, parking. '
+    'Парковка — постоянный ориентир. Автобусная остановка (bus_stop), обломки (debris_pvc), '
+    'бензовоз (tanker_truck), дерево (fallen_tree), затор (car_jam), мусорный бак (trash_bin) '
+    'могут перемещаться, поэтому выбирай их как local_object_id рядом со статичным ориентиром. '
+    'Координаты и описание объектов бери из карты, не придумывай положение перемещаемых объектов. '
+    'Учитывай отрицания и исправления. При неоднозначном районе верни unknown. '
+    'search_strategy=inspect_perimeter. reasoning — краткое объяснение на русском.'
+)
 
 # JSON Schema для Structured Outputs Ollama
 OLLAMA_JSON_SCHEMA = {
@@ -348,7 +357,7 @@ OLLAMA_JSON_SCHEMA = {
         },
         "local_object_id": {
             "type": ["string", "null"],
-            "enum": [v.value for v in LandmarkID if v != LandmarkID.BRIDGES] + [None]
+            "enum": ['tanker_truck', 'fallen_tree', 'car_jam', 'debris_pvc', 'bus_stop', 'trash_bin', None]
         },
     },
     "required": ["target_landmark_id", "search_strategy", "reasoning", "local_object_id"],
@@ -600,7 +609,7 @@ class LLMClient:
         if len(mentions) != 1 or re.search(
                 r"\b(?:не|нет|либо|или|кроме)\b|проверен|осмотрен|ошибоч|отмен", text.lower()):
             raise ValueError("Не удалось однозначно выбрать статичный ориентир. "
-                             "Уточните здание, остановку, реку или мосты; проверьте Ollama.")
+                             "Уточните здание, парковку, реку или мосты; проверьте Ollama.")
         best_landmark = mentions[0]
         goals = default_nav2_goals(best_landmark, self.arena)
         if not goals:

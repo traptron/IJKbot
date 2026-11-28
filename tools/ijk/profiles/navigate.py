@@ -47,9 +47,18 @@ def run_navigate(
     record: bool = False,
     bag_name: Optional[str] = None,
     rviz: bool = True,
+    terrain_3d: bool = False,
 ) -> None:
     prof = config.profiles.get("navigate")
     speed_limit = prof.max_linear_velocity if prof else 0.25
+    color_profile_arg = config.color_profile_arg("navigate")
+    enable_camera = config.hardware.camera_type == "realsense"
+    depth_navigation = terrain_3d or (enable_camera and not (mock or runner.local))
+    mounts = prof.sensor_mounts_file if prof else ""
+    if depth_navigation:
+        speed_limit = min(speed_limit, 0.10)
+    if not mounts and config.profiles.get("mapping"):
+        mounts = config.profiles["mapping"].sensor_mounts_file
 
     # Resolve map file
     selected_map = map_name or (prof.map if prof else "polygon_empty_4x4.yaml")
@@ -74,47 +83,68 @@ def run_navigate(
     # Sync map to Pi
     sync_map_to_pi(runner, map_file)
 
-    # 1. Onboard Nav2 and robot stack
-    if mock or runner.local:
-        print("[navigate] Локальный запуск стека робота и Nav2 (mock_hardware:=true)...")
-        cmd = [
-            "ros2", "launch", "bringup", "system.launch.py",
-            "enable_robot:=true",
-            "enable_nav:=true",
-            "enable_lidar:=false",
-            "enable_camera:=false",
-            "enable_brain:=false",
-            "enable_qr:=false",
-            "mock_hardware:=true",
-            f"use_amcl:={'true' if use_amcl else 'false'}",
-            f"map:={map_file}",
-            f"max_linear_velocity:={speed_limit}",
+    if depth_navigation:
+        print("[navigate] 3D-препятствия D435 от 2.5 см, локальная сетка 2 см, скорость 0.10 м/с")
+        command = [
+            "ros2", "launch", "bringup", "navigation_depth.launch.py",
+            color_profile_arg, f"use_amcl:={str(use_amcl).lower()}",
             f"wheel_diameter:={config.hardware.wheel_diameter}",
             f"wheel_separation:={config.hardware.wheel_separation}",
+            f"lidar_serial_port:={config.hardware.lidar_port}",
+            f"lidar_serial_baudrate:={config.hardware.lidar_baudrate}",
+            f"motors_serial_port:={config.hardware.motors_port}",
         ]
-        runner.run_local_process(cmd)
-    elif runner.robot_ip:
-        print(f"[navigate] Запуск Nav2 на Raspberry Pi ({runner.robot_ip})...")
-        remote_map_path = f"{runner.remote_ws}/src/nav2/maps/{map_file.name}"
-        remote_launch = (
-            f"ros2 launch bringup system.launch.py "
-            f"enable_robot:=true enable_nav:=true enable_lidar:=true "
-            f"enable_brain:=false enable_qr:=false "
-            f"mock_hardware:=false "
-            f"use_amcl:={'true' if use_amcl else 'false'} "
-            f"map:='{remote_map_path}' "
-            f"max_linear_velocity:={speed_limit} "
-            f"wheel_diameter:={config.hardware.wheel_diameter} "
-            f"wheel_separation:={config.hardware.wheel_separation}"
-        )
-        runner.start_remote_launch(remote_launch)
+        if mounts:
+            command.append(f"sensor_mounts_file:={mounts}")
+        if mock or runner.local:
+            runner.run_local_process(command + [f"map:={map_file}", "mock_hardware:=true",
+                                                "enable_lidar:=false", "replay:=true"])
+        elif runner.robot_ip:
+            command += [f"map:={runner.remote_ws}/src/nav2/maps/{map_file.name}"]
+            runner.start_remote_launch(shlex.join(command))
+    else:
+        # 1. Onboard Nav2 and robot stack
+        if mock or runner.local:
+            print("[navigate] Локальный запуск стека робота и Nav2 (mock_hardware:=true)...")
+            cmd = [
+                "ros2", "launch", "bringup", "system.launch.py",
+                "enable_robot:=true",
+                "enable_nav:=true",
+                "enable_lidar:=false",
+                "enable_camera:=false",
+                "enable_brain:=false",
+                "enable_qr:=false",
+                "mock_hardware:=true",
+                color_profile_arg,
+                f"use_amcl:={'true' if use_amcl else 'false'}",
+                f"map:={map_file}",
+                f"max_linear_velocity:={speed_limit}",
+                f"wheel_diameter:={config.hardware.wheel_diameter}",
+                f"wheel_separation:={config.hardware.wheel_separation}",
+            ]
+            runner.run_local_process(cmd)
+        elif runner.robot_ip:
+            print(f"[navigate] Запуск Nav2 на Raspberry Pi ({runner.robot_ip})...")
+            remote_map_path = f"{runner.remote_ws}/src/nav2/maps/{map_file.name}"
+            remote_launch = (
+                f"ros2 launch bringup system.launch.py "
+                f"enable_robot:=true enable_nav:=true enable_lidar:=true "
+                f"enable_brain:=false enable_qr:=false enable_camera:={str(enable_camera).lower()} "
+                f"mock_hardware:=false {color_profile_arg} "
+                f"use_amcl:={'true' if use_amcl else 'false'} "
+                f"map:='{remote_map_path}' "
+                f"max_linear_velocity:={speed_limit} "
+                f"wheel_diameter:={config.hardware.wheel_diameter} "
+                f"wheel_separation:={config.hardware.wheel_separation}"
+            )
+            runner.start_remote_launch(remote_launch)
 
     # 2. RViz locally
     if rviz:
         print("[navigate] Запуск RViz2 (отправка целей через кнопку 'Nav2 Goal')...")
         rviz_cmd = [
             "ros2", "run", "rviz2", "rviz2",
-            "-d", "src/nav2/rviz/nav2_default_view.rviz",
+            "-d", str(REPO_DIR / "src/nav2/rviz/nav2_default_view.rviz"),
         ]
         runner.run_local_process(rviz_cmd)
 

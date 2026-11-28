@@ -12,6 +12,7 @@
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
@@ -37,6 +38,7 @@ private:
     void tick();
     void latchFault(const std::string& reason);
     void publishOdometry();
+    void publishWheelPositions();
     void publishDiagnostics();
 
     bool mock_;
@@ -62,6 +64,7 @@ private:
     std::array<double, 2> target_{};
     std::array<double, 2> applied_{};
     std::array<STS3215::Feedback, 2> feedback_{};
+    std::array<double, 2> wheel_angles_{};
     ijkbot::Odometry odometry_;
     Clock::time_point last_command_;
     Clock::time_point last_tick_;
@@ -70,6 +73,7 @@ private:
     std::unique_ptr<STS3215> servo_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> broadcaster_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr command_subscription_;
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joints_publisher_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometry_publisher_;
     rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_publisher_;
     rclcpp::TimerBase::SharedPtr timer_;

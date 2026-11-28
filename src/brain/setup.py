@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'trial_planner = brain.trial_planner:main',
+            'semantic_training = brain.semantic_training:main',
             'llm_client = brain.llm_client:main',
             'mission_sm = brain.mission_sm:main',
             'dashboard_app = brain.dashboard_app:main',

@@ -14,6 +14,7 @@ import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import JointState
 from tf2_msgs.msg import TFMessage
 
 
@@ -65,6 +66,8 @@ def driver(monkeypatch, request):
             odometry = []
             diagnostics = []
             transforms = []
+            joints = []
+            node.create_subscription(JointState, "joint_states", joints.append, 10)
             node.create_subscription(Odometry, "odom", lambda msg: odometry.append((time.monotonic(), msg)), 100)
             node.create_subscription(DiagnosticArray, "diagnostics", diagnostics.append, 10)
             node.create_subscription(TFMessage, "/tf", transforms.append, 100)
@@ -85,7 +88,7 @@ def driver(monkeypatch, request):
                 if not missing_uart:
                     assert len(odometry) > 10
                 assert publisher.get_subscription_count() == 1
-                yield spin, odometry, diagnostics, transforms
+                yield spin, odometry, diagnostics, transforms, joints
             finally:
                 process.send_signal(signal.SIGINT)
                 try:
@@ -102,7 +105,7 @@ def driver(monkeypatch, request):
 
 
 def test_mock_motion_watchdog_tf_and_invalid_command(driver):
-    spin, odometry, diagnostics, transforms = driver
+    spin, odometry, diagnostics, transforms, joints = driver
     assert abs(odometry[-1][1].pose.pose.position.x) < 1e-9
     assert diagnostics[-1].status[0].hardware_id == "mock"
     command = Twist()
@@ -110,6 +113,9 @@ def test_mock_motion_watchdog_tf_and_invalid_command(driver):
     spin(1.0, command)
     assert odometry[-1][1].pose.pose.position.x > 0.05
     assert abs(odometry[-1][1].twist.twist.linear.x - 0.1) < 1e-6
+    assert joints[-1].name == ["wheel_left_joint", "wheel_right_joint"]
+    assert joints[-1].position[0] == pytest.approx(joints[-1].position[1])
+    assert joints[-1].position[0] > 1.0
     stopped_publishing = time.monotonic()
     spin(0.7)
     braking = [(stamp, msg) for stamp, msg in odometry
@@ -154,11 +160,12 @@ def test_mock_motion_watchdog_tf_and_invalid_command(driver):
 
 @pytest.mark.parametrize("driver", [True], indirect=True)
 def test_missing_uart_keeps_node_alive_and_motion_locked(driver):
-    spin, odometry, diagnostics, _ = driver
+    spin, odometry, diagnostics, _, joints = driver
     command = Twist()
     command.linear.x = 0.1
     spin(1.2, command)
     assert not odometry
+    assert not joints
     assert diagnostics[-1].status[0].level == DiagnosticStatus.ERROR
     assert "Cannot open serial port" in diagnostics[-1].status[0].message
 

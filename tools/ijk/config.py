@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import os
+import re
 import yaml
 
 
@@ -12,6 +13,7 @@ CONFIG_FILE = REPO_DIR / "config" / "ijk.yaml"
 LOCAL_CONFIG_FILE = REPO_DIR / "config" / "ijk.local.yaml"
 CACHE_DIR = Path.home() / ".cache" / "ijk"
 LAST_IP_FILE = CACHE_DIR / "last_ip"
+DEFAULT_COLOR_PROFILE = "1920x1080x15"
 
 
 @dataclass
@@ -24,6 +26,7 @@ class NetworkConfig:
     mdns_hostname: str = "ijkbot.local"
     subnet_scan_timeout_sec: float = 2.0
     remote_ws: str = "/home/otmorozki/IJKbot"
+    mdns_aliases: List[str] = field(default_factory=lambda: ["tokmachka.local"])
 
 
 @dataclass
@@ -32,6 +35,7 @@ class HardwareConfig:
     lidar_baudrate: int = 115200
     motors_port: str = "/dev/ttySTS"
     camera_type: str = "csi"
+    color_profile: str = DEFAULT_COLOR_PROFILE
     wheel_diameter: float = 0.075
     wheel_separation: float = 0.225
 
@@ -51,6 +55,9 @@ class ProfileConfig:
     map: str = "polygon_empty_4x4.yaml"
     teleop_source: str = "keyboard"
     allow_speed_override: bool = False
+    qr_backend: str = 'zxing'
+    color_profile: Optional[str] = None
+    sensor_mounts_file: str = ""
 
 
 @dataclass
@@ -59,6 +66,14 @@ class IjkConfig:
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
     profiles: Dict[str, ProfileConfig] = field(default_factory=dict)
     raw: Dict[str, Any] = field(default_factory=dict)
+
+    def color_profile_arg(self, profile: str) -> str:
+        settings = self.profiles.get(profile)
+        override = settings.color_profile if settings else None
+        value = self.hardware.color_profile if override is None else override
+        if not re.fullmatch(r"[1-9][0-9]*x[1-9][0-9]*x[1-9][0-9]*", value):
+            raise ValueError(f"{profile}: color_profile должен иметь формат ШИРИНАxВЫСОТАxFPS")
+        return f"color_profile:={value}"
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -90,6 +105,7 @@ def load_config() -> IjkConfig:
         rmw=os.environ.get("RMW_IMPLEMENTATION", net_data.get("rmw", "rmw_cyclonedds_cpp")),
         known_hosts=list(net_data.get("known_hosts", ["192.168.0.191", "10.197.37.154", "192.168.1.10"])),
         mdns_hostname=str(net_data.get("mdns_hostname", "ijkbot.local")),
+        mdns_aliases=list(net_data.get("mdns_aliases", ["tokmachka.local"])),
         subnet_scan_timeout_sec=float(net_data.get("subnet_scan_timeout_sec", 2.0)),
         remote_ws=str(net_data.get("remote_ws", "/home/otmorozki/IJKbot")),
     )
@@ -103,6 +119,7 @@ def load_config() -> IjkConfig:
         lidar_baudrate=int(lidar_data.get("baudrate", 115200)),
         motors_port=str(motors_data.get("port", "/dev/ttySTS")),
         camera_type=str(camera_data.get("type", "csi")),
+        color_profile=str(camera_data.get("color_profile", DEFAULT_COLOR_PROFILE)),
         wheel_diameter=float(motors_data.get("wheel_diameter", 0.075)),
         wheel_separation=float(motors_data.get("wheel_separation", 0.225)),
     )
@@ -124,6 +141,9 @@ def load_config() -> IjkConfig:
             map=str(p.get("map", "polygon_empty_4x4.yaml")),
             teleop_source=str(p.get("teleop_source", "keyboard")),
             allow_speed_override=bool(p.get("allow_speed_override", False)),
+            qr_backend=str(p.get('qr_backend', 'zxing')),
+            color_profile=str(p['color_profile']) if 'color_profile' in p else None,
+            sensor_mounts_file=str(p.get('sensor_mounts_file', '')),
         )
 
     return IjkConfig(network=network, hardware=hardware, profiles=profiles, raw=data)

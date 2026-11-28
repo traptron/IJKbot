@@ -1,0 +1,28 @@
+victim_yolo_node:
+  ros__parameters:
+    model_path: ""
+    backend: auto
+    class_names: [victim]
+    conf_threshold: 0.6
+    min_observation_confidence: 0.6
+    iou_threshold: 0.45
+    input_size: 640
+    max_process_hz: 6.0
+    max_depth_sync_dt_sec: 0.08
+    depth_scale: 0.001
+    confirm_count: 3
+    max_spread_m: 0.15
+    max_age_sec: 1.0
+    jpeg_quality: 80
+    snapshot_max_width: 640
+    publish_cooldown_sec: 1.0
+    tf_timeout_sec: 0.05
+    image_reliability: best_effort
+    color_topic: /camera/color/image_raw
+    depth_topic: /camera/depth/image_rect_raw
+    color_info_topic: /camera/color/camera_info
+    depth_info_topic: /camera/depth/camera_info
+    extrinsics_topic: /camera/extrinsics/depth_to_color
+    attempt_id_topic: /mission/attempt_id
+    observations_topic: /vision/observations
+    victim_snapshot_topic: /vision/victim/image/compressed

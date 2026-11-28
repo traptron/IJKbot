@@ -51,6 +51,7 @@ DiffDriveNode::DiffDriveNode(const rclcpp::NodeOptions& options)
     ids_ = {static_cast<uint8_t>(left_id), static_cast<uint8_t>(right_id)};
     metres_per_tick_ = ijkbot::kPi * wheel_diameter_ / ijkbot::kEncoderTicks;
     wheel_limit_ = std::min(0.25, metres_per_tick_ * STS3215::MAX_SPEED);
+    joints_publisher_ = create_publisher<sensor_msgs::msg::JointState>("joint_states", 1);
     odometry_publisher_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("diagnostics", 10);
     broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -160,6 +161,9 @@ void DiffDriveNode::tick()
     // 1. Опрос энкодеров и расчет одометрии
     bool tick_had_error = false;
     if (mock_) {
+        for (std::size_t i = 0; i < wheel_angles_.size(); ++i) {
+            wheel_angles_[i] += 2.0 * applied_[i] * safe_dt / wheel_diameter_;
+        }
         odometry_.update(applied_[0] * safe_dt, applied_[1] * safe_dt, separation_, safe_dt);
     } else {
         try {
@@ -171,6 +175,8 @@ void DiffDriveNode::tick()
 
             std::array<double, 2> distances{};
             for (std::size_t i = 0; i < 2; ++i) {
+                wheel_angles_[i] = directions_[i] * feedback[i].position *
+                    (2.0 * ijkbot::kPi / ijkbot::kEncoderTicks);
                 int delta = ijkbot::encoderDelta(feedback_[i].position, feedback[i].position);
                 // Защита от одиночных аномальных выбросов энкодера без падения ноды
                 const int max_plausible = static_cast<int>(STS3215::MAX_SPEED * sample_dt * 2.0 + 100.0);
@@ -224,6 +230,10 @@ void DiffDriveNode::tick()
         }
     }
 
+    if (!tick_had_error) {
+        publishWheelPositions();
+    }
+
     // 2. Управление скоростью моторов (выполняется ВСЕГДА, чтобы колеса не зависали)
     const bool expired = !have_command_ ||
         std::chrono::duration<double>(Clock::now() - last_command_).count() >= command_timeout_;
@@ -272,6 +282,15 @@ void DiffDriveNode::tick()
     }
 
     publishOdometry();
+}
+
+void DiffDriveNode::publishWheelPositions()
+{
+    sensor_msgs::msg::JointState message;
+    message.header.stamp = now();
+    message.name = {"wheel_left_joint", "wheel_right_joint"};
+    message.position.assign(wheel_angles_.begin(), wheel_angles_.end());
+    joints_publisher_->publish(message);
 }
 
 void DiffDriveNode::publishOdometry()

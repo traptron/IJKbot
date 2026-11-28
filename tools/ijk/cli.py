@@ -67,9 +67,10 @@ def show_interactive_menu() -> str:
     print("  11) ops update  — Обновление и сборка (локально + Pi)")
     print("  12) stop        — Экстренная остановка всех систем")
     print("  13) ui          — Веб-пульт управления")
+    print("  14) mapping --3d — 3D-картографирование с RealSense и RTAB-Map")
     print("  0) Выход")
     print("=======================================================")
-    choice = input("Выберите действие [0-13]: ").strip()
+    choice = input("Выберите действие [0-14]: ").strip()
     mapping = {
         "1": "competition",
         "2": "showcase",
@@ -84,6 +85,7 @@ def show_interactive_menu() -> str:
         "11": "ops-update",
         "12": "stop",
         "13": "ui",
+        "14": "mapping --3d",
     }
     return mapping.get(choice, "")
 
@@ -121,7 +123,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     subparsers = parser.add_subparsers(dest="command", help="Команда или профиль")
 
     # competition
-    subparsers.add_parser("competition", help="Соревновательный заезд (LLM + Nav2 + QR)")
+    p_competition = subparsers.add_parser("competition", help="Соревновательный заезд (LLM + Nav2 + QR)")
+    p_competition.add_argument("--3d", dest="terrain_3d", action="store_true", help="Проверять проезд по мостам через D435")
+    p_competition.add_argument("--bridge-reference", help="Путь к проверенному bridge.json рядом с картой арены")
+    p_competition.add_argument("--sensor-mounts-file", default="", help="Путь к YAML креплений на роботе")
 
     # showcase
     p_showcase = subparsers.add_parser("showcase", help="Презентация на ДОД (сенсоры + экран)")
@@ -138,9 +143,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_mapping = subparsers.add_parser("mapping", help="Построение карты (SLAM Toolbox + RViz)")
     p_mapping.add_argument("--teleop", action="store_true", help="Открыть клавиатурный телеоп в фокусе")
     p_mapping.add_argument("--save-map", type=str, help="Имя для сохранения карты при выходе")
+    p_mapping.add_argument("--3d", dest="terrain_3d", action="store_true", help="Объединить лидар и RealSense в RTAB-Map")
+    p_mapping.add_argument("--bridge-survey", action="store_true",
+                           help="Снять независимую RGB-D карту для калибровки мостов")
+    p_mapping.add_argument("--terrain-session", help="Новый каталог записи 3D-карты на роботе")
+    p_mapping.add_argument("--sensor-mounts-file", default="", help="Путь к YAML креплений на роботе")
 
     # navigate
     p_nav = subparsers.add_parser("navigate", help="Автономная навигация Nav2 по сохраненной карте")
+    p_nav.add_argument("--3d", dest="terrain_3d", action="store_true",
+                       help="Nav2 с живыми 3D-препятствиями D435 (автоматически при RealSense)")
     p_nav.add_argument("--map", type=str, help="Имя или путь к карте .yaml")
     p_nav.add_argument("--use-amcl", action="store_true", help="Использовать AMCL вместо чистой одометрии")
 
@@ -187,6 +199,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     command = args.command
     if not command:
         command = show_interactive_menu()
+        if command == "mapping --3d":
+            command = "mapping"
+            args.terrain_3d = True
         if not command:
             print("Выход.")
             return 0
@@ -228,15 +243,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         from tools.ijk.web.server import start_web_server
         start_web_server(config, host=getattr(args, "ui_host", "0.0.0.0"), port=getattr(args, "port", 8080), no_browser=getattr(args, "no_browser", False), robot_ip=robot_ip, mock=args.mock, local=args.local)
     elif command == "competition":
-        run_competition(runner, config, role=role, mock=args.mock, record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
+        run_competition(runner, config, role=role, mock=args.mock, record=args.record, bag_name=args.bag_name,
+                        rviz=not getattr(args, "no_rviz", False), terrain_3d=getattr(args, "terrain_3d", False),
+                        bridge_reference=getattr(args, "bridge_reference", None),
+                        sensor_mounts_file=getattr(args, "sensor_mounts_file", ""))
     elif command == "showcase":
         run_showcase(runner, config, mock=args.mock, gamepad=getattr(args, "use_gamepad", True), record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
     elif command == "teleop":
-        run_teleop(runner, config, use_gamepad=getattr(args, "gamepad", False), web_mode=getattr(args, "web", False), speed=getattr(args, "speed", None), mock=args.mock, record=args.record, bag_name=args.bag_name)
+        try:
+            run_teleop(runner, config, use_gamepad=getattr(args, "gamepad", False), web_mode=getattr(args, "web", False), speed=getattr(args, "speed", None), mock=args.mock, record=args.record, bag_name=args.bag_name)
+        except RuntimeError as exc:
+            print(f"[teleop] {exc}", file=sys.stderr)
+            return 1
     elif command == "mapping":
-        run_mapping(runner, config, teleop=getattr(args, "teleop", False), save_name=getattr(args, "save_map", None), mock=args.mock, record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
+        run_mapping(runner, config, teleop=getattr(args, "teleop", False),
+                    save_name=getattr(args, "save_map", None), mock=args.mock,
+                    record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False),
+                    terrain_3d=getattr(args, "terrain_3d", False) or getattr(args, "bridge_survey", False),
+                    bridge_survey=getattr(args, "bridge_survey", False),
+                    terrain_session=getattr(args, "terrain_session", None),
+                    sensor_mounts_file=getattr(args, "sensor_mounts_file", ""))
     elif command == "navigate":
-        run_navigate(runner, config, map_name=getattr(args, "map", None), use_amcl=getattr(args, "use_amcl", False), mock=args.mock, record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
+        run_navigate(runner, config, terrain_3d=getattr(args, "terrain_3d", False), map_name=getattr(args, "map", None), use_amcl=getattr(args, "use_amcl", False), mock=args.mock, record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
     elif command in ("bench", "bench-motors", "bench-odom-calib"):
         target = getattr(args, "target", "motors") if command == "bench" else ("odom-calib" if command == "bench-odom-calib" else "motors")
         if target == "motors":
@@ -268,9 +296,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif action == "chrony":
             run_ops_chrony(runner, config)
         elif action == "timesync":
-            run_ops_timesync(runner, config, force=getattr(args, "force", False))
+            return run_ops_timesync(runner, config, force=getattr(args, "force", False))
         elif action == "wifi":
-            run_ops_wifi(runner, config, profile=getattr(args, "profile", None))
+            return run_ops_wifi(runner, config, profile=getattr(args, "profile", None))
         elif action == "bag-export":
             run_ops_bag_export(runner, bag=getattr(args, "bag", None))
         elif action == "save-map":

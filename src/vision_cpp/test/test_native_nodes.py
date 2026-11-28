@@ -127,7 +127,7 @@ def test_native_reader_and_mock_camera():
             image_pub.publish(frame)
             spin()
         assert not texts  # Unknown mission state is gated.
-        state_pub.publish(String(data='READING_QR'))
+        state_pub.publish(String(data='APPROACHING_VICTIM'))
         spin()
         image_pub.publish(frame)
         spin()
@@ -135,6 +135,8 @@ def test_native_reader_and_mock_camera():
             image_pub.publish(frame)
             spin(0.1)
         assert not texts
+        state_pub.publish(String(data='WAIT_5_SECONDS'))
+        spin()
         for stamp in (2, 3):
             frame.header.stamp.sec = stamp
             image_pub.publish(frame)

@@ -1,0 +1,31 @@
+{
+  "target": "/home/lev/IJKbot/docs/designs/rtk_final_2026.md",
+  "scope": "Feature specification before ## Detailed Implementation Plan",
+  "reviewed_sha256": "c6de09ea7dd6ba2f0ce4dc217c9ff2720326716d7a36c48e8ba5e150b9cb007a",
+  "round": 3,
+  "status": "withdrawn_after_author_clarification_not_applied",
+  "edits": [
+    {
+      "id": "design-3-1",
+      "severity": "Major",
+      "category": "PROPOSE FIX",
+      "replacements": [
+        {
+          "before": "Successful victim recognition requires accepted fresh figure evidence from the selected detector. A banner-only scene must not create that stage. A single confidence value does not prove enough evidence: determine temporal confirmation and negative-scene thresholds from held-out scenes and full runs, then fix them in the verification design. Keep evidence of the actual figure and QR associations distinct when they occupy different image regions.",
+          "after": "Successful victim recognition requires accepted fresh figure evidence from the selected detector. A banner-only scene must not create that stage. A single confidence value does not prove enough evidence: determine temporal confirmation and negative-scene thresholds from held-out scenes and full runs, then fix them in the verification design. Keep evidence of the actual figure and QR associations distinct when they occupy different image regions.\n\nThe coordinator owns a selected-target record for the active attempt, distinct from mission, view and request identity. Bind accepted figure evidence, the target's QR information and its hold-cell evidence to that same record using their original observation/capture references, surveyed target region and verified robot pose. Separate stage evidence remains necessary, but stages from different target records cannot be combined into full success. A common view, a nearby QR or matching task context alone does not establish physical-target identity.\n\nFor QR-stage credit, obtain figure and QR observations from the same identified captured image and require a unique figure/banner pairing under the surveyed viewing geometry and representative prop relationship. Check the figure box, QR corners, permitted target region and pose uncertainty against that verified relationship. Selecting the nearest pair or accepting the only decoded code is not sufficient when another pairing remains plausible. If the image/pose evidence permits more than one association, reject target-specific QR credit with an unresolved-target-association reason; try another surveyed view within T4-A's budget or retain an incomplete outcome. If allowed field arrangements are visually indistinguishable under a view's evidence, that view cannot certify the association.\n\nAfter a viewpoint change, reacquire fresh figure/banner evidence and establish a unique correspondence to the selected target through the surveyed region, verified pose and observed appearance before using the new view's QR or hold evidence. If multiple candidates remain indistinguishable, do not assume continuity. An explicit target change creates a new record without inheriting the old target's QR or hold credit; saved evidence remains in the run history. Validate an unrelated readable banner beside a toy, multiple figures/banners, ambiguous same-region pairings and a view change exposing a different candidate. Missing verified association coverage is a failed readiness prerequisite. This policy uses T8-B image/pose/catalogue evidence, not an implicit target-depth fallback or general tracking framework. Align its record, acceptance rules and tests in the detailed plan before implementation readiness."
+        }
+      ]
+    }
+  ],
+  "settled_duplicates": [
+    {
+      "id": "style-3-1",
+      "original_id": "style-2-3",
+      "category": "DECLINE"
+    }
+  ],
+  "author_clarification": "Exactly one QR and one victim figure, positioned next to each other",
+  "resolution_category": "ESCALATE",
+  "resolution": "Author supplied missing field constraint and rejected unnecessary multi-target association policy. Applied that factual scope clarification instead.",
+  "clarified_target_sha256": "023772a41b6bbf1f781f9b5b87c1d17c239bee5c9434d2776eba264731b14db1"
+}

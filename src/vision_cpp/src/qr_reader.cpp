@@ -112,7 +112,10 @@ public:
     if (worker_.joinable()) {worker_.join();}
   }
 private:
-  bool allowed() const {return !state_filter_ || state_ == "SEARCHING_VICTIM" || state_ == "READING_QR";}
+  bool allowed() const {
+    return !state_filter_ || state_ == "SEARCHING_VICTIM" || state_ == "APPROACHING_VICTIM" ||
+           state_ == "WAIT_5_SECONDS" || state_ == "READING_QR";
+  }
   void save_snapshot(const vision_cpp::Bytes & jpeg) {
     try {
       std::filesystem::path directory = log_dir_;
