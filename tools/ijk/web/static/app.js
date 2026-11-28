@@ -4,7 +4,7 @@ const $$ = s => [...document.querySelectorAll(s)];
 const names = {teleop:'Teleop', mapping:'Mapping', navigate:'Navigate', showcase:'Showcase', competition:'Competition'};
 const storageKey = 'ijk.control.v1';
 const defaults = () => ({version:1, profile:'teleop', linear:.15, angular:.48, seenJob:null,
-  profiles:Object.fromEntries(Object.keys(names).map(p => [p,{record:false,bag_name:'',rviz:true,use_amcl:true,map:null}]))});
+  profiles:Object.fromEntries(Object.keys(names).map(p => [p,{record:false,bag_name:'',rviz:true,terrain_3d:false,use_amcl:true,map:null}]))});
 let settings = defaults();
 try {
   const saved = JSON.parse(localStorage.getItem(storageKey));
@@ -14,7 +14,7 @@ try {
     if (typeof saved.seenJob === 'string') settings.seenJob=saved.seenJob;
     for (const p of Object.keys(names)) {
       const item = saved.profiles?.[p]; if (!item) continue;
-      for (const key of ['record','rviz','use_amcl']) if (typeof item[key] === 'boolean') settings.profiles[p][key] = item[key];
+      for (const key of ['record','rviz','use_amcl','terrain_3d']) if (typeof item[key] === 'boolean') settings.profiles[p][key] = item[key];
       for (const key of ['bag_name','map']) if (typeof item[key] === 'string') settings.profiles[p][key] = item[key];
     }
   }
@@ -108,17 +108,19 @@ for(const key of ['linear','angular']) {
 function readOptions() {
   const options=settings.profiles[settings.profile];
   options.rviz=$('#use-rviz').checked; options.record=$('#record').checked;
+  if(settings.profile==='mapping')options.terrain_3d=$('#terrain-3d').checked;
   options.bag_name=$('#bag-name').value.trim(); options.use_amcl=$('#use-amcl').checked;
   $('#bag-option').hidden=!options.record;remember();
 }
 function showOptions() {
   const p=settings.profile,options=settings.profiles[p];
+  $('#mapping-options').hidden=p!=='mapping';$('#terrain-3d').checked=options.terrain_3d;
   $('#profile').value=p; $('#navigate-options').hidden=p!=='navigate';$('#rviz-option').hidden=p==='teleop';
   $('#use-rviz').checked=options.rviz;$('#record').checked=options.record;$('#bag-name').value=options.bag_name;
   $('#use-amcl').checked=options.use_amcl;$('#bag-option').hidden=!options.record;renderMaps();updateControls();
 }
 $('#profile').onchange=event=>{readOptions();settings.profile=event.target.value;remember();showOptions();};
-for(const selector of ['#use-rviz','#record','#bag-name','#use-amcl']) $(selector).onchange=readOptions;
+for(const selector of ['#use-rviz','#record','#bag-name','#use-amcl','#terrain-3d']) $(selector).onchange=readOptions;
 function renderMaps() {
   const selected=settings.profiles.navigate.map;
   for(const select of $$('.map-select')) {
@@ -187,6 +189,7 @@ function displayState() {
   if(state.active_profile)rows.push(`Профиль: ${names[state.active_profile]||state.active_profile}`);
   if(o.map)rows.push(`Карта: ${o.map}`);
   if('use_amcl'in o)rows.push(`AMCL: ${o.use_amcl?'включён':'выключен'}`);
+  if(o.terrain_3d)rows.push('3D-карта · лидар и RealSense');
   if('rviz'in o)rows.push(`RViz: ${o.rviz?'включён':'выключен'}`);
   if('record'in o)rows.push(`Rosbag: ${o.record?o.bag_name||'автоматическое имя':'выключен'}`);
   if(state.last_error)rows.push(state.last_error);
@@ -199,6 +202,7 @@ $('#start-profile').onclick=()=>act(async()=>{
   readOptions();const profile=settings.profile,stored=settings.profiles[profile],options={record:stored.record};
   if(stored.record&&stored.bag_name)options.bag_name=stored.bag_name;
   if(profile!=='teleop')options.rviz=stored.rviz;
+  if(profile==='mapping' && stored.terrain_3d)options.terrain_3d=true;
   if(profile==='navigate'){options.map=stored.map;options.use_amcl=stored.use_amcl;}
   state.process_state='starting';displayState();await api('/api/profile/start',{profile,options});
 },'Запускаем выбранный профиль…','Процесс профиля запущен. Готовность оборудования смотрите в «Состоянии»');

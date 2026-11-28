@@ -16,11 +16,13 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('params_file', default_value=default_params),
         DeclareLaunchArgument('implementation', default_value='vision_cpp'),
+        DeclareLaunchArgument('image_topic', default_value='/camera/color/image_raw/compressed'),
         Node(
             package=LaunchConfiguration('implementation'),
             executable='qr_reader_node',
             name='qr_reader_node',
             output='screen',
             parameters=[LaunchConfiguration('params_file')],
+            remappings=[('/camera/color/image_raw/compressed', LaunchConfiguration('image_topic'))],
         ),
     ])

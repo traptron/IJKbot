@@ -1,6 +1,5 @@
 """Competition profile executor."""
 
-import re
 from typing import Optional
 import json
 import hashlib
@@ -57,11 +56,9 @@ def run_competition(
     if terrain_3d:
         speed_limit = float(bridge['calibration']['max_speed_m_s'])
     qr_backend = prof.qr_backend if prof else 'zxing'
-    color_profile = prof.color_profile if prof else '1920x1080x15'
+    color_profile_arg = config.color_profile_arg("competition")
     if qr_backend not in ('zxing', 'opencv'):
         raise ValueError('competition.qr_backend must be zxing or opencv')
-    if not re.fullmatch(r'[1-9]\d*x[1-9]\d*x[1-9]\d*', color_profile):
-        raise ValueError('competition.color_profile must be WIDTHxHEIGHTxFPS')
     wheel_d = config.hardware.wheel_diameter
     wheel_sep = config.hardware.wheel_separation
 
@@ -78,6 +75,7 @@ def run_competition(
     if role in ("operator", "all"):
         if terrain_3d:
             command = ['ros2', 'launch', 'bringup', 'terrain_competition.launch.py',
+                       color_profile_arg,
                        f'wheel_diameter:={wheel_d}', f'wheel_separation:={wheel_sep}',
                        f'lidar_serial_port:={config.hardware.lidar_port}',
                        f'lidar_serial_baudrate:={config.hardware.lidar_baudrate}',
@@ -107,6 +105,7 @@ def run_competition(
                 "enable_brain:=false",
                 "enable_qr:=false",
                 "mock_hardware:=true",
+                color_profile_arg,
                 f"max_linear_velocity:={speed_limit}",
                 f"wheel_diameter:={wheel_d}",
                 f"wheel_separation:={wheel_sep}",
@@ -120,7 +119,7 @@ def run_competition(
                 f"ros2 launch bringup system.launch.py "
                 f"enable_robot:=true enable_nav:=true enable_lidar:=true "
                 f"enable_brain:=false enable_camera:=true enable_qr:=true "
-                f"qr_backend:={qr_backend} color_profile:={color_profile} depth_profile:=640x480x15 "
+                f"qr_backend:={qr_backend} {color_profile_arg} depth_profile:=640x480x15 "
                 f"mock_hardware:=false max_linear_velocity:={speed_limit} "
                 f"wheel_diameter:={wheel_d} wheel_separation:={wheel_sep}"
             )

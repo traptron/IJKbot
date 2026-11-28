@@ -18,6 +18,8 @@ def run_teleop(
 ) -> None:
     prof = config.profiles.get("teleop")
     base_speed = prof.max_linear_velocity if prof else 0.35
+    color_profile_arg = config.color_profile_arg("teleop")
+    enable_camera = config.hardware.camera_type == "realsense"
 
     # Safe ceiling: max 0.4 m/s outside competition as agreed
     if speed is not None:
@@ -45,6 +47,7 @@ def run_teleop(
             "enable_lidar:=false",
             "enable_camera:=false",
             "mock_hardware:=true",
+            color_profile_arg,
             f"max_linear_velocity:={target_speed}",
             f"wheel_diameter:={config.hardware.wheel_diameter}",
             f"wheel_separation:={config.hardware.wheel_separation}",
@@ -65,7 +68,8 @@ def run_teleop(
             print(f"[teleop] Запуск драйвера на борту ({runner.robot_ip})...")
             remote_launch = (
                 f"ros2 launch bringup robot.launch.py "
-                f"enable_lidar:=false enable_camera:=false mock_hardware:=false "
+                f"enable_lidar:=false enable_camera:={str(enable_camera).lower()} mock_hardware:=false "
+                f"{color_profile_arg} "
                 f"motors_serial_port:={port} "
                 f"max_linear_velocity:={target_speed} "
                 f"wheel_diameter:={config.hardware.wheel_diameter} "

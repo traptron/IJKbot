@@ -23,6 +23,9 @@
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>image_transport</exec_depend>
   <exec_depend>image_transport_plugins</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>rmw_cyclonedds_cpp</exec_depend>
   <exec_depend>driver</exec_depend>
   <exec_depend>description</exec_depend>

@@ -104,6 +104,16 @@ Visualization Manager:
       Value: /map_updates
     Use Timestamp: false
     Value: true
+  - Class: rviz_default_plugins/Marker
+    Name: RTAB-Map 3D (RealSense + lidar)
+    Enabled: true
+    Topic:
+      Value: /terrain/rviz_map
+      Depth: 1
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+    Value: true
   - Class: rviz_default_plugins/Image
     Enabled: true
     Max Value: 1
@@ -116,7 +126,7 @@ Visualization Manager:
       Durability Policy: Volatile
       History Policy: Keep Last
       Reliability Policy: Best Effort
-      Value: /camera/color/image_raw/compressed
+      Value: /camera/preview/image_raw/compressed
     Value: true
   Enabled: true
   Global Options:

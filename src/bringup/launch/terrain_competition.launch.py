@@ -63,7 +63,8 @@ def setup(context, temporary):
                 motor_cmd_vel_topic='/cmd_vel_terrain_safe',
                 monitor_cmd_vel_topic='/cmd_vel_terrain_input',
                 sensor_mounts_file=arg('sensor_mounts_file'), use_sim_time=sim),
-        include(bringup / 'launch/rgbd.launch.py', replay=arg('replay'), use_sim_time=sim),
+        include(bringup / 'launch/rgbd.launch.py', replay=arg('replay'), use_sim_time=sim,
+                color_profile=arg('color_profile')),
         include(nav2 / 'launch/navigation.launch.py', use_amcl='true', use_twist_mux='false',
                 params_file=str(params_file), map=arg('map'), use_sim_time=sim,
                 initial_x=str(x), initial_y=str(y), initial_yaw=str(yaw)),
@@ -90,6 +91,7 @@ def generate_launch_description():
         'replay': 'false', 'use_sim_time': 'false', 'sensor_mounts_file': '',
         'enable_qr': 'true', 'lidar_serial_port': '/dev/ttyUSB0',
         'victim_model_path': '',
+        'color_profile': '640x480x15',
         'lidar_serial_baudrate': '115200', 'motors_serial_port': '/dev/ttySTS',
         'wheel_diameter': '.075', 'wheel_separation': '.225',
     }

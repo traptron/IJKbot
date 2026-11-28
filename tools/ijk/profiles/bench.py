@@ -53,7 +53,10 @@ def run_isolated_subsystem(runner: Runner, subsystem: str, mock: bool = False) -
     if subsystem == "lidar":
         launch_cmd = "ros2 launch bringup robot.launch.py enable_motors:=false enable_camera:=false enable_lidar:=true"
     elif subsystem == "camera":
-        launch_cmd = "ros2 launch bringup robot.launch.py enable_motors:=false enable_camera:=true enable_lidar:=false"
+        launch_cmd = (
+            "ros2 launch bringup robot.launch.py enable_motors:=false enable_camera:=true enable_lidar:=false "
+            + runner.config.color_profile_arg("bench")
+        )
     elif subsystem == "driver":
         launch_cmd = f"ros2 launch driver driver.launch.py mock_hardware:={'true' if mock else 'false'}"
     elif subsystem == "qr":

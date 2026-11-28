@@ -146,6 +146,22 @@ class WebControlTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/api/profile/start', json={'profile': 'mapping'})
         self.assertEqual(response.status, 409)
 
+    async def test_mapping_3d_start_option(self):
+        commands = []
+        async def fake_run(profile, parts):
+            commands.append(parts)
+            self.center.active_profile = profile
+        self.center.run_process = fake_run
+        for options, expected in [({}, ['mapping']), ({'terrain_3d': True}, ['mapping', '--3d'])]:
+            response = await self.client.post('/api/profile/start', json={'profile': 'mapping', 'options': options})
+            self.assertEqual(response.status, 200)
+            self.assertEqual(commands[-1], expected)
+            self.assertEqual(self.center.active_options['terrain_3d'], '--3d' in expected)
+        for profile, value in [('teleop', True), ('mapping', 'false')]:
+            response = await self.client.post('/api/profile/start', json={'profile': profile, 'options': {'terrain_3d': value}})
+            self.assertEqual(response.status, 400)
+        self.assertEqual(len(commands), 2)
+
     async def test_web_teleop_does_not_start_gamepad(self):
         commands = []
         async def fake_run(name, parts):

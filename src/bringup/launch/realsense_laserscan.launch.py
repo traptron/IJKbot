@@ -82,5 +82,9 @@ def generate_launch_description():
         declare_scan_config,
         declare_enable_depth_scan,
         realsense_launch,
+        Node(
+            package='bringup', executable='mapping_camera_preview.py',
+            parameters=[os.path.join(pkg_bringup, 'config', 'mapping_camera.yaml')],
+        ),
         depthimage_to_laserscan_node,
     ])

@@ -275,10 +275,11 @@ class ControlCenterServer(ControlServices):
         if profile in PROFILES:
             allowed = {'record', 'bag_name'}
             if profile != 'teleop': allowed.add('rviz')
+            if profile == 'mapping': allowed.add('terrain_3d')
             if profile == 'navigate': allowed.update({'map', 'use_amcl'})
             if set(options) - allowed:
                 raise web.HTTPBadRequest(text='Параметр не поддерживается профилем')
-            for key in ('record', 'rviz', 'use_amcl'):
+            for key in ('record', 'rviz', 'use_amcl', 'terrain_3d'):
                 if key in options and type(options[key]) is not bool:
                     raise web.HTTPBadRequest(text=f'{key}: требуется true или false')
             resolved = {'record': options.get('record', False)}
@@ -297,6 +298,10 @@ class ControlCenterServer(ControlServices):
             else:
                 resolved['rviz'] = options.get('rviz', True)
                 if not resolved['rviz']: parts.append('--no-rviz')
+            if profile == 'mapping':
+                resolved['terrain_3d'] = options.get('terrain_3d', False)
+                if resolved['terrain_3d']:
+                    parts.append('--3d')
             if profile == 'navigate':
                 configured = self.config.profiles.get('navigate')
                 map_id = options.get('map', configured.map if configured else 'polygon_empty_4x4.yaml')

@@ -105,11 +105,61 @@ def test_navigate_help():
     assert "--use-amcl" in proc.stdout
 
 
+@pytest.mark.parametrize(('choice', 'terrain_3d'), [('4', False), ('14', True)])
+def test_mapping_menu_mode(monkeypatch, choice, terrain_3d):
+    from tools.ijk import cli
+    calls = []
+    monkeypatch.setattr('builtins.input', lambda prompt: choice)
+    monkeypatch.setattr(cli, 'run_mapping', lambda *args, **kwargs: calls.append(kwargs))
+    assert cli.main(['--mock']) == 0
+    assert calls[0]['terrain_3d'] is terrain_3d
+
+
+@pytest.mark.parametrize(('mounts_file', 'configured_mounts', 'expected'), [
+    ('', '', ''),
+    ('', '~/.ros/ijk/orin-mapping-mounts.yaml', '~/.ros/ijk/orin-mapping-mounts.yaml'),
+    ('/calibration/sensor mounts.yaml', '/default.yaml', '/calibration/sensor mounts.yaml'),
+])
+def test_mapping_3d_optional_mounts_argument(monkeypatch, mounts_file, configured_mounts, expected):
+    import shlex
+    from tools.ijk.profiles.mapping import run_mapping
+
+    config = load_config()
+    config.profiles['mapping'].sensor_mounts_file = configured_mounts
+    runner = Runner(config, robot_ip='192.0.2.2')
+    launches = []
+    monkeypatch.setattr(runner, 'start_remote_launch', launches.append)
+    monkeypatch.setattr(runner, 'wait_with_ctrl_c', lambda: None)
+    run_mapping(runner, config, terrain_3d=True, rviz=False, sensor_mounts_file=mounts_file)
+    args = shlex.split(launches[0])
+    assert 'enable_3d:=true' in args
+    assert 'fused_mapping:=true' in args
+    assert [arg for arg in args if arg.startswith('sensor_mounts_file:=')] == (
+        [f'sensor_mounts_file:={expected}'] if expected else [])
+
+
 def test_mapping_help():
     proc = subprocess.run([str(REPO_DIR / "ijk"), "mapping", "--help"], stdout=subprocess.PIPE, text=True, timeout=5)
     assert proc.returncode == 0
     assert "--teleop" in proc.stdout
     assert "--save-map" in proc.stdout
+
+
+@pytest.mark.parametrize(('terrain_3d', 'rviz', 'views'), [
+    (False, True, ['mapping.rviz']),
+    (True, True, ['mapping.rviz']),
+    (True, False, []),
+])
+def test_mapping_rviz_views(monkeypatch, terrain_3d, rviz, views):
+    from tools.ijk.profiles.mapping import run_mapping
+
+    runner = Runner(load_config(), robot_ip='192.0.2.2')
+    commands = []
+    monkeypatch.setattr(runner, 'start_remote_launch', lambda command: None)
+    monkeypatch.setattr(runner, 'run_local_process', commands.append)
+    monkeypatch.setattr(runner, 'wait_with_ctrl_c', lambda: None)
+    run_mapping(runner, load_config(), terrain_3d=terrain_3d, rviz=rviz)
+    assert [Path(cmd[cmd.index('-d') + 1]).name for cmd in commands] == views
 
 
 def test_unreachable_robot_clean_exit():
@@ -332,3 +382,22 @@ def test_competition_uses_training_occupancy_map(tmp_path, monkeypatch):
                              run_local_process=launches.append, wait_with_ctrl_c=lambda: None)
     run_competition(runner, load_config(), mock=True, rviz=False)
     assert f'map:={occupancy}' in launches[0]
+
+
+def test_navigate_realsense_uses_calibrated_depth_pipeline(monkeypatch):
+    import shlex
+    from tools.ijk.profiles import navigate
+    cfg = load_config()
+    cfg.hardware.camera_type = 'realsense'
+    cfg.profiles['mapping'].sensor_mounts_file = '~/.ros/ijk/mounts.yaml'
+    runner = Runner(cfg, robot_ip='192.0.2.2')
+    commands = []
+    monkeypatch.setattr(navigate, 'sync_map_to_pi', lambda *args: None)
+    monkeypatch.setattr(runner, 'start_remote_launch', commands.append)
+    monkeypatch.setattr(runner, 'wait_with_ctrl_c', lambda: None)
+    navigate.run_navigate(runner, cfg, map_name='polygon_empty_4x4.yaml', use_amcl=True, rviz=False)
+    args = shlex.split(commands[0])
+    assert 'navigation_depth.launch.py' in args
+    assert 'sensor_mounts_file:=~/.ros/ijk/mounts.yaml' in args
+    assert 'use_amcl:=true' in args
+    assert 'color_profile:=1920x1080x15' in args

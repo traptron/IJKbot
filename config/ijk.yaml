@@ -26,6 +26,7 @@ hardware:
     wheel_separation: 0.225
   camera:
     type: "csi"  # csi | realsense | none
+    color_profile: "1920x1080x15"
 
 wifi:
   profiles:
@@ -51,7 +52,6 @@ profiles:
   competition:
     description: "Полный соревновательный заезд (LLM + Nav2 + QR + Dashboard)"
     qr_backend: zxing
-    color_profile: "1920x1080x15"
     max_linear_velocity: 0.25
     enable_brain: true
     enable_vision: true

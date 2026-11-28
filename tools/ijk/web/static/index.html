@@ -26,7 +26,8 @@
 </article>
 <article class="card profile-card"><p class="eyebrow">Сценарий</p><h2>Настройки запуска</h2>
 <label for="profile">Профиль</label><select id="profile"><option value="teleop">Teleop — ручное управление</option><option value="mapping">Mapping — построение карты</option><option value="navigate">Navigate — навигация по карте</option><option value="showcase">Showcase — демонстрация сенсоров</option><option value="competition">Competition — автономная миссия</option></select>
-<div id="navigate-options" hidden><label for="nav-map">Карта для Navigate</label><select id="nav-map" class="map-select"></select><p class="map-info muted"></p><img class="map-preview" alt="Предпросмотр выбранной карты" hidden><label class="switch"><input id="use-amcl" type="checkbox" checked> Локализация AMCL</label><p class="muted">Начальная поза задаётся в RViz; цели доступны в разделе «Места и маршруты».</p></div>
+<label id="mapping-options" class="switch" hidden><input id="terrain-3d" type="checkbox"> Объединить лидар и RealSense в 3D-карте (RTAB-Map)</label>
+<div id="navigate-options" hidden><label for="nav-map">Карта для Navigate</label><select id="nav-map" class="map-select"></select><p class="map-info muted"></p><img class="map-preview" alt="Предпросмотр выбранной карты" hidden><label class="switch"><input id="use-amcl" type="checkbox" checked> Локализация AMCL</label><p class="muted">Начальная поза задаётся в RViz; цели доступны в разделе «Места и маршруты». При подключённой D435 Nav2 учитывает живые 3D-препятствия от 2,5 см, скорость ограничена 0,10 м/с.</p></div>
 <label id="rviz-option" class="switch"><input id="use-rviz" type="checkbox" checked> Запускать RViz на ноутбуке</label>
 <label class="switch"><input id="record" type="checkbox"> Записывать rosbag</label>
 <div id="bag-option" hidden><label for="bag-name">Имя записи (необязательно)</label><input id="bag-name" class="text-input" maxlength="80" placeholder="Автоматическое имя"></div>

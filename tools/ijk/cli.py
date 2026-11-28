@@ -67,9 +67,10 @@ def show_interactive_menu() -> str:
     print("  11) ops update  — Обновление и сборка (локально + Pi)")
     print("  12) stop        — Экстренная остановка всех систем")
     print("  13) ui          — Веб-пульт управления")
+    print("  14) mapping --3d — 3D-картографирование с RealSense и RTAB-Map")
     print("  0) Выход")
     print("=======================================================")
-    choice = input("Выберите действие [0-13]: ").strip()
+    choice = input("Выберите действие [0-14]: ").strip()
     mapping = {
         "1": "competition",
         "2": "showcase",
@@ -84,6 +85,7 @@ def show_interactive_menu() -> str:
         "11": "ops-update",
         "12": "stop",
         "13": "ui",
+        "14": "mapping --3d",
     }
     return mapping.get(choice, "")
 
@@ -141,12 +143,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_mapping = subparsers.add_parser("mapping", help="Построение карты (SLAM Toolbox + RViz)")
     p_mapping.add_argument("--teleop", action="store_true", help="Открыть клавиатурный телеоп в фокусе")
     p_mapping.add_argument("--save-map", type=str, help="Имя для сохранения карты при выходе")
-    p_mapping.add_argument("--3d", dest="terrain_3d", action="store_true", help="Добавить 3D-карту D435 и RTAB-Map")
+    p_mapping.add_argument("--3d", dest="terrain_3d", action="store_true", help="Объединить лидар и RealSense в RTAB-Map")
+    p_mapping.add_argument("--bridge-survey", action="store_true",
+                           help="Снять независимую RGB-D карту для калибровки мостов")
     p_mapping.add_argument("--terrain-session", help="Новый каталог записи 3D-карты на роботе")
     p_mapping.add_argument("--sensor-mounts-file", default="", help="Путь к YAML креплений на роботе")
 
     # navigate
     p_nav = subparsers.add_parser("navigate", help="Автономная навигация Nav2 по сохраненной карте")
+    p_nav.add_argument("--3d", dest="terrain_3d", action="store_true",
+                       help="Nav2 с живыми 3D-препятствиями D435 (автоматически при RealSense)")
     p_nav.add_argument("--map", type=str, help="Имя или путь к карте .yaml")
     p_nav.add_argument("--use-amcl", action="store_true", help="Использовать AMCL вместо чистой одометрии")
 
@@ -193,6 +199,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     command = args.command
     if not command:
         command = show_interactive_menu()
+        if command == "mapping --3d":
+            command = "mapping"
+            args.terrain_3d = True
         if not command:
             print("Выход.")
             return 0
@@ -250,11 +259,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         run_mapping(runner, config, teleop=getattr(args, "teleop", False),
                     save_name=getattr(args, "save_map", None), mock=args.mock,
                     record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False),
-                    terrain_3d=getattr(args, "terrain_3d", False),
+                    terrain_3d=getattr(args, "terrain_3d", False) or getattr(args, "bridge_survey", False),
+                    bridge_survey=getattr(args, "bridge_survey", False),
                     terrain_session=getattr(args, "terrain_session", None),
                     sensor_mounts_file=getattr(args, "sensor_mounts_file", ""))
     elif command == "navigate":
-        run_navigate(runner, config, map_name=getattr(args, "map", None), use_amcl=getattr(args, "use_amcl", False), mock=args.mock, record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
+        run_navigate(runner, config, terrain_3d=getattr(args, "terrain_3d", False), map_name=getattr(args, "map", None), use_amcl=getattr(args, "use_amcl", False), mock=args.mock, record=args.record, bag_name=args.bag_name, rviz=not getattr(args, "no_rviz", False))
     elif command in ("bench", "bench-motors", "bench-odom-calib"):
         target = getattr(args, "target", "motors") if command == "bench" else ("odom-calib" if command == "bench-odom-calib" else "motors")
         if target == "motors":
