@@ -3,7 +3,7 @@
 * **Author:** traptron
 * **Status:** Proposed — all drafting sections approved by the author; predecessor reconciliation complete; final destination selected; independent design review pending; hardware measurements and City actions remain gated
 * **Date:** 2026-11-16
-* **Predecessor:** [Concepts brief](../../concepts_brief.md)
+* **Predecessor:** [Concepts brief](../concepts_brief.md)
 * **Supporting review:** [Goldfish brainstorm findings](../reviews/rtk_final_2026/goldfish_review_report.md)
 * **Predecessor reconciliation:** [Authoring-stage comparison](../reviews/rtk_final_2026/draft_reconciliation.md)
 

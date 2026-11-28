@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-16. **Author:** traptron (comparison recorded by drafting assistant).
 
-**Predecessor:** [concepts_brief.md](../../../concepts_brief.md). **Target:** [design_draft.md](../../../design_draft.md).
+**Predecessor:** [concepts_brief.md](../../concepts_brief.md). **Target:** [design_draft.md](../../design_draft.md).
 
 This is the drafting agent's required comparison with the predecessor, not an independent Goldfish review, implementation test or grading against the Zoom Out standard.
 

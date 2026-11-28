@@ -4,8 +4,8 @@
 * **Status:** Proposed — all drafting sections approved by the author; predecessor reconciliation complete; final destination selected; independent design review pending; hardware measurements and City actions remain gated
 * **Date:** 2026-11-16
 * **Predecessor:** [Concepts brief](concepts_brief.md)
-* **Supporting review:** [Goldfish brainstorm findings](docs/reviews/rtk_final_2026/goldfish_review_report.md)
-* **Predecessor reconciliation:** [Authoring-stage comparison](docs/reviews/rtk_final_2026/draft_reconciliation.md)
+* **Supporting review:** [Goldfish brainstorm findings](reviews/rtk_final_2026/goldfish_review_report.md)
+* **Predecessor reconciliation:** [Authoring-stage comparison](reviews/rtk_final_2026/draft_reconciliation.md)
 
 ## Overview
 
@@ -111,7 +111,7 @@ The selected onboard target is original Jetson Nano DevKit. The initial target d
 
 Before selecting an install recipe, inspect the actual Jetson model, RAM, OS/JetPack, storage, power and cooling. Demonstrate the required ROS processes, serial/USB access, D435 capture and robot/laptop message exchange with mocked motors. A container, source build or changed ROS distribution is not presumed compatible merely because it starts. Any such route must state driver/GPU restrictions, supported nodes and repeatable deployment steps before physical migration.
 
-The [recorded platform sources and Pi inventory](docs/reviews/rtk_final_2026/platform_decision.md) explain the original Nano/Jazzy compatibility gap. No ROS downgrade or alternative OS is selected here. If no viable route fits the preparation window, bring the failed prerequisite and remaining hours to the author for a platform/scope decision; do not silently replace the selected board or consume the final test reserve.
+The [recorded platform sources and Pi inventory](reviews/rtk_final_2026/platform_decision.md) explain the original Nano/Jazzy compatibility gap. No ROS downgrade or alternative OS is selected here. If no viable route fits the preparation window, bring the failed prerequisite and remaining hours to the author for a platform/scope decision; do not silently replace the selected board or consume the final test reserve.
 
 ### Logical data and command paths
 
@@ -354,7 +354,7 @@ Keep discipline-specific sequencing separate. T6-B selects a bounded autonomous 
 
 **Author decision:** T6-B selected in chat ("Б"). Full City completion is not the required secondary scope for this preparation; T6-A remains a considered option. Evacuation retains primary priority.
 
-The local [City guide](docs/GOROD.md) describes a start from an assigned corner cell, following direction/prohibition signs, two-second bus-stop holds and termination before parking. It explicitly says current navigation and stop timing are operator-controlled. The linked official PDF could not be retrieved during this drafting step, so this is project-document context, not verified final scoring. Do not attach invented points to either option below.
+The local [City guide](GOROD.md) describes a start from an assigned corner cell, following direction/prohibition signs, two-second bus-stop holds and termination before parking. It explicitly says current navigation and stop timing are operator-controlled. The linked official PDF could not be retrieved during this drafting step, so this is project-document context, not verified final scoring. Do not attach invented points to either option below.
 
 | Option | Mechanism and intended result | Trade-offs | Conditions under which it fails |
 | --- | --- | --- | --- |

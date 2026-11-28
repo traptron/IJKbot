@@ -3,8 +3,8 @@
 * **Author:** traptron
 * **Date:** 2026-11-16 (initial hypothesis: 2026-11-15)
 * **Status:** All seven independent Goldfish brainstorm reviews completed. Revised concept awaiting team alignment and measurements. This is not an implementation plan or a verified readiness report.
-* **Review:** [Consolidated findings and reviewer status](docs/reviews/rtk_final_2026/goldfish_review_report.md). [Immutable initial hypothesis](docs/reviews/rtk_final_2026/initial_concepts_brief.md).
-* **Latest platform decision, 2026-11-16:** The team selected its available original Jetson Nano DevKit as the target onboard computer. This supersedes the Pi-first recommendation in the independent review. Compatibility and sustained performance remain unverified. See [decision and live Pi inventory](docs/reviews/rtk_final_2026/platform_decision.md).
+* **Review:** [Consolidated findings and reviewer status](reviews/rtk_final_2026/goldfish_review_report.md). [Immutable initial hypothesis](reviews/rtk_final_2026/initial_concepts_brief.md).
+* **Latest platform decision, 2026-11-16:** The team selected its available original Jetson Nano DevKit as the target onboard computer. This supersedes the Pi-first recommendation in the independent review. Compatibility and sustained performance remain unverified. See [decision and live Pi inventory](reviews/rtk_final_2026/platform_decision.md).
 * **Hardware access update:** Jetson is not connected now. The team expects to obtain/connect it during the week of 16–22 November; no exact day is committed. Work requiring the board must be scheduled relative to actual access.
 
 ## Overview
@@ -130,7 +130,7 @@ The team selected Jetson Nano as the onboard target after review. The rest of th
 
 Review recommendations, not team rejections: prefer existing Nav2 sensor inputs and a measured common motion-protection boundary over a custom navigation rewrite; reuse a selected existing QR path before replacing it; accept a small amount of separate City sequencing over a generic mission framework. Each adds integration obligations and must pass its own tests.
 
-The original Nano's official JetPack branch uses an Ubuntu 18.04-based filesystem, while Jazzy's Ubuntu packages target 24.04. This is a verified compatibility risk, not a claim of impossibility or measured lack of performance. See [official-source checks and links](docs/reviews/rtk_final_2026/source_checks.md). An additional board is justified only by a workload and deployment proof that fits the remaining time.
+The original Nano's official JetPack branch uses an Ubuntu 18.04-based filesystem, while Jazzy's Ubuntu packages target 24.04. This is a verified compatibility risk, not a claim of impossibility or measured lack of performance. See [official-source checks and links](reviews/rtk_final_2026/source_checks.md). An additional board is justified only by a workload and deployment proof that fits the remaining time.
 
 ## Key Decisions & Staging for Next Steps
 
